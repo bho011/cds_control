@@ -28,11 +28,11 @@ class MqttPublisher:
         payload = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "source": "python",
-            "state": state,
+            "process_state": state,
             "actuators": {
                 "mixer_refill_pump": mixer_refill_pump.is_active,
-                "supply_valve": supply_valve.is_active,
-                "drain_valve": drain_valve.is_active,
+                "supply_valve_6": supply_valve.is_active,
+                "drain_valve_0": drain_valve.is_active,
                 "transfer_pump": None
             },
             "error": error

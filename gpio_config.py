@@ -8,7 +8,7 @@ OUTPUTS = {
     "contactor_4": 26,
     "contactor_5": 13,
 
-    "valve_0_drain": 21, # Darin fließt das Wasser ab / phys. Valve 0 / GPIO21 / PIN 40
+    "valve_0_drain": 21, # Darüber fließt das Wasser ab / phys. Valve 0 / GPIO21 / PIN 40
     "valve_1": 27, # valve 1 / GPIO 27 / PIN 13 
     "valve_2": 19,
     "valve_3": 24,
@@ -26,4 +26,4 @@ OUTPUTS = {
 # GPIO HIGH = Ausgang AUS
 ACTIVE_LOW = True
 
-PULSE_SECONDS = 180.0
+PULSE_SECONDS = 5.0
