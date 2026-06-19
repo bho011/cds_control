@@ -82,6 +82,8 @@ async def main():
                 payload = {
                     "timestamp": timestamp,
                     "source": "python",
+                    "state": "SENSOR_BRIDGE_RUNNING",
+
                     "mixer": {
                         "node_id": NODE_IDS["mixer_level_raw_cel1"],
                         "level_percent": mixer_raw,
@@ -89,6 +91,7 @@ async def main():
                         "configured_max_liters": MIXER_VOLUME_LITERS,
                         "calibration_status": "not_final_calibrated"
                     },
+
                     "ro": {
                         "node_id": NODE_IDS["ro_level_raw_ibc1"],
                         "level_percent": ro_raw,
@@ -96,6 +99,14 @@ async def main():
                         "configured_max_liters": RO_VOLUME_LITERS,
                         "calibration_status": "plausible_validated"
                     },
+
+                    "actuators": {
+                        "mixer_refill_pump": None,
+                        "drain_valve": None,
+                        "supply_valve_6": None,
+                        "transfer_pump": None
+                    },
+
                     "error": error
                 }
 

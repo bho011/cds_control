@@ -1,4 +1,5 @@
 import time
+from services.mqtt_publisher import MqttPublisher
 
 from gpio_config import OUTPUTS, ACTIVE_LOW
 from hardware.digital_output import DigitalOutput
@@ -54,6 +55,8 @@ def main():
         run_seconds=5.0,
         valve_settle_seconds=1.0
     )
+
+    mqtt_publisher = MqttPublisher()
 
     try:
         state_machine.start()
