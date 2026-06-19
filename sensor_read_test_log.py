@@ -15,7 +15,7 @@ NODE_IDS = {
 
 # Werte aus der alten Node-RED-Logik
 MIXER_VOLUME_LITERS = 200
-RO_VOLUME_LITERS = 1000
+RO_VOLUME_LITERS = 1300
 
 # Messintervall
 READ_INTERVAL_SECONDS = 1.0
@@ -141,7 +141,7 @@ async def read_sensor_values():
                     NODE_IDS["ro_level_raw_ibc1"],
                 ])
 
-                # Wichtig: direkt auf die SD-Karte schreiben,
+                # Wichtig: wird direkt auf die SD-Karte geschrieben,
                 # damit bei Abbruch keine Messdaten verloren gehen.
                 csv_file.flush()
 

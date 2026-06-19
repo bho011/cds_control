@@ -5,4 +5,4 @@
 Funktion              GPIO   Pin   Status
 Mixer Refill Pump     20     38    valid / Python OK
 Supply/Test Valve 6   6      31    valid / Python OK
-Drain Valve 1         27     13    valid / Python OK
+Drain Valve 0         21    13    valid / Python OK

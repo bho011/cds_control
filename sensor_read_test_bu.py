@@ -11,7 +11,7 @@ NODE_IDS = {
 
 
 MIXER_VOLUME_LITERS = 200
-RO_VOLUME_LITERS = 1000
+RO_VOLUME_LITERS = 1300
 
 
 def calculate_liters_from_percent(value: float, max_volume_liters: float) -> int:

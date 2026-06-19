@@ -3,12 +3,12 @@
 OUTPUTS = {
     "contactor_0": 12,
     "mixer_refill_pump": 20, #phys. Contactor 1 / GPIO20 / PIN 38,
-    "contactor_2": 22,
-    "contactor_3": 23,
+    "contactor_2": 22, # phys. Contactor 2 / GPIO22 / PIN 15,
+    "contactor_3": 23, # phys. Contactor 3 / GPIO23 / PIN 16
     "contactor_4": 26,
     "contactor_5": 13,
 
-    "valve_0_drain": 21,
+    "valve_0_drain": 21, # Darin fließt das Wasser ab / phys. Valve 0 / GPIO21 / PIN 40
     "valve_1": 27, # valve 1 / GPIO 27 / PIN 13 
     "valve_2": 19,
     "valve_3": 24,
