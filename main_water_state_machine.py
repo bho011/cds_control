@@ -7,6 +7,13 @@ from statemachine.water_test_state_machine import WaterTestStateMachine
 
 
 def publish_status(mqtt_publisher, state_machine, mixer_refill_pump, supply_valve, drain_valve):
+    print(
+        f"[MQTT DEBUG] state={state_machine.state.name} | "
+        f"pump={mixer_refill_pump.is_active} | "
+        f"supply={supply_valve.is_active} | "
+        f"drain={drain_valve.is_active}"
+    )
+
     mqtt_publisher.publish_process_status(
         state=state_machine.state.name,
         mixer_refill_pump=mixer_refill_pump,
