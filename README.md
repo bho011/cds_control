@@ -2,7 +2,7 @@
 # CDS-System – Python-Implementierung
 
 Stand: 22.06.2026  
-Projektkontext: Central Dosing System (CDS) bei vGreens  
+Projektkontext: Central Dosing System (CDS)
 Dokumentationszweck: Übersicht für GitHub / VSCode über den aktuellen Python-Umsetzungsstand
 
 ---
