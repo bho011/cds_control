@@ -8,7 +8,7 @@ Supply/Test Valve 6   6      31    valid / Python OK
 Drain Valve 0         21    13    valid / Python OK
 
 
-Sensor-Bridge läuft als systemd-Service.
+mqtt_sensor_bridge.py läuft jetzt als systemd-Service.
 Sensorwerte werden dauerhaft per MQTT gesendet.
 Node-RED Dashboard zeigt RO- und Mixing-Tank.
 State-Machine sendet Prozesszustand per MQTT.

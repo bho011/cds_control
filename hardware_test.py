@@ -58,7 +58,6 @@ def main():
     print(f"GPIO:       {gpio_pin}")
     print()
     print("ACHTUNG: Der Ausgang wird geschaltet.")
-    #print("Prüfe, dass keine gefährliche Bewegung, Pumpe oder Chemikalienförderung entstehen kann.")
     print()
 
     confirm = input("Fortfahren? ja/nein: ").strip().lower()

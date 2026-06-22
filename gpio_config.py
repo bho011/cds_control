@@ -20,10 +20,11 @@ OUTPUTS = {
     "valve_9": 18,
 }
 
-# Relaiskarten sind häufig active-low.
+# Relaiskarten sind active-low.
 # True bedeutet:
 # GPIO LOW  = Ausgang EIN
 # GPIO HIGH = Ausgang AUS
 ACTIVE_LOW = True
 
+# Wie lange soll ein Ausgang geschaltet werden, wenn die Funktion "pulse" verwendet wird?
 PULSE_SECONDS = 5.0

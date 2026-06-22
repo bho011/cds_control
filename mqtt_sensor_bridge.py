@@ -24,6 +24,7 @@ MIXER_VOLUME_LITERS = 200
 RO_VOLUME_LITERS = 1300
 
 READ_INTERVAL_SECONDS = 1.0
+RECONNECT_SECONDS = 10.0
 
 MQTT_HOST = "localhost"
 MQTT_PORT = 1883
@@ -65,143 +66,156 @@ async def main():
     print()
 
     mqtt_client = create_mqtt_client()
+    last_error = None
 
     try:
-        async with Client(url=OPCUA_ENDPOINT) as opcua_client:
-            print("[OK] OPC-UA verbunden.")
-            print("[OK] MQTT verbunden.")
-            print("Abbruch mit STRG + C")
-            print()
+        while True:
+            try:
+                print(f"[INFO] Verbinde mit OPC-UA: {OPCUA_ENDPOINT}")
 
-            while True:
+                async with Client(url=OPCUA_ENDPOINT) as opcua_client:
+                    print("[OK] OPC-UA verbunden.")
+                    print("[OK] MQTT verbunden.")
+                    print("Abbruch mit STRG + C")
+                    print()
+
+                    while True:
+                        timestamp = datetime.now().isoformat(timespec="seconds")
+                        errors = []
+                        connection_broken = False
+
+                        mixer_raw = None
+                        ro_raw = None
+                        mixer_liters = None
+                        ro_liters = None
+
+                        ec_value = None
+                        ph_value = None
+                        water_temperature_value = None
+                        dissolved_oxygen_value = None
+
+                        async def safe_read(node_key: str, label: str):
+                            nonlocal connection_broken
+
+                            try:
+                                return await read_opcua_value(opcua_client, node_key)
+                            except Exception as exc:
+                                error_text = str(exc)
+                                errors.append(f"{label} read error: {error_text}")
+
+                                lower_error = error_text.lower()
+
+                                if (
+                                    "disconnect" in lower_error
+                                    or "not connected" in lower_error
+                                    or "connection" in lower_error
+                                    or "client is disconnected" in lower_error
+                                ):
+                                    connection_broken = True
+
+                                return None
+
+                        mixer_raw = await safe_read(
+                            "mixer_level_raw_cel1",
+                            "Mixer-Level"
+                        )
+
+                        if mixer_raw is not None:
+                            mixer_liters = calculate_liters_from_percent(
+                                mixer_raw,
+                                MIXER_VOLUME_LITERS
+                            )
+
+                        ro_raw = await safe_read(
+                            "ro_level_raw_ibc1",
+                            "RO-Level"
+                        )
+
+                        if ro_raw is not None:
+                            ro_liters = calculate_liters_from_percent(
+                                ro_raw,
+                                RO_VOLUME_LITERS
+                            )
+
+                        ec_value = await safe_read("ec", "EC")
+                        ph_value = await safe_read("ph", "pH")
+
+                        water_temperature_value = await safe_read(
+                            "water_temperature",
+                            "Water temperature"
+                        )
+
+                        dissolved_oxygen_value = await safe_read(
+                            "dissolved_oxygen",
+                            "Dissolved oxygen"
+                        )
+
+                        error = " | ".join(errors) if errors else None
+
+                        payload = {
+                            "timestamp": timestamp,
+                            "source": "python",
+                            "state": "SENSOR_BRIDGE_RUNNING",
+
+                            "mixer": {
+                                "node_id": NODE_IDS["mixer_level_raw_cel1"],
+                                "level_percent": mixer_raw,
+                                "volume_liters_calc": mixer_liters,
+                                "configured_max_liters": MIXER_VOLUME_LITERS,
+                                "calibration_status": "not_final_calibrated"
+                            },
+
+                            "ro": {
+                                "node_id": NODE_IDS["ro_level_raw_ibc1"],
+                                "level_percent": ro_raw,
+                                "volume_liters_calc": ro_liters,
+                                "configured_max_liters": RO_VOLUME_LITERS,
+                                "calibration_status": "plausible_validated"
+                            },
+
+                            "water_values": {
+                                "ec_raw": ec_value,
+                                "ec_ms_cm": ec_value / 1000 if ec_value is not None else None,
+                                "ph": ph_value,
+                                "water_temperature": water_temperature_value,
+                                "dissolved_oxygen": dissolved_oxygen_value,
+                                "calibration_status": "not_final_validated"
+                            },
+
+                            "actuators": {
+                                "mixer_refill_pump": None,
+                                "drain_valve": None,
+                                "supply_valve_6": None,
+                                "transfer_pump": None
+                            },
+
+                            "error": error
+                        }
+
+                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload))
+
+                        if error != last_error:
+                            if error:
+                                print(f"{timestamp} | [ERROR] {error}")
+                            elif last_error:
+                                print(f"{timestamp} | [OK] sensor_bridge error cleared.")
+
+                            last_error = error
+
+                        if connection_broken:
+                            raise ConnectionError(error or "OPC-UA connection broken")
+
+                        await asyncio.sleep(READ_INTERVAL_SECONDS)
+
+            except Exception as exc:
                 timestamp = datetime.now().isoformat(timespec="seconds")
+                reconnect_error = f"OPC-UA reconnect required: {exc}"
 
-                errors = []
+                if reconnect_error != last_error:
+                    print(f"{timestamp} | [ERROR] {reconnect_error}")
+                    last_error = reconnect_error
 
-                mixer_raw = None
-                ro_raw = None
-                mixer_liters = None
-                ro_liters = None
-
-                ec_value = None
-                ph_value = None
-                water_temperature_value = None
-                dissolved_oxygen_value = None
-
-                # Mixing Tank Level
-                try:
-                    mixer_raw = await read_opcua_value(
-                        opcua_client,
-                        "mixer_level_raw_cel1"
-                    )
-                    mixer_liters = calculate_liters_from_percent(
-                        mixer_raw,
-                        MIXER_VOLUME_LITERS
-                    )
-                except Exception as exc:
-                    errors.append(f"Mixer-Level read error: {exc}")
-
-                # RO Tank Level
-                try:
-                    ro_raw = await read_opcua_value(
-                        opcua_client,
-                        "ro_level_raw_ibc1"
-                    )
-                    ro_liters = calculate_liters_from_percent(
-                        ro_raw,
-                        RO_VOLUME_LITERS
-                    )
-                except Exception as exc:
-                    errors.append(f"RO-Level read error: {exc}")
-
-                # EC
-                try:
-                    ec_value = await read_opcua_value(opcua_client, "ec")
-                except Exception as exc:
-                    errors.append(f"EC read error: {exc}")
-
-                # pH
-                try:
-                    ph_value = await read_opcua_value(opcua_client, "ph")
-                except Exception as exc:
-                    errors.append(f"pH read error: {exc}")
-
-                # Water Temperature
-                try:
-                    water_temperature_value = await read_opcua_value(
-                        opcua_client,
-                        "water_temperature"
-                    )
-                except Exception as exc:
-                    errors.append(f"Water temperature read error: {exc}")
-
-                # Dissolved Oxygen
-                try:
-                    dissolved_oxygen_value = await read_opcua_value(
-                        opcua_client,
-                        "dissolved_oxygen"
-                    )
-                except Exception as exc:
-                    errors.append(f"Dissolved oxygen read error: {exc}")
-
-                error = " | ".join(errors) if errors else None
-
-                payload = {
-                    "timestamp": timestamp,
-                    "source": "python",
-                    "state": "SENSOR_BRIDGE_RUNNING",
-
-                    "mixer": {
-                        "node_id": NODE_IDS["mixer_level_raw_cel1"],
-                        "level_percent": mixer_raw,
-                        "volume_liters_calc": mixer_liters,
-                        "configured_max_liters": MIXER_VOLUME_LITERS,
-                        "calibration_status": "not_final_calibrated"
-                    },
-
-                    "ro": {
-                        "node_id": NODE_IDS["ro_level_raw_ibc1"],
-                        "level_percent": ro_raw,
-                        "volume_liters_calc": ro_liters,
-                        "configured_max_liters": RO_VOLUME_LITERS,
-                        "calibration_status": "plausible_validated"
-                    },
-
-                    "water_values": {
-                    "ec_raw": ec_value,
-                    "ec_ms_cm": ec_value / 1000 if ec_value is not None else None,
-                    "ph": ph_value,
-                    "water_temperature": water_temperature_value,
-                    "dissolved_oxygen": dissolved_oxygen_value,
-                    "calibration_status": "not_final_validated"
-                },
-
-                    # Sensor bridge does not control actuators.
-                    # Real actuator status comes from cds/status/process.
-                    "actuators": {
-                        "mixer_refill_pump": None,
-                        "drain_valve": None,
-                        "supply_valve_6": None,
-                        "transfer_pump": None
-                    },
-
-                    "error": error
-                }
-
-                mqtt_client.publish(MQTT_TOPIC, json.dumps(payload))
-
-                print(
-                    f"{timestamp} | "
-                    f"Mixer: {format_value(mixer_raw)}% / {mixer_liters} L | "
-                    f"RO: {format_value(ro_raw)}% / {ro_liters} L | "
-                    f"EC: {format_value(ec_value / 1000 if ec_value is not None else None)} mS/cm | "
-                    f"pH: {format_value(ph_value)} | "
-                    f"Temp: {format_value(water_temperature_value)} °C | "
-                    f"DO: {format_value(dissolved_oxygen_value)} | "
-                    f"Error: {error}"
-                )
-
-                await asyncio.sleep(READ_INTERVAL_SECONDS)
+                await asyncio.sleep(RECONNECT_SECONDS)
 
     finally:
         mqtt_client.disconnect()

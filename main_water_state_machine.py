@@ -22,7 +22,7 @@ def publish_status(mqtt_publisher, state_machine, mixer_refill_pump, supply_valv
         error=state_machine.error_message
     )
 
-
+# Hauptfunktion für den Test der Wasser-Entleerungs- und Befüllungslogik.
 def main():
     print("CDS Water Test State Machine")
     print("============================")
@@ -41,6 +41,7 @@ def main():
     print(f"drain_valve_0       -> GPIO {OUTPUTS['valve_0_drain']}")
     print()
 
+    
     confirm = input("Fortfahren? ja/nein: ").strip().lower()
 
     if confirm != "ja":
