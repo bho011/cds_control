@@ -397,3 +397,6 @@ source .venv/bin/activate
 python -m py_compile mqtt_sensor_bridge.py
 python -m py_compile main_water_state_machine.py
 python -m py_compile services/mqtt_publisher.py
+
+
+- bho011 
