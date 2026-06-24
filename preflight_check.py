@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+
+import asyncio
+import json
+import os
+import py_compile
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import paho.mqtt.client as mqtt
+from asyncua import Client as OpcUaClient
+
+from mqtt_sensor_bridge import OPCUA_ENDPOINT, NODE_IDS, MQTT_HOST, MQTT_PORT, MQTT_TOPIC
+from gpio_config import OUTPUTS, ACTIVE_LOW
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+CRITICAL_FILES = [
+    "mqtt_sensor_bridge.py",
+    "main_water_state_machine.py",
+    "gpio_config.py",
+    "services/mqtt_publisher.py",
+    "statemachine/water_test_state_machine.py",
+    "hardware/digital_output.py",
+]
+
+REQUIRED_GPIO_KEYS = [
+    "mixer_refill_pump",
+    "test_supply_valve_6",
+    "valve_0_drain",
+]
+
+SYSTEMD_SERVICES = [
+    ("cds-sensor-bridge.service", True),
+    ("nodered.service", False),
+]
+
+MIN_FREE_DISK_MB = 500
+MAX_DISK_USAGE_PERCENT = 90
+
+MQTT_PAYLOAD_TIMEOUT_SECONDS = 5
+OPCUA_TIMEOUT_SECONDS = 5
+
+
+@dataclass
+class CheckResult:
+    name: str
+    status: str
+    detail: str = ""
+
+
+class PreflightReport:
+    def __init__(self):
+        self.results: list[CheckResult] = []
+
+    def ok(self, name: str, detail: str = ""):
+        self.results.append(CheckResult(name, "OK", detail))
+
+    def warn(self, name: str, detail: str = ""):
+        self.results.append(CheckResult(name, "WARN", detail))
+
+    def fail(self, name: str, detail: str = ""):
+        self.results.append(CheckResult(name, "FAIL", detail))
+
+    @property
+    def has_failures(self) -> bool:
+        return any(result.status == "FAIL" for result in self.results)
+
+    @property
+    def has_warnings(self) -> bool:
+        return any(result.status == "WARN" for result in self.results)
+
+    def print_report(self):
+        print()
+        print("CDS Preflight Check")
+        print("===================")
+
+        for result in self.results:
+            print(f"[{result.status:<4}] {result.name}")
+            if result.detail:
+                print(f"       {result.detail}")
+
+        print()
+        if self.has_failures:
+            print("RESULT: FAIL - Nicht starten, erst Fehler beheben.")
+        elif self.has_warnings:
+            print("RESULT: WARN - Grundsätzlich lauffähig, Warnungen prüfen.")
+        else:
+            print("RESULT: OK - Preflight erfolgreich.")
+
+
+def run_command(command: list[str], timeout: int = 5) -> tuple[int, str, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", f"Command not found: {command[0]}"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"Command timed out: {' '.join(command)}"
+
+
+def check_project_files(report: PreflightReport):
+    for relative_path in CRITICAL_FILES:
+        path = PROJECT_ROOT / relative_path
+
+        if path.exists():
+            report.ok(f"File exists: {relative_path}")
+        else:
+            report.fail(f"File missing: {relative_path}", str(path))
+
+
+def check_python_syntax(report: PreflightReport):
+    for relative_path in CRITICAL_FILES:
+        path = PROJECT_ROOT / relative_path
+
+        if not path.exists():
+            continue
+
+        try:
+            py_compile.compile(str(path), doraise=True)
+            report.ok(f"Python syntax: {relative_path}")
+        except py_compile.PyCompileError as exc:
+            report.fail(f"Python syntax: {relative_path}", str(exc))
+
+
+def check_disk_space(report: PreflightReport):
+    usage = shutil.disk_usage(PROJECT_ROOT)
+
+    total_mb = usage.total / 1024 / 1024
+    free_mb = usage.free / 1024 / 1024
+    used_percent = ((usage.total - usage.free) / usage.total) * 100
+
+    detail = f"used={used_percent:.1f}% | free={free_mb:.0f} MB | total={total_mb:.0f} MB"
+
+    if free_mb < MIN_FREE_DISK_MB:
+        report.fail("Disk space", f"Free space below {MIN_FREE_DISK_MB} MB. {detail}")
+    elif used_percent > MAX_DISK_USAGE_PERCENT:
+        report.warn("Disk space", f"Disk usage above {MAX_DISK_USAGE_PERCENT}%. {detail}")
+    else:
+        report.ok("Disk space", detail)
+
+
+def check_systemd_service(report: PreflightReport, service_name: str, required: bool):
+    return_code, stdout, stderr = run_command(
+        ["systemctl", "is-active", service_name],
+        timeout=5,
+    )
+
+    if return_code == 0 and stdout == "active":
+        report.ok(f"Systemd service: {service_name}", "active")
+        return
+
+    detail = stdout or stderr or f"systemctl returned {return_code}"
+
+    if required:
+        report.fail(f"Systemd service: {service_name}", detail)
+    else:
+        report.warn(f"Systemd service: {service_name}", detail)
+
+
+def check_systemd_services(report: PreflightReport):
+    for service_name, required in SYSTEMD_SERVICES:
+        check_systemd_service(report, service_name, required)
+
+
+def check_mqtt_tcp(report: PreflightReport):
+    try:
+        with socket.create_connection((MQTT_HOST, MQTT_PORT), timeout=3):
+            report.ok("MQTT TCP connection", f"{MQTT_HOST}:{MQTT_PORT}")
+    except OSError as exc:
+        report.fail("MQTT TCP connection", str(exc))
+
+
+def check_gpio_config(report: PreflightReport):
+    if not isinstance(OUTPUTS, dict):
+        report.fail("GPIO config", "OUTPUTS is not a dictionary")
+        return
+
+    missing_keys = [key for key in REQUIRED_GPIO_KEYS if key not in OUTPUTS]
+
+    if missing_keys:
+        report.fail("GPIO required keys", f"Missing: {', '.join(missing_keys)}")
+    else:
+        report.ok("GPIO required keys", ", ".join(REQUIRED_GPIO_KEYS))
+
+    invalid_pins = {
+        key: value
+        for key, value in OUTPUTS.items()
+        if not isinstance(value, int) or value < 0 or value > 27
+    }
+
+    if invalid_pins:
+        report.warn("GPIO pin range", f"Check unusual GPIO values: {invalid_pins}")
+    else:
+        report.ok("GPIO pin range", "All configured GPIO pins are in BCM range 0-27")
+
+    duplicate_pins: dict[int, list[str]] = {}
+
+    for key, value in OUTPUTS.items():
+        duplicate_pins.setdefault(value, []).append(key)
+
+    duplicates = {
+        pin: names
+        for pin, names in duplicate_pins.items()
+        if len(names) > 1
+    }
+
+    if duplicates:
+        report.warn("GPIO duplicate pins", str(duplicates))
+    else:
+        report.ok("GPIO duplicate pins", "No duplicate GPIO assignments found")
+
+    report.ok("GPIO active_low", f"ACTIVE_LOW={ACTIVE_LOW}")
+
+    report.ok(
+        "GPIO hardware safety",
+        "No GPIO output was initialized or switched by this preflight check."
+    )
+
+
+async def check_opcua_endpoint_async(report: PreflightReport):
+    try:
+        async def read_test_value():
+            async with OpcUaClient(url=OPCUA_ENDPOINT) as opcua_client:
+                node_id = NODE_IDS["ro_level_raw_ibc1"]
+                node = opcua_client.get_node(node_id)
+                value = await node.read_value()
+                return node_id, value
+
+        node_id, value = await asyncio.wait_for(
+            read_test_value(),
+            timeout=OPCUA_TIMEOUT_SECONDS,
+        )
+
+        report.ok("OPC-UA read test", f"{node_id} -> {value}")
+
+    except Exception as exc:
+        report.fail("OPC-UA read test", str(exc))
+
+
+def check_opcua_endpoint(report: PreflightReport):
+    asyncio.run(check_opcua_endpoint_async(report))
+
+
+def validate_sensor_payload(report: PreflightReport, payload: dict[str, Any]):
+    required_top_level = [
+        "timestamp",
+        "source",
+        "state",
+        "mixer",
+        "ro",
+        "water_values",
+        "error",
+    ]
+
+    missing = [key for key in required_top_level if key not in payload]
+
+    if missing:
+        report.fail("MQTT sensor payload structure", f"Missing keys: {missing}")
+        return
+
+    report.ok("MQTT sensor payload structure", "Required top-level keys found")
+
+    if payload.get("state") != "SENSOR_BRIDGE_RUNNING":
+        report.warn("MQTT sensor bridge state", f"state={payload.get('state')}")
+    else:
+        report.ok("MQTT sensor bridge state", "SENSOR_BRIDGE_RUNNING")
+
+    if payload.get("error"):
+        report.warn("MQTT sensor payload error", str(payload.get("error")))
+    else:
+        report.ok("MQTT sensor payload error", "None")
+
+    ro = payload.get("ro") or {}
+    mixer = payload.get("mixer") or {}
+    water_values = payload.get("water_values") or {}
+
+    if ro.get("level_percent") is None:
+        report.fail("RO level value", "ro.level_percent is None")
+    else:
+        report.ok("RO level value", f"{ro.get('level_percent')} %")
+
+    if mixer.get("level_percent") is None:
+        report.warn(
+            "Mixer level value",
+            "mixer.level_percent is None or not readable. Check calibration/OPC-UA state."
+        )
+    else:
+        report.ok("Mixer level value", f"{mixer.get('level_percent')} %")
+
+    if water_values.get("ec_ms_cm") is None:
+        report.warn("EC value", "water_values.ec_ms_cm is None")
+    else:
+        report.ok("EC value", f"{water_values.get('ec_ms_cm')} mS/cm")
+
+    if water_values.get("ph") is None:
+        report.warn("pH value", "water_values.ph is None")
+    else:
+        report.ok("pH value", str(water_values.get("ph")))
+
+    if water_values.get("water_temperature") is None:
+        report.warn("Water temperature", "water_values.water_temperature is None")
+    else:
+        report.ok("Water temperature", f"{water_values.get('water_temperature')} °C")
+
+    if water_values.get("dissolved_oxygen") is None:
+        report.warn("Dissolved oxygen", "water_values.dissolved_oxygen is None")
+    else:
+        report.ok("Dissolved oxygen", str(water_values.get("dissolved_oxygen")))
+
+
+def check_latest_mqtt_sensor_payload(report: PreflightReport):
+    message_received = threading.Event()
+    received_payload: dict[str, Any] | None = None
+    receive_error: str | None = None
+
+    def on_connect(client, userdata, flags, rc, properties=None):
+        if rc == 0:
+            client.subscribe(MQTT_TOPIC, qos=0)
+
+    def on_message(client, userdata, message):
+        nonlocal received_payload, receive_error
+
+        try:
+            received_payload = json.loads(message.payload.decode("utf-8"))
+        except Exception as exc:
+            receive_error = str(exc)
+
+        message_received.set()
+
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
+
+    try:
+        client.connect(MQTT_HOST, MQTT_PORT, 60)
+        client.loop_start()
+
+        if not message_received.wait(MQTT_PAYLOAD_TIMEOUT_SECONDS):
+            report.fail(
+                "MQTT sensor payload",
+                f"No message on {MQTT_TOPIC} within {MQTT_PAYLOAD_TIMEOUT_SECONDS} seconds"
+            )
+            return
+
+        if receive_error:
+            report.fail("MQTT sensor payload JSON", receive_error)
+            return
+
+        if received_payload is None:
+            report.fail("MQTT sensor payload", "Message received but payload is empty")
+            return
+
+        report.ok("MQTT sensor payload", f"Received message on {MQTT_TOPIC}")
+        validate_sensor_payload(report, received_payload)
+
+    except Exception as exc:
+        report.fail("MQTT sensor payload", str(exc))
+
+    finally:
+        try:
+            client.loop_stop()
+            client.disconnect()
+        except Exception:
+            pass
+
+
+def main():
+    report = PreflightReport()
+
+    print("Running CDS preflight checks...")
+    print("No GPIO output will be initialized or switched.")
+    print()
+
+    check_project_files(report)
+    check_python_syntax(report)
+    check_disk_space(report)
+    check_gpio_config(report)
+    check_systemd_services(report)
+    check_mqtt_tcp(report)
+    check_opcua_endpoint(report)
+    check_latest_mqtt_sensor_payload(report)
+
+    report.print_report()
+
+    if report.has_failures:
+        sys.exit(1)
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
