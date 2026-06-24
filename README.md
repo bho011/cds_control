@@ -587,5 +587,130 @@ Important limitations:
 Before each hardware test, the preflight check should be executed and the physical water path should be verified manually.
 
 
+## Fill and Measure Preparation
+
+The project currently includes a prepared `FillAndMeasureStateMachine` for controlled RO water filling into the Mixing Tank.
+
+Current process scope:
+
+```text
+RO water → Mixing Tank → level-based stop → optional circulation → measurement
+```
+
+The process is currently water-only. It does not yet include chemical dosing, target tank routing, transfer pump control or automatic recipe execution.
+
+### Safety Features
+
+Implemented safety mechanisms:
+
+```text
+- manual start confirmation
+- hardware execution lock
+- required confirmation text
+- RO water availability check
+- Mixing Tank level check
+- maximum fill time
+- no-fill-progress watchdog
+- negative level drift detection
+- safe shutdown on error or KeyboardInterrupt
+- centralized actuator shutdown via ActuatorManager
+```
+
+Hardware execution is blocked by default:
+
+```json
+"hardware_execution_enabled": false,
+"required_confirmation_text": "confirmed"
+```
+
+As long as `hardware_execution_enabled` is `false`, no GPIO output is initialized or switched.
+
+### Fill Progress Watchdog
+
+The filling process stops automatically if the Mixer Refill Pump is active but the Mixing Tank level does not rise plausibly.
+
+Relevant settings:
+
+```json
+"min_fill_progress_liters": 1.5,
+"no_fill_progress_timeout_seconds": 15.0,
+"max_negative_level_drift_liters": 2.0
+```
+
+### Sensor Filtering
+
+The Mixing Tank level is filtered before being used for process decisions.
+
+```json
+"level_filter_samples": 5,
+"target_reached_confirm_samples": 3
+```
+
+This reduces the effect of sensor noise and prevents stopping based on a single unstable value.
+
+### Process Logging
+
+Fill-and-measure runs are logged as CSV files in:
+
+```text
+logs/
+```
+
+The log contains process state, sensor values, filtered level values, added liters, errors and actuator states.
+
+### Current Validation Status
+
+Validated so far:
+
+```text
+- preflight check passes
+- main_fill_and_measure.py starts correctly
+- settings are loaded correctly
+- hardware lock blocks unsafe starts
+- no GPIO output is switched while hardware_execution_enabled is false
+- dashboard displays process errors correctly
+```
+
+### Important Rule
+
+Only enable hardware execution on site after the physical RO water path has been verified.
+
+Before running a real test, check:
+
+```text
+- RO water path is open
+- Valve 6 leads safely to the Mixing Tank
+- Mixing Tank can accept the configured volume
+- pump is not working against closed valves
+- emergency abort is clear
+- preflight check passes
+```
+
+### Useful Commands
+
+```bash
+cd ~/cds_control
+source .venv/bin/activate
+
+python preflight_check.py
+python main_fill_and_measure.py
+```
+
+Expected lock behavior when hardware execution is disabled:
+
+```text
+[BLOCKED] Hardware execution is disabled in config/process_settings.json.
+```
+
+Recommended `.gitignore` entries:
+
+```gitignore
+__pycache__/
+*.py[cod]
+.venv/
+logs/*.csv
+```
+
+
 - Github nur über VsCode und GitLab nur über Bash remote über ssh 
 git push gitlab main

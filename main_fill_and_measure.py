@@ -7,6 +7,7 @@ from hardware.actuator_manager import ActuatorManager
 from services.mqtt_publisher import MqttPublisher
 from services.sensor_snapshot import SensorSnapshotReader
 from statemachine.fill_and_measure_state_machine import FillAndMeasureStateMachine
+from services.process_run_logger import ProcessRunLogger
 
 
 SETTINGS_PATH = Path("config/process_settings.json")
@@ -36,6 +37,28 @@ def publish_status(mqtt_publisher, state_machine, actuators):
     }
 
     mqtt_publisher.publish_json(payload)
+
+def log_process_step(logger, state_machine, actuators, sensor_reader):
+    snapshot = sensor_reader.get_latest(max_age_seconds=5.0)
+    actuator_status = actuators.status_payload()
+
+    mixer_liters_filtered = None
+
+    if snapshot is not None:
+        try:
+            mixer_liters_filtered = state_machine._filtered_mixer_liters(snapshot)
+        except Exception:
+            mixer_liters_filtered = None
+
+    logger.write_step(
+        state=state_machine.state.name,
+        error=state_machine.error_message,
+        snapshot=snapshot,
+        actuator_status=actuator_status,
+        mixer_liters_filtered=mixer_liters_filtered,
+        start_mixer_liters=state_machine.start_mixer_liters,
+        added_liters=state_machine.last_added_liters,
+    )
 
 
 def main():
@@ -67,6 +90,25 @@ def main():
         print("Abgebrochen.")
         return
 
+    hardware_enabled = settings.get("hardware_execution_enabled", False)
+
+    if not hardware_enabled:
+        print("[BLOCKED] Hardware execution is disabled in config/process_settings.json.")
+        print("[INFO] Set hardware_execution_enabled to true only when you are on site")
+        print("[INFO] and the RO water path to the Mixing Tank is physically confirmed.")
+        return
+
+    required_text = settings.get("required_confirmation_text", "CONFIRM")
+    print()
+    print("Sicherheitsbestätigung erforderlich.")
+    print(f"Zum Start exakt eingeben: {required_text}")
+    confirmation_text = input("Bestätigung: ").strip()
+
+    if confirmation_text != required_text:
+        print("[BLOCKED] Sicherheitsbestätigung falsch. Abbruch.")
+        return
+
+
     sensor_reader = SensorSnapshotReader()
     sensor_reader.start()
 
@@ -78,6 +120,7 @@ def main():
         return
 
     print("[OK] Sensor-Payload empfangen.")
+
 
     actuators = ActuatorManager(active_low=ACTIVE_LOW)
 
@@ -91,6 +134,7 @@ def main():
         gpio_pin=OUTPUTS["test_supply_valve_6"],
     )
 
+    
     mixing_circulation_pump = None
     sensor_circulation_pump = None
 
@@ -117,27 +161,34 @@ def main():
         settings=settings,
     )
 
+    process_logger = ProcessRunLogger(process_name="fill_and_measure")
+
     try:
         state_machine.start()
         publish_status(mqtt_publisher, state_machine, actuators)
+        log_process_step(process_logger, state_machine, actuators, sensor_reader)
 
         while not state_machine.is_done:
             state_machine.update()
             publish_status(mqtt_publisher, state_machine, actuators)
+            log_process_step(process_logger, state_machine, actuators, sensor_reader)
             time.sleep(0.5)
 
     except KeyboardInterrupt:
         print("\n[ABORT] Abbruch durch Benutzer.")
         state_machine.error("KeyboardInterrupt")
         publish_status(mqtt_publisher, state_machine, actuators)
+        log_process_step(process_logger, state_machine, actuators, sensor_reader)
 
     finally:
         state_machine.safe_shutdown()
         publish_status(mqtt_publisher, state_machine, actuators)
+        log_process_step(process_logger, state_machine, actuators, sensor_reader)
 
         mqtt_publisher.close()
         actuators.close_all()
         sensor_reader.close()
+        process_logger.close()
 
     print(f"[END] Endzustand: {state_machine.state.name}")
 

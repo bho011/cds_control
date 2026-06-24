@@ -20,5 +20,9 @@
   "mixing_seconds": 30.0,
 
   "enable_mixing_circulation": false,
-  "enable_sensor_circulation": false
+  "enable_sensor_circulation": false,
+
+  "_comment": "So lange 'hardware_execution_enabled' false, werden die GPIOs nicht angesteuert. Dies ist für Tests ohne angeschlossene Hardware gedacht.",
+  "hardware_execution_enabled": false,
+  "required_confirmation_text": "confirmed"
 }
