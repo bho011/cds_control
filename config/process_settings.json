@@ -1,0 +1,17 @@
+{
+  "fill_mode": "delta",
+  "target_add_liters": 10.0,
+  "target_total_liters": 10.0,
+
+  "max_mixer_liters": 200.0,
+  "min_ro_liters_required": 20.0,
+  "max_fill_seconds": 60.0,
+
+  "valve_settle_seconds": 1.0,
+  "level_settle_seconds": 5.0,
+  "sensor_stabilize_seconds": 20.0,
+  "mixing_seconds": 30.0,
+
+  "enable_mixing_circulation": false,
+  "enable_sensor_circulation": false
+}
