@@ -29,6 +29,7 @@ CRITICAL_FILES = [
     "services/mqtt_publisher.py",
     "statemachine/water_test_state_machine.py",
     "hardware/digital_output.py",
+    "hardware/actuator_manager.py"
 ]
 
 REQUIRED_GPIO_KEYS = [
