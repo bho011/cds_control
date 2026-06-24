@@ -1,4 +1,5 @@
 import time
+from collections import deque
 from enum import Enum, auto
 from typing import Any, Callable
 
@@ -39,10 +40,17 @@ class FillAndMeasureStateMachine:
 
         self.state_started_at = time.monotonic()
         self.process_started_at = time.monotonic()
+        self.fill_started_at: float | None = None
 
         self.start_mixer_liters: float | None = None
         self.final_snapshot: dict[str, Any] | None = None
         self.error_message: str | None = None
+
+        filter_samples = int(self.settings.get("level_filter_samples", 5))
+        self.mixer_liter_history = deque(maxlen=max(1, filter_samples))
+
+        self.target_confirm_count = 0
+        self.last_added_liters: float | None = None
 
     def start(self):
         if self.state != FillAndMeasureState.IDLE:
@@ -54,7 +62,7 @@ class FillAndMeasureStateMachine:
             self.error("No valid sensor snapshot available at process start.")
             return
 
-        mixer_liters = self._mixer_liters(snapshot)
+        mixer_liters = self._filtered_mixer_liters(snapshot)
         ro_liters = self._ro_liters(snapshot)
 
         if mixer_liters is None:
@@ -67,14 +75,23 @@ class FillAndMeasureStateMachine:
 
         min_ro = float(self.settings["min_ro_liters_required"])
         if ro_liters < min_ro:
-            self.error(f"Not enough RO water. Required={min_ro} L, available={ro_liters} L.")
+            self.error(
+                f"Not enough RO water. Required={min_ro:.2f} L, "
+                f"available={ro_liters:.2f} L."
+            )
             return
 
         self.start_mixer_liters = mixer_liters
         self.process_started_at = time.monotonic()
+        self.target_confirm_count = 0
+        self.last_added_liters = 0.0
 
-        print(f"[START] Mixer start level: {mixer_liters:.2f} L")
+        print(f"[START] Mixer start level filtered: {mixer_liters:.2f} L")
         print(f"[START] RO available: {ro_liters:.2f} L")
+        print(
+            f"[START] Filter samples: "
+            f"{self.settings.get('level_filter_samples', 5)}"
+        )
 
         self._change_state(FillAndMeasureState.OPEN_RO_INLET)
 
@@ -120,6 +137,8 @@ class FillAndMeasureStateMachine:
 
     def _handle_start_refill_pump(self):
         self.mixer_refill_pump.on()
+        self.fill_started_at = time.monotonic()
+        self.target_confirm_count = 0
         self._change_state(FillAndMeasureState.FILL_UNTIL_TARGET)
 
     def _handle_fill_until_target(self):
@@ -129,7 +148,7 @@ class FillAndMeasureStateMachine:
             self.error("No recent sensor snapshot during filling.")
             return
 
-        mixer_liters = self._mixer_liters(snapshot)
+        mixer_liters = self._filtered_mixer_liters(snapshot)
         ro_liters = self._ro_liters(snapshot)
 
         if mixer_liters is None:
@@ -144,44 +163,101 @@ class FillAndMeasureStateMachine:
             self.error("Missing start_mixer_liters.")
             return
 
+        if self.fill_started_at is None:
+            self.error("Missing fill_started_at.")
+            return
+
+        fill_elapsed = time.monotonic() - self.fill_started_at
+        process_elapsed = self._process_elapsed_seconds()
+
         max_fill_seconds = float(self.settings["max_fill_seconds"])
-        if self._process_elapsed_seconds() > max_fill_seconds:
-            self.error(f"Max fill time exceeded: {max_fill_seconds} seconds.")
+        if process_elapsed > max_fill_seconds:
+            self.error(f"Max fill time exceeded: {max_fill_seconds:.1f} seconds.")
             return
 
         max_mixer_liters = float(self.settings["max_mixer_liters"])
         if mixer_liters > max_mixer_liters:
-            self.error(f"Mixer over max limit: {mixer_liters:.2f} L > {max_mixer_liters:.2f} L.")
+            self.error(
+                f"Mixer over max limit: "
+                f"{mixer_liters:.2f} L > {max_mixer_liters:.2f} L."
+            )
+            return
+
+        added_liters = mixer_liters - self.start_mixer_liters
+        self.last_added_liters = added_liters
+
+        max_negative_drift = float(
+            self.settings.get("max_negative_level_drift_liters", 2.0)
+        )
+
+        if added_liters < -max_negative_drift:
+            self.error(
+                f"Mixer level drift too negative: "
+                f"added={added_liters:.2f} L, "
+                f"allowed=-{max_negative_drift:.2f} L."
+            )
+            return
+
+        no_progress_timeout = float(
+            self.settings.get("no_fill_progress_timeout_seconds", 15.0)
+        )
+        min_progress = float(
+            self.settings.get("min_fill_progress_liters", 1.5)
+        )
+
+        if fill_elapsed >= no_progress_timeout and added_liters < min_progress:
+            self.error(
+                f"No plausible fill progress. "
+                f"Added={added_liters:.2f} L after {fill_elapsed:.1f}s. "
+                f"Required at least {min_progress:.2f} L."
+            )
             return
 
         fill_mode = self.settings.get("fill_mode", "delta")
 
         if fill_mode == "delta":
             target_add = float(self.settings["target_add_liters"])
-            added_liters = mixer_liters - self.start_mixer_liters
+            target_reached = added_liters >= target_add
 
             print(
-                f"[FILL] Mixer={mixer_liters:.2f} L | "
+                f"[FILL] Mixer(filtered)={mixer_liters:.2f} L | "
                 f"Added={added_liters:.2f}/{target_add:.2f} L | "
-                f"RO={ro_liters:.2f} L"
+                f"RO={ro_liters:.2f} L | "
+                f"fill_elapsed={fill_elapsed:.1f}s | "
+                f"confirm={self.target_confirm_count}"
             )
-
-            if added_liters >= target_add:
-                self._change_state(FillAndMeasureState.STOP_REFILL_PUMP)
 
         elif fill_mode == "absolute":
             target_total = float(self.settings["target_total_liters"])
+            target_reached = mixer_liters >= target_total
 
             print(
-                f"[FILL] Mixer={mixer_liters:.2f}/{target_total:.2f} L | "
-                f"RO={ro_liters:.2f} L"
+                f"[FILL] Mixer(filtered)={mixer_liters:.2f}/{target_total:.2f} L | "
+                f"Added={added_liters:.2f} L | "
+                f"RO={ro_liters:.2f} L | "
+                f"fill_elapsed={fill_elapsed:.1f}s | "
+                f"confirm={self.target_confirm_count}"
             )
-
-            if mixer_liters >= target_total:
-                self._change_state(FillAndMeasureState.STOP_REFILL_PUMP)
 
         else:
             self.error(f"Unknown fill_mode: {fill_mode}")
+            return
+
+        if target_reached:
+            self.target_confirm_count += 1
+        else:
+            self.target_confirm_count = 0
+
+        required_confirm_samples = int(
+            self.settings.get("target_reached_confirm_samples", 3)
+        )
+
+        if self.target_confirm_count >= required_confirm_samples:
+            print(
+                f"[TARGET] Target confirmed with "
+                f"{self.target_confirm_count}/{required_confirm_samples} samples."
+            )
+            self._change_state(FillAndMeasureState.STOP_REFILL_PUMP)
 
     def _handle_stop_refill_pump(self):
         self.mixer_refill_pump.off()
@@ -224,13 +300,24 @@ class FillAndMeasureStateMachine:
         mixer = snapshot.get("mixer", {})
         ro = snapshot.get("ro", {})
 
+        mixer_liters_filtered = self._filtered_mixer_liters(snapshot)
+
         print("[MEASURE] Final values:")
-        print(f"          Mixer: {mixer.get('volume_liters_calc')} L / {mixer.get('level_percent')} %")
-        print(f"          RO:    {ro.get('volume_liters_calc')} L / {ro.get('level_percent')} %")
-        print(f"          EC:    {water_values.get('ec_ms_cm')} mS/cm")
-        print(f"          pH:    {water_values.get('ph')}")
-        print(f"          Temp:  {water_values.get('water_temperature')} °C")
-        print(f"          DO:    {water_values.get('dissolved_oxygen')}")
+        print(
+            f"          Mixer filtered: "
+            f"{mixer_liters_filtered:.2f} L"
+            if mixer_liters_filtered is not None
+            else "          Mixer filtered: None"
+        )
+        print(
+            f"          Mixer payload:  "
+            f"{mixer.get('volume_liters_calc')} L / {mixer.get('level_percent')} %"
+        )
+        print(f"          RO:             {ro.get('volume_liters_calc')} L / {ro.get('level_percent')} %")
+        print(f"          EC:             {water_values.get('ec_ms_cm')} mS/cm")
+        print(f"          pH:             {water_values.get('ph')}")
+        print(f"          Temp:           {water_values.get('water_temperature')} °C")
+        print(f"          DO:             {water_values.get('dissolved_oxygen')}")
 
         self._change_state(FillAndMeasureState.FINISHED)
 
@@ -262,17 +349,39 @@ class FillAndMeasureStateMachine:
     def _process_elapsed_seconds(self) -> float:
         return time.monotonic() - self.process_started_at
 
-    @staticmethod
-    def _mixer_liters(snapshot: dict[str, Any]) -> float | None:
+    def _filtered_mixer_liters(self, snapshot: dict[str, Any]) -> float | None:
+        mixer_liters = self._mixer_liters_from_percent(snapshot)
+
+        if mixer_liters is None:
+            return None
+
+        self.mixer_liter_history.append(mixer_liters)
+
+        return sum(self.mixer_liter_history) / len(self.mixer_liter_history)
+
+    def _mixer_liters_from_percent(self, snapshot: dict[str, Any]) -> float | None:
         mixer = snapshot.get("mixer") or {}
-        value = mixer.get("volume_liters_calc")
-        return float(value) if value is not None else None
+        level_percent = mixer.get("level_percent")
+
+        if level_percent is not None:
+            max_liters = float(self.settings["max_mixer_liters"])
+            return (float(level_percent) / 100.0) * max_liters
+
+        fallback_value = mixer.get("volume_liters_calc")
+        return float(fallback_value) if fallback_value is not None else None
 
     @staticmethod
     def _ro_liters(snapshot: dict[str, Any]) -> float | None:
         ro = snapshot.get("ro") or {}
-        value = ro.get("volume_liters_calc")
-        return float(value) if value is not None else None
+
+        level_percent = ro.get("level_percent")
+        configured_max_liters = ro.get("configured_max_liters")
+
+        if level_percent is not None and configured_max_liters is not None:
+            return (float(level_percent) / 100.0) * float(configured_max_liters)
+
+        fallback_value = ro.get("volume_liters_calc")
+        return float(fallback_value) if fallback_value is not None else None
 
     @property
     def is_done(self) -> bool:
