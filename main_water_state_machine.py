@@ -1,5 +1,6 @@
 import time
 
+from hardware.actuator_manager import ActuatorManager
 from services.mqtt_publisher import MqttPublisher
 from gpio_config import OUTPUTS, ACTIVE_LOW
 from hardware.digital_output import DigitalOutput
@@ -48,22 +49,21 @@ def main():
         print("Abgebrochen.")
         return
 
-    mixer_refill_pump = DigitalOutput(
+    actuators = ActuatorManager(active_low=ACTIVE_LOW)
+
+    mixer_refill_pump = actuators.add(
         name="mixer_refill_pump",
         gpio_pin=OUTPUTS["mixer_refill_pump"],
-        active_low=ACTIVE_LOW
     )
 
-    supply_valve = DigitalOutput(
+    supply_valve = actuators.add(
         name="test_supply_valve_6",
         gpio_pin=OUTPUTS["test_supply_valve_6"],
-        active_low=ACTIVE_LOW
     )
 
-    drain_valve = DigitalOutput(
+    drain_valve = actuators.add(
         name="drain_valve_0",
         gpio_pin=OUTPUTS["valve_0_drain"],
-        active_low=ACTIVE_LOW
     )
 
     state_machine = WaterTestStateMachine(
@@ -124,10 +124,8 @@ def main():
         )
 
         mqtt_publisher.close()
+        actuators.close_all()
 
-        mixer_refill_pump.close()
-        supply_valve.close()
-        drain_valve.close()
 
     print(f"[END] Endzustand: {state_machine.state.name}")
 
