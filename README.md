@@ -398,5 +398,193 @@ python -m py_compile mqtt_sensor_bridge.py
 python -m py_compile main_water_state_machine.py
 python -m py_compile services/mqtt_publisher.py
 
+## 24/06/2026 - Current Project Status
+
+The current implementation provides a Python-based control and monitoring layer for the central dosing process. The system is currently focused on safe water-side validation, sensor integration, MQTT communication, dashboard visualization and preparation of the first controlled fill-and-measure process.
+
+### Implemented Components
+
+#### MQTT Sensor Bridge
+
+A Python-based sensor bridge reads process values from the OPC-UA server and publishes them to the local MQTT broker.
+
+Currently published sensor data includes:
+
+* RO tank level
+* Mixing tank level
+* EC value
+* pH value
+* water temperature
+* dissolved oxygen
+
+The sensor bridge publishes its data to:
+
+```text
+cds/status/sensors
+```
+
+The payload contains structured sections for tank levels, water values, actuator placeholders and possible error messages.
+
+The sensor bridge is designed to run as a systemd service and includes reconnect handling for OPC-UA communication issues. It also avoids unnecessary continuous log output and only reports relevant status or error changes.
+
+#### Node-RED Dashboard Integration
+
+The Node-RED dashboard has been extended to consume the Python MQTT payloads and visualize the current process state in a clearer structure.
+
+The dashboard currently displays:
+
+* RO tank level in liters and percent
+* Mixing tank level in liters and percent
+* Water quality values
+
+  * EC
+  * pH
+  * water temperature
+  * dissolved oxygen
+* MQTT bridge status
+* last sensor update
+* process state machine status
+* process errors
+* actuator states as LED indicators
+
+A timeout mechanism was added for the sensor bridge. If no new sensor MQTT message is received within the configured timeout, the dashboard switches the sensor bridge state to `STALE`. When new data is received again, the status returns to `RUNNING`.
+
+#### Process State Machine Monitoring
+
+The process state machine publishes its current state and actuator status to:
+
+```text
+cds/status/process
+```
+
+The dashboard visualizes the current process state and actuator states.
+
+A process timeout handling mechanism was added in Node-RED. Successful process endings can transition to `IDLE`, while error states such as `ERROR` remain visible and are not overwritten by a timeout state. This prevents real errors from being hidden automatically.
+
+#### Preflight Check
+
+A Python preflight check script was added to validate the software and communication environment before running process tests.
+
+The preflight check verifies:
+
+* required project files exist
+* Python syntax of important modules is valid
+* disk space is sufficient
+* GPIO configuration is plausible
+* no duplicate GPIO assignments exist
+* no GPIO output is initialized or switched during the check
+* required systemd services are active
+* MQTT broker is reachable
+* OPC-UA endpoint is readable
+* current MQTT sensor payload is received and structurally valid
+
+The preflight check is read-only with respect to the hardware and does not switch pumps, relays or valves.
+
+#### MQTT Publisher Improvements
+
+The MQTT process publisher was improved to make process status publishing more robust.
+
+The current implementation supports:
+
+* JSON payload publishing
+* publish confirmation
+* publish timeout handling
+* optional fail-soft behavior
+* structured process state payloads
+* actuator status reporting
+
+This improves reliability for important process states such as `RUNNING`, `FINISHED`, `ERROR` and safe shutdown states.
+
+#### Actuator Manager
+
+An `ActuatorManager` was introduced to centralize the handling of digital outputs.
+
+It provides a cleaner structure for:
+
+* registering actuators
+* retrieving actuator objects by name
+* collecting actuator status
+* switching all registered actuators off safely
+* closing all registered outputs
+
+This prepares the project for additional actuators such as circulation pumps, sensor flow pumps and future routing components.
+
+#### Fill and Measure State Machine
+
+A new `FillAndMeasureStateMachine` draft was added as preparation for the first controlled filling process.
+
+The intended process is:
+
+```text
+RO water
+→ Mixing Tank filling
+→ level measurement
+→ stop filling at target amount
+→ optional water circulation
+→ optional sensor circulation
+→ water value measurement
+```
+
+The first version is focused only on controlled RO filling and measurement preparation. It does not perform chemical dosing, target tank routing or transfer pump control.
+
+The current draft includes:
+
+* configurable process settings
+* target fill amount
+* maximum fill time
+* RO water availability check
+* Mixing Tank level check
+* safe shutdown on error or keyboard interrupt
+* optional placeholders for:
+
+  * mixing circulation pump
+  * sensor circulation pump
+
+The circulation pumps are separated conceptually:
+
+```text
+mixing_circulation_pump
+sensor_circulation_pump
+```
+
+This keeps tank mixing and sensor box flow as two different process functions.
+
+### Current Hardware Validation Status
+
+The currently validated water-test outputs are:
+
+* Mixer Refill Pump
+* RO supply valve / Valve 6
+* Drain valve / Valve 0
+
+The transfer pump is not yet integrated into the Python process logic. Its final electrical connection and control path are still pending hardware clarification.
+
+### Current Design Decision
+
+The next development focus is the basic Mixing Tank process, not recipe execution, peristaltic dosing or target tank routing.
+
+The current priority is:
+
+```text
+RO water → Mixing Tank → level-based filling → circulation → measurement
+```
+
+Recipe handling, dosing logic, routing logic and cleaning phases will be added later after the basic Mixing Tank process is stable and physically validated.
+
+### Safety Notes
+
+The current implementation is still in validation stage.
+
+Important limitations:
+
+* no chemical dosing is active
+* no automatic routing to solution tanks is active
+* transfer pump logic is not active
+* Mixing Tank level calibration is not final
+* water quality values are displayed but not yet process-validated
+* circulation pumps are prepared but disabled by default
+
+Before each hardware test, the preflight check should be executed and the physical water path should be verified manually.
+
 
 - bho011 
