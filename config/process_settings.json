@@ -2,27 +2,21 @@
   "fill_mode": "delta",
   "target_add_liters": 5.0,
   "target_total_liters": 5.0,
-
   "max_mixer_liters": 200.0,
   "min_ro_liters_required": 20.0,
   "max_fill_seconds": 30.0,
-
   "min_fill_progress_liters": 1.5,
   "no_fill_progress_timeout_seconds": 15.0,
   "max_negative_level_drift_liters": 2.0,
-
   "level_filter_samples": 5,
   "target_reached_confirm_samples": 3,
-
   "valve_settle_seconds": 1.0,
   "level_settle_seconds": 5.0,
   "sensor_stabilize_seconds": 20.0,
   "mixing_seconds": 30.0,
-
   "enable_mixing_circulation": false,
   "enable_sensor_circulation": false,
-
-  "_comment": "So lange 'hardware_execution_enabled' false, werden die GPIOs nicht angesteuert. Dies ist für Tests ohne angeschlossene Hardware gedacht.",
+  "_comment": "So lange 'hardware_execution_enabled' false, werden die GPIOs nicht angesteuert. Dies ist f\u00fcr Tests ohne angeschlossene Hardware gedacht.",
   "hardware_execution_enabled": false,
   "required_confirmation_text": "confirmed"
 }
