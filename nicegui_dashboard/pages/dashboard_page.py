@@ -609,6 +609,17 @@ def create_dashboard_page(controller: CdsController) -> None:
             badge.classes("badge-unknown")
 
     def handle_start() -> None:
+        control_data = controller.get_process_control_status()
+
+        if not control_data["hardware_execution_enabled"]:
+            message = (
+                "Start blockiert: hardware_execution_enabled ist false. "
+                "NiceGUI bleibt im Beobachtungsmodus."
+            )
+            ui.notify(message, color="negative")
+            add_log(f"[SAFE] {message}")
+            return
+
         result = controller.start_fill_and_measure(confirmation_input.value or "")
 
         if result["success"]:
