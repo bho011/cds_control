@@ -686,15 +686,6 @@ Before running a real test, check:
 - preflight check passes
 ```
 
-### Useful Commands
-
-```bash
-cd ~/cds_control
-source .venv/bin/activate
-
-python preflight_check.py
-python main_fill_and_measure.py
-```
 
 Expected lock behavior when hardware execution is disabled:
 
@@ -714,3 +705,5 @@ logs/*.csv
 
 - Github nur über VsCode und GitLab nur über Bash remote über ssh 
 git push gitlab main
+
+## Backup before NiceGUI dashboard intergration 25/06/2026
