@@ -5,21 +5,6 @@ from nicegui import ui
 from nicegui_dashboard.cds_controller import CdsController
 
 
-PROCESS_STEPS = [
-    "IDLE",
-    "OPEN_RO_INLET",
-    "START_REFILL_PUMP",
-    "FILL_UNTIL_TARGET",
-    "STOP_REFILL_PUMP",
-    "SETTLE_LEVEL",
-    "START_CIRCULATION",
-    "SENSOR_STABILIZE",
-    "MEASURE_VALUES",
-    "FINISHED",
-    "ERROR",
-]
-
-
 def fmt(value: Any, unit: str = "", decimals: int = 2) -> str:
     if value is None:
         return "-"
@@ -249,19 +234,6 @@ def create_dashboard_page(controller: CdsController) -> None:
                 color: #9fb2c7;
                 font-size: 13px;
                 margin-top: 10px;
-            }
-
-            .step-chip {
-                min-width: 110px;
-                justify-content: center;
-                padding: 14px 10px;
-                border-radius: 14px;
-                border: 1px solid rgba(34, 197, 94, 0.30);
-                background: rgba(15, 23, 42, 0.75);
-                color: #22c55e;
-                font-size: 12px;
-                font-weight: 900;
-                text-align: center;
             }
 
             .step-chip-active {
@@ -504,17 +476,12 @@ def create_dashboard_page(controller: CdsController) -> None:
                             process_error_label = ui.label("").classes("error-text")
                             control_error_label = ui.label("").classes("error-text")
 
-                    step_chips: dict[str, Any] = {}
-
-                    with ui.row().classes("w-full gap-2 flex-wrap mt-4"):
-                        for step in PROCESS_STEPS:
-                            step_chips[step] = ui.label(step).classes("step-chip")
-
+                    
                     with ui.row().classes("w-full gap-3 mt-4"):
                         confirmation_input = ui.input(
                             label="Sicherheitsbestätigung",
-                            placeholder="required_confirmation_text eingeben",
-                            password=True,
+                            placeholder="confirmed eingeben",
+                            password=False,
                         ).classes("control-input flex-1")
 
                     with ui.row().classes("w-full gap-3 mt-2"):
@@ -575,7 +542,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                     ui.label("4. Maintenance Mode mit Zeitlimit planen").classes(
                         "text-sm text-slate-300"
                     )
-                    ui.label("5. Node-RED Dashboard später ablösen").classes(
+                    ui.label("5. Node-RED Dashboard step by step ablösen").classes(
                         "text-sm text-slate-300"
                     )
 
@@ -620,7 +587,23 @@ def create_dashboard_page(controller: CdsController) -> None:
             add_log(f"[SAFE] {message}")
             return
 
-        result = controller.start_fill_and_measure(confirmation_input.value or "")
+        entered_text = (confirmation_input.value or "").strip()
+        required_text = str(control_data["required_confirmation_text"]).strip()
+
+        add_log(
+            f"[DEBUG] Confirmation erhalten: '{entered_text}' | erwartet: '{required_text}'"
+        )
+
+        if entered_text != required_text:
+            message = (
+                "Start blockiert: Bestätigungstext ist falsch. "
+                f"Eingegeben='{entered_text}' Erwartet='{required_text}'"
+            )
+            ui.notify(message, color="negative")
+            add_log(f"[BLOCKED] {message}")
+            return
+
+        result = controller.start_fill_and_measure(entered_text)
 
         if result["success"]:
             ui.notify(result["message"], color="positive")
@@ -712,11 +695,6 @@ def create_dashboard_page(controller: CdsController) -> None:
             f"Process timestamp: {fmt(process_data['timestamp'])}"
         )
         process_source_label.set_text(f"Source: {fmt(process_data['source'])}")
-
-        for step, chip in step_chips.items():
-            chip.classes(remove="step-chip-active")
-            if process_state == step:
-                chip.classes("step-chip-active")
 
         if process_data["error"]:
             process_error_label.set_text(f"Process error: {process_data['error']}")
