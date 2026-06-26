@@ -2,3 +2,5 @@ __pycache__/
 *.py[cod]
 .venv/
 logs/*.csv
+dashboard_page_before_css_split.py
+dashboard_page_before_layout_rework
