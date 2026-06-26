@@ -39,6 +39,7 @@ class ProcessController:
         self.last_error: str | None = None
         self.last_message: str = "ProcessController initialized."
         self.last_start_request: str | None = None
+        self.display_state: str | None = "IDLE"
 
     def load_settings(self) -> dict[str, Any]:
         with SETTINGS_PATH.open("r", encoding="utf-8") as file:
@@ -54,7 +55,7 @@ class ProcessController:
             settings_error = None
 
         with self._lock:
-            state_name = None
+            state_name = self.display_state
             error_message = self.last_error
             start_mixer_liters = None
             added_liters = None
@@ -138,6 +139,7 @@ class ProcessController:
             self._stop_requested = False
             self.last_error = None
             self.last_message = "Fill-and-Measure-Prozess wird gestartet."
+            self.display_state = "START_REQUESTED"
 
             self._thread = threading.Thread(
                 target=self._run_fill_and_measure,
@@ -168,6 +170,29 @@ class ProcessController:
             self.is_running = False
 
         return self._result(True, "Emergency Stop wurde ausgelöst.")
+
+    def acknowledge_error(self) -> dict[str, Any]:
+        with self._lock:
+            thread_alive = self._thread is not None and self._thread.is_alive()
+
+            if self.is_running or thread_alive:
+                return self._result(
+                    False,
+                    "Reset blockiert: Prozess oder Hintergrundthread läuft noch."
+                )
+
+            self._stop_requested = False
+            self._thread = None
+            self.state_machine = None
+            self.actuators = None
+            self.mqtt_publisher = None
+            self.process_logger = None
+            self.is_running = False
+            self.last_error = None
+            self.display_state = "IDLE"
+            self.last_message = "Reset acknowledged. Controller ready."
+
+        return self._result(True, "Fehler wurde quittiert. Controller ist wieder bereit.")
 
     def _run_fill_and_measure(self, settings: dict[str, Any]) -> None:
         from gpio_config import ACTIVE_LOW, OUTPUTS

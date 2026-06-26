@@ -84,6 +84,12 @@ class MqttTopicReader:
         with self._lock:
             return self._error
 
+    def clear(self) -> None:
+        with self._lock:
+            self._latest_payload = None
+            self._latest_received_at = None
+            self._error = None
+
     def close(self) -> None:
         try:
             self.client.loop_stop()

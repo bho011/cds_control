@@ -61,6 +61,17 @@ class CdsController:
     def start_fill_and_measure(self, confirmation_text: str) -> dict[str, Any]:
         return self.process_controller.start_fill_and_measure(confirmation_text)
 
+    def acknowledge_error(self) -> dict[str, Any]:
+        result = self.process_controller.acknowledge_error()
+
+        if result.get("success"):
+            try:
+                self.process_reader.clear()
+            except Exception:
+                pass
+
+        return result
+
     def emergency_stop(self) -> dict[str, Any]:
         return self.process_controller.emergency_stop()
 

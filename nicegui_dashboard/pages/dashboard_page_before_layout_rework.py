@@ -15,6 +15,16 @@ def fmt(value: Any, unit: str = "", decimals: int = 2) -> str:
     return f"{value} {unit}".strip()
 
 
+def on_off(value: Any) -> str:
+    if value is True:
+        return "ON"
+
+    if value is False:
+        return "OFF"
+
+    return "-"
+
+
 def bool_dot(value: Any) -> str:
     if value is True:
         return "dot-on"
@@ -25,12 +35,12 @@ def bool_dot(value: Any) -> str:
     return "dot-unknown"
 
 
-def percent_to_display(value: Any) -> float:
+def percent_to_progress(value: Any) -> float:
     if value is None:
         return 0.0
 
     try:
-        return round(float(value), 1)
+        return max(0.0, min(1.0, float(value) / 100.0))
     except (TypeError, ValueError):
         return 0.0
 
@@ -38,11 +48,9 @@ def percent_to_display(value: Any) -> float:
 def create_status_row(title: str, subtitle: str) -> dict[str, Any]:
     with ui.row().classes("status-row"):
         dot = ui.element("div").classes("status-dot dot-unknown")
-
         with ui.column().classes("gap-0 flex-1"):
             ui.label(title).classes("status-title")
             ui.label(subtitle).classes("status-subtitle")
-
         value = ui.label("-").classes("status-value")
 
     return {
@@ -51,105 +59,24 @@ def create_status_row(title: str, subtitle: str) -> dict[str, Any]:
     }
 
 
-def create_actuator_row(title: str, subtitle: str) -> dict[str, Any]:
-    with ui.row().classes("actuator-row"):
-        with ui.column().classes("gap-0 flex-1"):
-            ui.label(title).classes("actuator-title")
-            ui.label(subtitle).classes("actuator-subtitle")
-
-        badge = ui.label("-").classes("actuator-badge badge-unknown")
-
-    return {"badge": badge}
-
-
 def create_metric_box(title: str, unit: str = "") -> dict[str, Any]:
     with ui.card().classes("metric-box"):
         ui.label(title).classes("metric-title")
         value = ui.label("-").classes("metric-value")
-
         if unit:
             ui.label(unit).classes("metric-unit")
 
     return {"value": value}
 
 
-def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
-    with ui.card().classes("tank-gauge-card"):
-        ui.label(title).classes("tank-title")
+def create_actuator_row(title: str, subtitle: str) -> dict[str, Any]:
+    with ui.row().classes("actuator-row"):
+        with ui.column().classes("gap-0 flex-1"):
+            ui.label(title).classes("actuator-title")
+            ui.label(subtitle).classes("actuator-subtitle")
+        badge = ui.label("-").classes("actuator-badge badge-unknown")
 
-        chart = ui.echart(
-            {
-                "backgroundColor": "transparent",
-                "series": [
-                    {
-                        "type": "gauge",
-                        "min": 0,
-                        "max": max_percent,
-                        "startAngle": 210,
-                        "endAngle": -30,
-                        "progress": {
-                            "show": True,
-                            "width": 16,
-                        },
-                        "axisLine": {
-                            "lineStyle": {
-                                "width": 16,
-                                "color": [
-                                    [0.75, "#22c55e"],
-                                    [1.0, "#f59e0b"],
-                                ],
-                            }
-                        },
-                        "axisTick": {
-                            "show": False,
-                        },
-                        "splitLine": {
-                            "show": False,
-                        },
-                        "axisLabel": {
-                            "color": "#94a3b8",
-                            "fontSize": 10,
-                        },
-                        "pointer": {
-                            "show": True,
-                            "length": "62%",
-                            "width": 5,
-                        },
-                        "anchor": {
-                            "show": True,
-                            "size": 8,
-                        },
-                        "title": {
-                            "show": False,
-                        },
-                        "detail": {
-                            "valueAnimation": True,
-                            "formatter": "{value}%",
-                            "color": "#f8fafc",
-                            "fontSize": 24,
-                            "fontWeight": "bold",
-                            "offsetCenter": [0, "55%"],
-                        },
-                        "data": [
-                            {
-                                "value": 0,
-                                "name": title,
-                            }
-                        ],
-                    }
-                ],
-            }
-        ).classes("w-full h-64")
-
-        liters_label = ui.label("-").classes("tank-liters")
-        percent_label = ui.label("-").classes("tank-percent")
-
-    return {
-        "chart": chart,
-        "liters": liters_label,
-        "percent": percent_label,
-        "max_percent": max_percent,
-    }
+    return {"badge": badge}
 
 
 def create_dashboard_page(controller: CdsController) -> None:
@@ -165,9 +92,9 @@ def create_dashboard_page(controller: CdsController) -> None:
             }
 
             .dashboard-root {
-                max-width: 1720px;
+                max-width: 1680px;
                 margin: 0 auto;
-                padding: 28px;
+                padding: 32px;
             }
 
             .headline {
@@ -211,21 +138,6 @@ def create_dashboard_page(controller: CdsController) -> None:
                 border: 1px solid rgba(96, 165, 250, 0.35);
             }
 
-            .layout-grid {
-                display: grid;
-                grid-template-columns: 330px minmax(520px, 1fr) 430px;
-                gap: 20px;
-                align-items: start;
-            }
-
-            .bottom-grid {
-                display: grid;
-                grid-template-columns: 330px minmax(520px, 1fr) 430px;
-                gap: 20px;
-                align-items: start;
-                margin-top: -230px;
-            }
-
             .panel {
                 background: linear-gradient(180deg, rgba(30, 41, 59, 0.86), rgba(15, 23, 42, 0.92));
                 border: 1px solid rgba(148, 163, 184, 0.18);
@@ -245,28 +157,6 @@ def create_dashboard_page(controller: CdsController) -> None:
                 color: #8fa2b8;
                 font-size: 13px;
                 margin-bottom: 14px;
-            }
-
-            .recipe-panel {
-                border-color: rgba(59, 130, 246, 0.32);
-                background:
-                    radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 18rem),
-                    linear-gradient(180deg, rgba(30, 41, 59, 0.90), rgba(15, 23, 42, 0.94));
-            }
-
-            .sensor-panel {
-                border-color: rgba(34, 197, 94, 0.28);
-                background:
-                    radial-gradient(circle at top right, rgba(34, 197, 94, 0.13), transparent 18rem),
-                    linear-gradient(180deg, rgba(30, 41, 59, 0.90), rgba(15, 23, 42, 0.94));
-            }
-
-            .tank-panel {
-                grid-column: 2 / 4;
-                border-color: rgba(248, 113, 113, 0.28);
-                background:
-                    radial-gradient(circle at top left, rgba(248, 113, 113, 0.11), transparent 22rem),
-                    linear-gradient(180deg, rgba(30, 41, 59, 0.90), rgba(15, 23, 42, 0.94));
             }
 
             .status-row {
@@ -323,7 +213,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                 border: 1px solid rgba(34, 197, 94, 0.38);
                 border-radius: 18px;
                 padding: 20px;
-                min-width: 230px;
+                min-width: 220px;
             }
 
             .process-label {
@@ -332,11 +222,11 @@ def create_dashboard_page(controller: CdsController) -> None:
             }
 
             .process-state {
-                font-size: 44px;
+                font-size: 42px;
                 line-height: 1;
                 font-weight: 1000;
                 color: #22c55e;
-                margin-top: 10px;
+                margin-top: 6px;
                 word-break: break-word;
             }
 
@@ -346,12 +236,18 @@ def create_dashboard_page(controller: CdsController) -> None:
                 margin-top: 10px;
             }
 
+            .step-chip-active {
+                background: rgba(34, 197, 94, 0.18);
+                border-color: rgba(34, 197, 94, 0.80);
+                box-shadow: 0 0 24px rgba(34, 197, 94, 0.20);
+            }
+
             .metric-box {
                 background: rgba(15, 23, 42, 0.72);
                 border: 1px solid rgba(148, 163, 184, 0.14);
                 border-radius: 16px;
                 padding: 16px;
-                min-width: 130px;
+                min-width: 140px;
                 flex: 1;
             }
 
@@ -373,32 +269,22 @@ def create_dashboard_page(controller: CdsController) -> None:
                 font-size: 12px;
             }
 
-            .tank-gauge-card {
-                background: rgba(15, 23, 42, 0.72);
-                border: 1px solid rgba(148, 163, 184, 0.14);
-                border-radius: 18px;
-                padding: 18px;
-                flex: 1;
-            }
-
             .tank-title {
                 color: #f8fafc;
-                font-size: 17px;
+                font-size: 14px;
                 font-weight: 900;
             }
 
-            .tank-liters {
+            .tank-value {
                 color: #f8fafc;
                 font-size: 28px;
                 font-weight: 900;
-                margin-top: 4px;
-                text-align: center;
+                margin-top: 8px;
             }
 
             .tank-percent {
                 color: #9fb2c7;
                 font-size: 13px;
-                text-align: center;
             }
 
             .actuator-row {
@@ -456,7 +342,7 @@ def create_dashboard_page(controller: CdsController) -> None:
             }
 
             .log-box {
-                height: 250px;
+                height: 275px;
                 overflow-y: auto;
                 background: rgba(2, 6, 23, 0.88);
                 border: 1px solid rgba(148, 163, 184, 0.14);
@@ -479,45 +365,30 @@ def create_dashboard_page(controller: CdsController) -> None:
                 font-size: 13px;
                 font-weight: 700;
             }
-
-            @media (max-width: 1300px) {
-                .layout-grid,
-                .bottom-grid {
-                    grid-template-columns: 1fr;
-                }
-
-                .tank-panel {
-                    grid-column: auto;
-                }
-            }
         </style>
         """
     )
 
     with ui.column().classes("dashboard-root gap-5"):
+
         with ui.row().classes("w-full items-start justify-between"):
-            with ui.row().classes("items-center gap-4"):
-                ui.image("/static/logo.jpg").classes("w-16 h-16 rounded-xl")
-                with ui.column().classes("gap-0"):
-                    ui.label("Central Dosing System Dashboard").classes("headline")
-                    ui.label(
-                        "NiceGUI-HMI – Live-Sensorwerte über Python-Core-Anbindung auf dem Raspberry Pi."
-                    ).classes("subtitle")
+            with ui.column().classes("gap-0"):
+                ui.label("CDS Dashboard").classes("headline")
+                ui.label(
+                    "NiceGUI-Oberfläche direkt auf dem Raspberry Pi mit echten Sensorwerten und Python-Core-Anbindung."
+                ).classes("subtitle")
 
             with ui.row().classes("gap-2"):
                 ui.label("RASPI LIVE").classes("top-badge badge-green")
                 ui.label("PYTHON CORE").classes("top-badge badge-blue")
-                last_update_badge = ui.label("Update: -").classes(
-                    "top-badge badge-orange"
-                )
+                last_update_badge = ui.label("Update: -").classes("top-badge badge-orange")
 
-        with ui.element("div").classes("layout-grid w-full"):
+        with ui.grid(columns=3).classes("w-full gap-5"):
+
             with ui.column().classes("gap-5"):
                 with ui.card().classes("panel"):
                     ui.label("Systemstatus").classes("panel-title")
-                    ui.label("Kommunikations- und Prozessmodule").classes(
-                        "panel-subtitle"
-                    )
+                    ui.label("Kommunikations- und Prozessmodule").classes("panel-subtitle")
 
                     mqtt_bridge_row = create_status_row(
                         "MQTT Sensor Bridge",
@@ -534,6 +405,18 @@ def create_dashboard_page(controller: CdsController) -> None:
                     process_payload_row = create_status_row(
                         "Process Payload",
                         "max. 30 Sekunden alt",
+                    )
+
+                with ui.card().classes("panel"):
+                    ui.label("Rezept / Sollwerte").classes("panel-title")
+                    ui.label("Aktuelle Werte aus process_settings.json").classes("panel-subtitle")
+
+                    hardware_enabled_label = ui.label("hardware_execution_enabled: -").classes(
+                        "warn-text"
+                    )
+                    fill_settings_label = ui.label("Settings: -").classes("text-sm text-slate-300")
+                    required_text_label = ui.label("required_confirmation_text: -").classes(
+                        "text-sm text-slate-400"
                     )
 
                 with ui.card().classes("panel"):
@@ -576,36 +459,32 @@ def create_dashboard_page(controller: CdsController) -> None:
 
                     with ui.row().classes("w-full gap-4 items-stretch"):
                         with ui.column().classes("process-display"):
-                            ui.label("Aktueller Prozesszustand").classes(
-                                "process-label"
-                            )
-                            process_state_label = ui.label("-").classes(
-                                "process-state"
-                            )
-                            process_timestamp_label = ui.label(
-                                "Process timestamp: -"
-                            ).classes("process-meta")
-                            process_source_label = ui.label("Source: -").classes(
+                            ui.label("Aktueller Prozesszustand").classes("process-label")
+                            process_state_label = ui.label("-").classes("process-state")
+                            process_timestamp_label = ui.label("Process timestamp: -").classes(
                                 "process-meta"
                             )
+                            process_source_label = ui.label("Source: -").classes("process-meta")
 
                         with ui.column().classes("gap-2 flex-1"):
-                            control_state_label = ui.label(
-                                "Controller state: -"
-                            ).classes("text-sm text-slate-300")
+                            control_state_label = ui.label("Controller state: -").classes(
+                                "text-sm text-slate-300"
+                            )
                             control_message_label = ui.label("Message: -").classes(
                                 "text-sm text-slate-300"
                             )
                             process_error_label = ui.label("").classes("error-text")
                             control_error_label = ui.label("").classes("error-text")
 
-                    confirmation_input = ui.input(
-                        label="Sicherheitsbestätigung",
-                        placeholder="confirmed eingeben",
-                        password=False,
-                    ).classes("control-input w-full mt-4")
+                    
+                    with ui.row().classes("w-full gap-3 mt-4"):
+                        confirmation_input = ui.input(
+                            label="Sicherheitsbestätigung",
+                            placeholder="confirmed eingeben",
+                            password=False,
+                        ).classes("control-input flex-1")
 
-                    with ui.row().classes("w-full gap-3 mt-3"):
+                    with ui.row().classes("w-full gap-3 mt-2"):
                         start_button = ui.button("Start Fill & Measure").classes(
                             "flex-1 font-bold"
                         ).props("color=positive")
@@ -620,31 +499,24 @@ def create_dashboard_page(controller: CdsController) -> None:
                         "GPIOs werden erst nach gültiger Bestätigung und hardware_execution_enabled=true initialisiert."
                     ).classes("warn-text mt-2")
 
-                with ui.card().classes("panel recipe-panel"):
-                    ui.label("Rezept / Sollwerte").classes("panel-title")
-                    ui.label("Aktuelle Werte aus process_settings.json").classes(
-                        "panel-subtitle"
-                    )
-
-                    hardware_enabled_label = ui.label(
-                        "hardware_execution_enabled: -"
-                    ).classes("warn-text")
-                    fill_settings_label = ui.label("Settings: -").classes(
-                        "text-sm text-slate-300"
-                    )
-                    required_text_label = ui.label(
-                        "required_confirmation_text: -"
-                    ).classes("text-sm text-slate-400")
-
-            with ui.column().classes("gap-5"):
                 with ui.card().classes("panel"):
-                    ui.label("Prozesslog").classes("panel-title")
-                    ui.label("Dashboard-Ereignisse und Live-Status").classes(
-                        "panel-subtitle"
-                    )
-                    log_box = ui.label("").classes("log-box")
+                    ui.label("Tanks / Füllstände").classes("panel-title")
+                    ui.label("Livewerte aus Sensor-MQTT-Bridge").classes("panel-subtitle")
 
-                with ui.card().classes("panel sensor-panel"):
+                    with ui.row().classes("w-full gap-4"):
+                        with ui.column().classes("flex-1"):
+                            ui.label("RO Tank").classes("tank-title")
+                            ro_liters_label = ui.label("-").classes("tank-value")
+                            ro_percent_label = ui.label("-").classes("tank-percent")
+                            ro_progress = ui.linear_progress(value=0.0).classes("w-full mt-2")
+
+                        with ui.column().classes("flex-1"):
+                            ui.label("Mixing Tank").classes("tank-title")
+                            mixer_liters_label = ui.label("-").classes("tank-value")
+                            mixer_percent_label = ui.label("-").classes("tank-percent")
+                            mixer_progress = ui.linear_progress(value=0.0).classes("w-full mt-2")
+
+                with ui.card().classes("panel"):
                     ui.label("Sensorwerte").classes("panel-title")
                     ui.label("pH, EC, Temperatur und gelöster Sauerstoff").classes(
                         "panel-subtitle"
@@ -653,24 +525,29 @@ def create_dashboard_page(controller: CdsController) -> None:
                     with ui.row().classes("w-full gap-3"):
                         ph_metric = create_metric_box("pH")
                         ec_metric = create_metric_box("EC", "mS/cm")
-
-                    with ui.row().classes("w-full gap-3"):
                         temperature_metric = create_metric_box("Temperatur", "°C")
                         do_metric = create_metric_box("DO", "mg/L")
 
-        with ui.element("div").classes("bottom-grid w-full"):
-            with ui.element("div"):
-                pass
+            with ui.column().classes("gap-5"):
+                with ui.card().classes("panel"):
+                    ui.label("Prozesslog").classes("panel-title")
+                    ui.label("Dashboard-Ereignisse und Live-Status").classes("panel-subtitle")
+                    log_box = ui.label("").classes("log-box")
 
-            with ui.card().classes("panel tank-panel"):
-                ui.label("Tanks / Füllstände").classes("panel-title")
-                ui.label("Livewerte aus Sensor-MQTT-Bridge als Gauges").classes(
-                    "panel-subtitle"
-                )
-
-                with ui.row().classes("w-full gap-5"):
-                    ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
-                    mixer_tank_gauge = create_tank_gauge("Mixing Tank", max_percent=100)
+                with ui.card().classes("panel"):
+                    ui.label("Nächste Ausbaustufen").classes("panel-title")
+                    ui.label("Technisch sinnvolle Reihenfolge").classes("panel-subtitle")
+                    ui.label("1. Layout finalisieren").classes("text-sm text-slate-300")
+                    ui.label("2. Prozessstart unter realen Bedingungen testen").classes(
+                        "text-sm text-slate-300"
+                    )
+                    ui.label("3. Emergency Stop validieren").classes("text-sm text-slate-300")
+                    ui.label("4. Maintenance Mode mit Zeitlimit planen").classes(
+                        "text-sm text-slate-300"
+                    )
+                    ui.label("5. Node-RED Dashboard step by step ablösen").classes(
+                        "text-sm text-slate-300"
+                    )
 
     event_log: list[str] = ["[OK] NiceGUI Dashboard geladen."]
 
@@ -681,7 +558,7 @@ def create_dashboard_page(controller: CdsController) -> None:
         if len(event_log) > 18:
             del event_log[:-18]
 
-        log_box.set_text("\n".join(event_log))
+        log_box.set_text("\\n".join(event_log))
 
     def set_dot(row: dict[str, Any], value: Any) -> None:
         row["dot"].classes(remove="dot-on dot-off dot-unknown")
@@ -700,29 +577,6 @@ def create_dashboard_page(controller: CdsController) -> None:
         else:
             badge.set_text("-")
             badge.classes("badge-unknown")
-
-    def update_tank_gauge(
-        gauge: dict[str, Any],
-        percent: Any,
-        liters: Any,
-        max_liters: Any,
-    ) -> None:
-        value = percent_to_display(percent)
-
-        if value > gauge["max_percent"]:
-            new_max = ((int(value) + 9) // 10) * 10
-            gauge["chart"].options["series"][0]["max"] = new_max
-            gauge["max_percent"] = new_max
-
-        gauge["chart"].options["series"][0]["data"][0]["value"] = value
-        gauge["chart"].update()
-
-        if liters is not None and max_liters is not None:
-            gauge["liters"].set_text(f"{liters} L / {max_liters} L")
-        else:
-            gauge["liters"].set_text("-")
-
-        gauge["percent"].set_text(f"{fmt(percent, '%')}")
 
     def handle_start() -> None:
         control_data = controller.get_process_control_status()
@@ -761,16 +615,6 @@ def create_dashboard_page(controller: CdsController) -> None:
             ui.notify(result["message"], color="negative")
             add_log(f"[BLOCKED] {result['message']}")
 
-    def handle_reset() -> None:
-        result = controller.acknowledge_error()
-
-        if result["success"]:
-            ui.notify(result["message"], color="positive")
-            add_log(f"[RESET] {result['message']}")
-        else:
-            ui.notify(result["message"], color="negative")
-            add_log(f"[BLOCKED] {result['message']}")
-
     def handle_stop() -> None:
         result = controller.emergency_stop()
 
@@ -780,6 +624,16 @@ def create_dashboard_page(controller: CdsController) -> None:
         else:
             ui.notify(result["message"], color="negative")
             add_log(f"[ERROR] {result['message']}")
+
+    def handle_reset() -> None:
+        result = controller.acknowledge_error()
+
+        if result["success"]:
+            ui.notify(result["message"], color="positive")
+            add_log(f"[RESET] {result['message']}")
+        else:
+            ui.notify(result["message"], color="negative")
+            add_log(f"[BLOCKED] {result['message']}")
 
     start_button.on_click(handle_start)
     reset_button.on_click(handle_reset)
@@ -817,19 +671,29 @@ def create_dashboard_page(controller: CdsController) -> None:
             "aktuell" if process_available else "kein Payload"
         )
 
-        update_tank_gauge(
-            ro_tank_gauge,
-            sensor_data["ro_level_percent"],
-            sensor_data["ro_liters"],
-            sensor_data["ro_max_liters"],
-        )
+        ro_liters = sensor_data["ro_liters"]
+        ro_max_liters = sensor_data["ro_max_liters"]
+        ro_percent = sensor_data["ro_level_percent"]
 
-        update_tank_gauge(
-            mixer_tank_gauge,
-            sensor_data["mixer_level_percent"],
-            sensor_data["mixer_liters"],
-            sensor_data["mixer_max_liters"],
-        )
+        if ro_liters is not None and ro_max_liters is not None:
+            ro_liters_label.set_text(f"{ro_liters} L / {ro_max_liters} L")
+        else:
+            ro_liters_label.set_text("-")
+
+        ro_percent_label.set_text(f"{fmt(ro_percent, '%')}")
+        ro_progress.set_value(percent_to_progress(ro_percent))
+
+        mixer_liters = sensor_data["mixer_liters"]
+        mixer_max_liters = sensor_data["mixer_max_liters"]
+        mixer_percent = sensor_data["mixer_level_percent"]
+
+        if mixer_liters is not None and mixer_max_liters is not None:
+            mixer_liters_label.set_text(f"{mixer_liters} L / {mixer_max_liters} L")
+        else:
+            mixer_liters_label.set_text("-")
+
+        mixer_percent_label.set_text(f"{fmt(mixer_percent, '%')}")
+        mixer_progress.set_value(percent_to_progress(mixer_percent))
 
         ph_metric["value"].set_text(fmt(sensor_data["ph"], decimals=2))
         ec_metric["value"].set_text(fmt(sensor_data["ec_ms_cm"], decimals=3))
@@ -838,11 +702,7 @@ def create_dashboard_page(controller: CdsController) -> None:
         )
         do_metric["value"].set_text(fmt(sensor_data["dissolved_oxygen"], decimals=2))
 
-        process_state = (
-            process_data["process_state"]
-            if process_data["payload_available"]
-            else control_data["state_name"]
-        ) or "-"
+        process_state = process_data["process_state"] or control_data["state_name"] or "-"
 
         process_state_label.set_text(fmt(process_state))
         process_timestamp_label.set_text(

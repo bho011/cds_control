@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from nicegui import app as nicegui_app
 from nicegui import ui
 
@@ -7,6 +9,9 @@ from nicegui_dashboard.pages.dashboard_page import create_dashboard_page
 
 controller = CdsController()
 nicegui_app.on_shutdown(controller.close)
+
+STATIC_DIR = Path(__file__).parent / "static"
+nicegui_app.add_static_files("/static", STATIC_DIR)
 
 
 @ui.page("/")
