@@ -95,9 +95,8 @@ def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
                             "lineStyle": {
                                 "width": 16,
                                 "color": [
-                                    [0.33, "#f20707"],
-                                    [0.66, "#f59e0b"],
-                                    [1.0, "#22c55e"],
+                                    [0.75, "#22c55e"],
+                                    [1.0, "#f59e0b"],
                                 ],
                             }
                         },
@@ -113,7 +112,7 @@ def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
                         },
                         "pointer": {
                             "show": True,
-                            "length": "50%",
+                            "length": "62%",
                             "width": 5,
                         },
                         "anchor": {
@@ -140,7 +139,7 @@ def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
                     }
                 ],
             }
-        ).classes("w-full h-60")
+        ).classes("w-full h-64")
 
         liters_label = ui.label("-").classes("tank-liters")
         percent_label = ui.label("-").classes("tank-percent")
@@ -154,7 +153,7 @@ def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
 
 
 def create_dashboard_page(controller: CdsController) -> None:
-    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=grid2">')
+    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css">')
 
     with ui.column().classes("dashboard-root gap-5"):
         with ui.row().classes("w-full items-start justify-between"):
@@ -229,113 +228,112 @@ def create_dashboard_page(controller: CdsController) -> None:
                         "optional aus Settings",
                     )
 
-            with ui.element("div").classes("content-grid w-full"):
-                with ui.column().classes("gap-5 w-full area-main"):
-                    with ui.card().classes("panel"):
-                        ui.label("Process State Machine").classes("panel-title")
-                        ui.label("Live-Prozessstatus aus MQTT und lokalem Controller").classes(
-                            "panel-subtitle"
-                        )
-    
-                        with ui.row().classes("w-full gap-4 items-stretch"):
-                            with ui.column().classes("process-display"):
-                                ui.label("Aktueller Prozesszustand").classes(
-                                    "process-label"
-                                )
-                                process_state_label = ui.label("-").classes(
-                                    "process-state"
-                                )
-                                process_timestamp_label = ui.label(
-                                    "Process timestamp: -"
-                                ).classes("process-meta")
-                                process_source_label = ui.label("Source: -").classes(
-                                    "process-meta"
-                                )
-    
-                            with ui.column().classes("gap-2 flex-1"):
-                                control_state_label = ui.label(
-                                    "Controller state: -"
-                                ).classes("text-sm text-slate-300")
-                                control_message_label = ui.label("Message: -").classes(
-                                    "text-sm text-slate-300"
-                                )
-                                process_error_label = ui.label("").classes("error-text")
-                                control_error_label = ui.label("").classes("error-text")
-    
-                        confirmation_input = ui.input(
-                            label="Sicherheitsfreigabe",
-                            placeholder="Zum Start exakt: confirmed",
-                            password=False,
-                        ).classes("control-input w-full mt-4")
-    
-                        ui.label(
-                            "Zum Prozessstart exakt „confirmed“ eingeben. "
-                            "Später wird dieses Feld durch einen Sicherheitsdialog mit Checkliste ersetzt."
-                        ).classes("confirmation-help")
-    
-                        with ui.row().classes("w-full gap-3 mt-3"):
-                            start_button = ui.button("Start Fill & Measure").classes(
-                                "flex-1 font-bold"
-                            ).props("color=positive")
-                            reset_button = ui.button("Reset / Acknowledge").classes(
-                                "flex-1 font-bold"
-                            ).props("color=primary")
-                            stop_button = ui.button("Emergency Stop").classes(
-                                "flex-1 font-bold"
-                            ).props("color=negative")
-    
-                        ui.label(
-                            "GPIOs werden erst nach gültiger Bestätigung und hardware_execution_enabled=true initialisiert."
-                        ).classes("warn-text mt-2")
-    
-                    with ui.card().classes("panel recipe-panel"):
-                        ui.label("Rezept / Sollwerte").classes("panel-title")
-                        ui.label("Aktuelle Werte aus process_settings.json").classes(
-                            "panel-subtitle"
-                        )
-    
-                        hardware_enabled_label = ui.label(
-                            "hardware_execution_enabled: -"
-                        ).classes("warn-text")
-                        fill_settings_label = ui.label("Settings: -").classes(
-                            "text-sm text-slate-300"
-                        )
-                        required_text_label = ui.label(
-                            "required_confirmation_text: -"
-                        ).classes("text-sm text-slate-400")
-    
-                with ui.column().classes("gap-5 w-full area-side"):
-                    with ui.card().classes("panel"):
-                        ui.label("Prozesslog").classes("panel-title")
-                        ui.label("Dashboard-Ereignisse und Live-Status").classes(
-                            "panel-subtitle"
-                        )
-                        log_box = ui.label("").classes("log-box")
-    
-                    with ui.card().classes("panel sensor-panel"):
-                        ui.label("Sensorwerte").classes("panel-title")
-                        ui.label("pH, EC, Temperatur und gelöster Sauerstoff").classes(
-                            "panel-subtitle"
-                        )
-    
-                        with ui.row().classes("w-full gap-3"):
-                            ph_metric = create_metric_box("pH")
-                            ec_metric = create_metric_box("EC", "mS/cm")
-    
-                        with ui.row().classes("w-full gap-3"):
-                            temperature_metric = create_metric_box("Temperatur", "°C")
-                            do_metric = create_metric_box("DO", "mg/L")
-    
-                with ui.card().classes("panel tank-panel w-full"):
-                    ui.label("Tanks / Füllstände").classes("panel-title")
-                    ui.label("Livewerte aus Sensor-MQTT-Bridge als Gauges").classes(
+            with ui.column().classes("gap-5 w-full area-main"):
+                with ui.card().classes("panel"):
+                    ui.label("Process State Machine").classes("panel-title")
+                    ui.label("Live-Prozessstatus aus MQTT und lokalem Controller").classes(
                         "panel-subtitle"
                     )
-    
-                    with ui.row().classes("w-full gap-5"):
-                        ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
-                        mixer_tank_gauge = create_tank_gauge("Mixing Tank", max_percent=100)
-    
+
+                    with ui.row().classes("w-full gap-4 items-stretch"):
+                        with ui.column().classes("process-display"):
+                            ui.label("Aktueller Prozesszustand").classes(
+                                "process-label"
+                            )
+                            process_state_label = ui.label("-").classes(
+                                "process-state"
+                            )
+                            process_timestamp_label = ui.label(
+                                "Process timestamp: -"
+                            ).classes("process-meta")
+                            process_source_label = ui.label("Source: -").classes(
+                                "process-meta"
+                            )
+
+                        with ui.column().classes("gap-2 flex-1"):
+                            control_state_label = ui.label(
+                                "Controller state: -"
+                            ).classes("text-sm text-slate-300")
+                            control_message_label = ui.label("Message: -").classes(
+                                "text-sm text-slate-300"
+                            )
+                            process_error_label = ui.label("").classes("error-text")
+                            control_error_label = ui.label("").classes("error-text")
+
+                    confirmation_input = ui.input(
+                        label="Sicherheitsfreigabe",
+                        placeholder="Zum Start exakt: confirmed",
+                        password=False,
+                    ).classes("control-input w-full mt-4")
+
+                    ui.label(
+                        "Zum Prozessstart exakt „confirmed“ eingeben. "
+                        "Später wird dieses Feld durch einen Sicherheitsdialog mit Checkliste ersetzt."
+                    ).classes("confirmation-help")
+
+                    with ui.row().classes("w-full gap-3 mt-3"):
+                        start_button = ui.button("Start Fill & Measure").classes(
+                            "flex-1 font-bold"
+                        ).props("color=positive")
+                        reset_button = ui.button("Reset / Acknowledge").classes(
+                            "flex-1 font-bold"
+                        ).props("color=primary")
+                        stop_button = ui.button("Emergency Stop").classes(
+                            "flex-1 font-bold"
+                        ).props("color=negative")
+
+                    ui.label(
+                        "GPIOs werden erst nach gültiger Bestätigung und hardware_execution_enabled=true initialisiert."
+                    ).classes("warn-text mt-2")
+
+                with ui.card().classes("panel recipe-panel"):
+                    ui.label("Rezept / Sollwerte").classes("panel-title")
+                    ui.label("Aktuelle Werte aus process_settings.json").classes(
+                        "panel-subtitle"
+                    )
+
+                    hardware_enabled_label = ui.label(
+                        "hardware_execution_enabled: -"
+                    ).classes("warn-text")
+                    fill_settings_label = ui.label("Settings: -").classes(
+                        "text-sm text-slate-300"
+                    )
+                    required_text_label = ui.label(
+                        "required_confirmation_text: -"
+                    ).classes("text-sm text-slate-400")
+
+            with ui.column().classes("gap-5 w-full area-side"):
+                with ui.card().classes("panel"):
+                    ui.label("Prozesslog").classes("panel-title")
+                    ui.label("Dashboard-Ereignisse und Live-Status").classes(
+                        "panel-subtitle"
+                    )
+                    log_box = ui.label("").classes("log-box")
+
+                with ui.card().classes("panel sensor-panel"):
+                    ui.label("Sensorwerte").classes("panel-title")
+                    ui.label("pH, EC, Temperatur und gelöster Sauerstoff").classes(
+                        "panel-subtitle"
+                    )
+
+                    with ui.row().classes("w-full gap-3"):
+                        ph_metric = create_metric_box("pH")
+                        ec_metric = create_metric_box("EC", "mS/cm")
+
+                    with ui.row().classes("w-full gap-3"):
+                        temperature_metric = create_metric_box("Temperatur", "°C")
+                        do_metric = create_metric_box("DO", "mg/L")
+
+            with ui.card().classes("panel tank-panel w-full"):
+                ui.label("Tanks / Füllstände").classes("panel-title")
+                ui.label("Livewerte aus Sensor-MQTT-Bridge als Gauges").classes(
+                    "panel-subtitle"
+                )
+
+                with ui.row().classes("w-full gap-5"):
+                    ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
+                    mixer_tank_gauge = create_tank_gauge("Mixing Tank", max_percent=100)
+
     event_log: list[str] = ["[OK] NiceGUI Dashboard geladen."]
 
     def add_log(message: str) -> None:

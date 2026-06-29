@@ -54,33 +54,19 @@ body {
             }
 
             .layout-grid {
-    display: grid;
-    grid-template-columns: 330px minmax(0, 1fr);
-    gap: 20px;
-    align-items: start;
-}
+                display: grid;
+                grid-template-columns: 330px minmax(520px, 1fr) 430px;
+                gap: 20px;
+                align-items: start;
+            }
 
-.area-left {
-    width: 100%;
-}
-
-.content-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
-    grid-template-areas:
-        "main side"
-        "tanks tanks";
-    gap: 20px;
-    align-items: start;
-}
-
-.area-main {
-    grid-area: main;
-}
-
-.area-side {
-    grid-area: side;
-}
+            .bottom-grid {
+                display: grid;
+                grid-template-columns: 330px minmax(520px, 1fr) 430px;
+                gap: 20px;
+                align-items: start;
+                margin-top: -230px;
+            }
 
             .panel {
                 background: linear-gradient(180deg, rgba(30, 41, 59, 0.86), rgba(15, 23, 42, 0.92));
@@ -88,8 +74,6 @@ body {
                 box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
                 border-radius: 18px;
                 padding: 18px;
-                width: 100%;
-                box-sizing: border-box;
             }
 
             .panel-title {
@@ -120,12 +104,12 @@ body {
             }
 
             .tank-panel {
-    grid-area: tanks;
-    border-color: rgba(248, 113, 113, 0.28);
-    background:
-        radial-gradient(circle at top left, rgba(248, 113, 113, 0.11), transparent 22rem),
-        linear-gradient(180deg, rgba(30, 41, 59, 0.90), rgba(15, 23, 42, 0.94));
-}
+                grid-column: 2 / 4;
+                border-color: rgba(248, 113, 113, 0.28);
+                background:
+                    radial-gradient(circle at top left, rgba(248, 113, 113, 0.11), transparent 22rem),
+                    linear-gradient(180deg, rgba(30, 41, 59, 0.90), rgba(15, 23, 42, 0.94));
+            }
 
             .status-row {
                 width: 100%;
@@ -338,91 +322,13 @@ body {
                 font-weight: 700;
             }
 
-            @media (max-width: 900px) {
-    .layout-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .content-grid {
-        grid-template-columns: 1fr;
-        grid-template-areas:
-            "main"
-            "side"
-            "tanks";
-    }
-}
-}
+            @media (max-width: 1300px) {
+                .layout-grid,
+                .bottom-grid {
+                    grid-template-columns: 1fr;
+                }
 
                 .tank-panel {
-    grid-area: tanks;
-    border-color: rgba(248, 113, 113, 0.28);
-    background:
-        radial-gradient(circle at top left, rgba(248, 113, 113, 0.11), transparent 22rem),
-        linear-gradient(180deg, rgba(30, 41, 59, 0.90), rgba(15, 23, 42, 0.94));
-}
+                    grid-column: auto;
+                }
             }
-
-
-.confirmation-help {
-    color: #94a3b8;
-    font-size: 12px;
-    margin-top: 6px;
-    margin-bottom: 2px;
-}
-
-/* =========================================================
-   LAYOUT OVERRIDE: stable nested dashboard grid
-   ========================================================= */
-
-.layout-grid {
-    display: grid !important;
-    grid-template-columns: 330px minmax(0, 1fr) !important;
-    gap: 20px !important;
-    align-items: start !important;
-    width: 100% !important;
-}
-
-.content-grid {
-    display: grid !important;
-    grid-template-columns: minmax(0, 1fr) 360px !important;
-    grid-template-areas:
-        "main side"
-        "tanks tanks" !important;
-    gap: 20px !important;
-    align-items: start !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-.content-grid > .area-main {
-    grid-area: main !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-.content-grid > .area-side {
-    grid-area: side !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-.content-grid > .tank-panel {
-    grid-area: tanks !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-@media (max-width: 900px) {
-    .layout-grid {
-        grid-template-columns: 1fr !important;
-    }
-
-    .content-grid {
-        grid-template-columns: 1fr !important;
-        grid-template-areas:
-            "main"
-            "side"
-            "tanks" !important;
-    }
-}
-

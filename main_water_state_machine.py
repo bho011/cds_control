@@ -38,7 +38,7 @@ def main():
 
     print("Verwendete Ausgänge:")
     print(f"mixer_refill_pump   -> GPIO {OUTPUTS['mixer_refill_pump']}")
-    print(f"test_supply_valve_6 -> GPIO {OUTPUTS['test_supply_valve_6']}")
+    print(f"test_supply_valve_1 -> GPIO {OUTPUTS['valve_1']}")
     print(f"drain_valve_0       -> GPIO {OUTPUTS['valve_0_drain']}")
     print()
 
@@ -58,7 +58,7 @@ def main():
 
     supply_valve = actuators.add(
         name="test_supply_valve_6",
-        gpio_pin=OUTPUTS["test_supply_valve_6"],
+        gpio_pin=OUTPUTS["valve_1"],
     )
 
     drain_valve = actuators.add(
@@ -70,7 +70,7 @@ def main():
         mixer_refill_pump=mixer_refill_pump,
         supply_valve=supply_valve,
         drain_valve=drain_valve,
-        run_seconds=5.0,
+        run_seconds=10.0,
         valve_settle_seconds=1.0
     )
 

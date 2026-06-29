@@ -55,23 +55,16 @@ body {
 
             .layout-grid {
     display: grid;
-    grid-template-columns: 330px minmax(0, 1fr);
+    grid-template-columns: 330px minmax(0, 1fr) 340px;
+    grid-template-areas:
+        "left main side"
+        "left tanks tanks";
     gap: 20px;
     align-items: start;
 }
 
 .area-left {
-    width: 100%;
-}
-
-.content-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
-    grid-template-areas:
-        "main side"
-        "tanks tanks";
-    gap: 20px;
-    align-items: start;
+    grid-area: left;
 }
 
 .area-main {
@@ -338,19 +331,15 @@ body {
                 font-weight: 700;
             }
 
-            @media (max-width: 900px) {
+            @media (max-width: 1300px) {
     .layout-grid {
         grid-template-columns: 1fr;
-    }
-
-    .content-grid {
-        grid-template-columns: 1fr;
         grid-template-areas:
+            "left"
             "main"
             "side"
             "tanks";
     }
-}
 }
 
                 .tank-panel {
@@ -369,60 +358,3 @@ body {
     margin-top: 6px;
     margin-bottom: 2px;
 }
-
-/* =========================================================
-   LAYOUT OVERRIDE: stable nested dashboard grid
-   ========================================================= */
-
-.layout-grid {
-    display: grid !important;
-    grid-template-columns: 330px minmax(0, 1fr) !important;
-    gap: 20px !important;
-    align-items: start !important;
-    width: 100% !important;
-}
-
-.content-grid {
-    display: grid !important;
-    grid-template-columns: minmax(0, 1fr) 360px !important;
-    grid-template-areas:
-        "main side"
-        "tanks tanks" !important;
-    gap: 20px !important;
-    align-items: start !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-.content-grid > .area-main {
-    grid-area: main !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-.content-grid > .area-side {
-    grid-area: side !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-.content-grid > .tank-panel {
-    grid-area: tanks !important;
-    width: 100% !important;
-    min-width: 0 !important;
-}
-
-@media (max-width: 900px) {
-    .layout-grid {
-        grid-template-columns: 1fr !important;
-    }
-
-    .content-grid {
-        grid-template-columns: 1fr !important;
-        grid-template-areas:
-            "main"
-            "side"
-            "tanks" !important;
-    }
-}
-

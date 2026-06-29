@@ -131,7 +131,7 @@ def main():
 
     supply_valve_6 = actuators.add(
         name="supply_valve_6",
-        gpio_pin=OUTPUTS["test_supply_valve_6"],
+        gpio_pin=OUTPUTS["valve_1"],
     )
 
     
