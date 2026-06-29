@@ -20,14 +20,20 @@ class ProcessRunLogger:
         self.fieldnames = [
             "timestamp",
             "process_name",
+            "phase",
             "state",
+            "stop_reason",
             "error",
+
+            "elapsed_seconds",
+            "target_delta_liters",
 
             "mixer_level_percent",
             "mixer_liters_payload",
             "mixer_liters_filtered",
             "start_mixer_liters",
             "added_liters",
+            "drained_liters",
 
             "ro_level_percent",
             "ro_liters",
@@ -38,9 +44,9 @@ class ProcessRunLogger:
             "dissolved_oxygen",
 
             "mixer_refill_pump",
+            "transfer_pump",
             "supply_valve_6",
             "drain_valve_0",
-            "transfer_pump",
             "mixing_circulation_pump",
             "sensor_circulation_pump",
         ]
@@ -61,8 +67,10 @@ class ProcessRunLogger:
         mixer_liters_filtered: float | None = None,
         start_mixer_liters: float | None = None,
         added_liters: float | None = None,
+        extra: dict[str, Any] | None = None,
     ):
         snapshot = snapshot or {}
+        extra = extra or {}
 
         mixer = snapshot.get("mixer") or {}
         ro = snapshot.get("ro") or {}
@@ -71,14 +79,20 @@ class ProcessRunLogger:
         row = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "process_name": self.process_name,
+            "phase": extra.get("phase"),
             "state": state,
+            "stop_reason": extra.get("stop_reason"),
             "error": error,
+
+            "elapsed_seconds": extra.get("elapsed_seconds"),
+            "target_delta_liters": extra.get("target_delta_liters"),
 
             "mixer_level_percent": mixer.get("level_percent"),
             "mixer_liters_payload": mixer.get("volume_liters_calc"),
             "mixer_liters_filtered": mixer_liters_filtered,
             "start_mixer_liters": start_mixer_liters,
             "added_liters": added_liters,
+            "drained_liters": extra.get("drained_liters"),
 
             "ro_level_percent": ro.get("level_percent"),
             "ro_liters": ro.get("volume_liters_calc"),
@@ -89,9 +103,9 @@ class ProcessRunLogger:
             "dissolved_oxygen": water_values.get("dissolved_oxygen"),
 
             "mixer_refill_pump": actuator_status.get("mixer_refill_pump"),
+            "transfer_pump": actuator_status.get("transfer_pump"),
             "supply_valve_6": actuator_status.get("supply_valve_6"),
             "drain_valve_0": actuator_status.get("drain_valve_0"),
-            "transfer_pump": actuator_status.get("transfer_pump"),
             "mixing_circulation_pump": actuator_status.get("mixing_circulation_pump"),
             "sensor_circulation_pump": actuator_status.get("sensor_circulation_pump"),
         }

@@ -1,0 +1,31 @@
+{
+  "target_fill_delta_liters": 10.0,
+  "max_mixer_liters": 200.0,
+  "min_ro_liters_required": 20.0,
+
+  "max_fill_seconds": 90.0,
+  "min_fill_progress_liters": 1.5,
+  "no_fill_progress_timeout_seconds": 15.0,
+  "max_negative_level_drift_liters": 2.0,
+
+  "drain_stop_above_start_liters": 1.0,
+  "max_drain_seconds": 120.0,
+  "min_drain_progress_liters": 1.5,
+  "no_drain_progress_timeout_seconds": 15.0,
+
+  "flush_seconds": 350.0,
+
+  "mixer_sensor_liter_factor": 0.1,
+  "mixer_sensor_liter_offset": 0.0,
+  "mixer_sensor_calibration_status": "temporary_factor_0_1",
+
+  "level_filter_samples": 5,
+  "target_reached_confirm_samples": 3,
+  "drain_reached_confirm_samples": 3,
+  "valve_settle_seconds": 1.0,
+
+  "hardware_execution_enabled": true,
+  "required_confirmation_text": "confirmed",
+  "required_drain_confirmation_text": "drain_confirmed",
+  "required_flush_confirmation_text": "flush_confirmed"
+}

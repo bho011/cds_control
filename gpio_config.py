@@ -5,7 +5,7 @@ OUTPUTS = {
     "mixer_refill_pump": 20, #phys. Contactor 1 / GPIO20 / PIN 38,
     "contactor_2": 22, # phys. Contactor 2 / GPIO22 / PIN 15,
     "contactor_3": 23, # phys. Contactor 3 / GPIO23 / PIN 16
-    "contactor_4": 26,
+    "transfer_pump": 26, # phys. Transfer Pump / GPIO26 / PIN 37
     "contactor_5": 13,
 
     "valve_0_drain": 21, # Darüber fließt das Wasser ab / phys. Valve 0 / GPIO21 / PIN 40
@@ -27,4 +27,4 @@ OUTPUTS = {
 ACTIVE_LOW = True
 
 # Wie lange soll ein Ausgang geschaltet werden, wenn die Funktion "pulse" verwendet wird?
-PULSE_SECONDS = 5.0
+PULSE_SECONDS = 500.0
