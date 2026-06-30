@@ -95,17 +95,29 @@ def apply_mixer_sensor_calibration(raw_liters: float, settings: dict) -> float:
 
 def mixer_liters_from_snapshot(snapshot: dict[str, Any], settings: dict) -> float | None:
     mixer = snapshot.get("mixer") or {}
-    level_percent = mixer.get("level_percent")
 
+    # Wichtig:
+    # volume_liters_calc kommt jetzt bereits kalibriert aus mqtt_sensor_bridge.py.
+    calibrated_value = mixer.get("volume_liters_calc")
+    if calibrated_value is not None:
+        return float(calibrated_value)
+
+    # Fallback: Falls irgendwann nur der Rohwert vorhanden ist.
+    raw_liters = mixer.get("volume_liters_raw")
+    if raw_liters is not None:
+        factor = float(settings.get("mixer_sensor_liter_factor", 0.1))
+        offset = float(settings.get("mixer_sensor_liter_offset", 0.0))
+        return max(0.0, (float(raw_liters) * factor) + offset)
+
+    # Letzter Fallback: alter Weg über Prozent.
+    # Nur verwenden, wenn die Bridge keinen Literwert liefert.
+    level_percent = mixer.get("level_percent")
     if level_percent is not None:
         max_liters = float(settings["max_mixer_liters"])
-        raw_liters = (float(level_percent) / 100.0) * max_liters
-        return apply_mixer_sensor_calibration(raw_liters, settings)
-
-    fallback = mixer.get("volume_liters_calc")
-
-    if fallback is not None:
-        return apply_mixer_sensor_calibration(float(fallback), settings)
+        raw_from_percent = (float(level_percent) / 100.0) * max_liters
+        factor = float(settings.get("mixer_sensor_liter_factor", 0.1))
+        offset = float(settings.get("mixer_sensor_liter_offset", 0.0))
+        return max(0.0, (raw_from_percent * factor) + offset)
 
     return None
 
