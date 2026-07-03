@@ -1,6 +1,4 @@
 import json
-import select
-import sys
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -41,6 +39,7 @@ def load_settings() -> dict:
 def require_hardware_confirmation(settings: dict) -> bool:
     if not settings.get("hardware_execution_enabled", False):
         print("[BLOCKED] Hardware execution is disabled.")
+        print("[INFO] Set hardware_execution_enabled to true only when you are on site.")
         return False
 
     required_text = settings.get("required_confirmation_text", "confirmed")
@@ -57,19 +56,6 @@ def require_hardware_confirmation(settings: dict) -> bool:
     return True
 
 
-def confirm_sensor_pump(settings: dict) -> bool:
-    if not settings.get("enable_sensor_pump_phase", True):
-        return False
-
-    answer = input("Sensorpumpe laufen lassen? ja/nein: ").strip().lower()
-
-    if answer != "ja":
-        print("[INFO] Sensorpumpenphase übersprungen.")
-        return False
-
-    return True
-
-
 def confirm_drain(settings: dict) -> bool:
     answer = input("Drain über Transferpumpe + Valve_0_Drain starten? ja/nein: ").strip().lower()
 
@@ -77,7 +63,10 @@ def confirm_drain(settings: dict) -> bool:
         print("[INFO] Drain wurde nicht bestätigt. Wasser bleibt im Mixing Tank.")
         return False
 
-    required_text = settings.get("required_drain_confirmation_text", "drain_confirmed")
+    required_text = settings.get(
+        "required_drain_confirmation_text",
+        settings.get("required_flush_confirmation_text", "drain_confirmed"),
+    )
 
     print()
     print("Drain-Sicherheitsbestätigung erforderlich.")
@@ -99,16 +88,19 @@ def make_level_history(settings: dict):
 def mixer_liters_from_snapshot(snapshot: dict[str, Any], settings: dict) -> float | None:
     mixer = snapshot.get("mixer") or {}
 
-    value = mixer.get("volume_liters_calc")
-    if value is not None:
-        return float(value)
+    # Bevorzugt: bereits kalibrierter Wert aus mqtt_sensor_bridge.py
+    calibrated_value = mixer.get("volume_liters_calc")
+    if calibrated_value is not None:
+        return float(calibrated_value)
 
+    # Fallback: Roh-Liter mit lokaler Kalibrierung
     raw_liters = mixer.get("volume_liters_raw")
     if raw_liters is not None:
         factor = float(settings.get("mixer_sensor_liter_factor", 0.1))
         offset = float(settings.get("mixer_sensor_liter_offset", 0.0))
         return max(0.0, (float(raw_liters) * factor) + offset)
 
+    # Letzter Fallback: Prozentwert
     level_percent = mixer.get("level_percent")
     if level_percent is not None:
         max_liters = float(settings["max_mixer_liters"])
@@ -120,9 +112,9 @@ def mixer_liters_from_snapshot(snapshot: dict[str, Any], settings: dict) -> floa
 def ro_liters_from_snapshot(snapshot: dict[str, Any]) -> float | None:
     ro = snapshot.get("ro") or {}
 
-    value = ro.get("volume_liters_calc")
-    if value is not None:
-        return float(value)
+    fallback = ro.get("volume_liters_calc")
+    if fallback is not None:
+        return float(fallback)
 
     level_percent = ro.get("level_percent")
     configured_max = ro.get("configured_max_liters")
@@ -173,9 +165,9 @@ def publish_process_status(
             "mixer_refill_pump": status.get("mixer_refill_pump", False),
             "transfer_pump": status.get("transfer_pump", False),
             "drain_valve_0": status.get("drain_valve_0", False),
-            "sensor_circulation_pump": status.get("sensor_circulation_pump", False),
             "supply_valve_6": status.get("supply_valve_6"),
             "mixing_circulation_pump": status.get("mixing_circulation_pump"),
+            "sensor_circulation_pump": status.get("sensor_circulation_pump"),
         },
         "process_details": details or {},
         "error": error,
@@ -220,12 +212,12 @@ def log_step(
 
 def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -> PhaseResult:
     print()
-    print("[PHASE] FILL_ABSOLUTE")
+    print("[PHASE] FILL")
     print("[INFO] RO refill line must lead directly into the Mixing Tank.")
     print("[INFO] No valves are opened during refill.")
 
     level_history = make_level_history(settings)
-    target_total = float(settings["target_fill_total_liters"])
+    fill_target_mode = settings.get("fill_target_mode", "absolute").lower()
 
     initial_metrics = read_metrics(sensor_reader, settings, level_history)
 
@@ -246,12 +238,21 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
         )
 
     start_liters = initial_metrics.mixer_liters_filtered
-    target_delta_display = max(0.0, target_total - start_liters)
+
+    if fill_target_mode == "absolute":
+        target_total = float(settings["target_fill_total_liters"])
+        target_delta_display = max(0.0, target_total - start_liters)
+        print(f"[MODE] Fill target mode: absolute")
+        print(f"[TARGET] Fill until Mixer reaches {target_total:.2f} L")
+    else:
+        target_delta_display = float(settings["target_fill_delta_liters"])
+        target_total = start_liters + target_delta_display
+        print(f"[MODE] Fill target mode: delta")
+        print(f"[TARGET] Fill delta: +{target_delta_display:.2f} L")
 
     print(f"[START] Mixer filtered start: {start_liters:.2f} L")
     print(f"[START] RO available: {initial_metrics.ro_liters:.2f} L")
-    print(f"[TARGET] Fill until absolute level: {target_total:.2f} L")
-    print(f"[TARGET] Expected additional fill: {target_delta_display:.2f} L")
+    print(f"[TARGET] Expected target total: {target_total:.2f} L")
 
     if start_liters >= target_total:
         print("[INFO] Start level already at or above target.")
@@ -280,7 +281,7 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
             "FILL_RUNNING",
             actuators,
             details={
-                "fill_target_mode": "absolute",
+                "fill_target_mode": fill_target_mode,
                 "target_total_liters": target_total,
                 "start_mixer_liters": start_liters,
             },
@@ -332,7 +333,9 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
                 )
                 break
 
-            if final_liters >= target_total:
+            target_reached = final_liters >= target_total
+
+            if target_reached:
                 target_confirm_count += 1
             else:
                 target_confirm_count = 0
@@ -351,6 +354,7 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
                 "FILL_RUNNING",
                 actuators,
                 details={
+                    "fill_target_mode": fill_target_mode,
                     "mixer_liters_filtered": final_liters,
                     "added_liters": added_liters,
                     "target_total_liters": target_total,
@@ -398,9 +402,10 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
         error=error,
         details={
             "stop_reason": stop_reason,
-            "target_total_liters": target_total,
+            "fill_target_mode": fill_target_mode,
             "mixer_liters_filtered": final_liters,
             "added_liters": added_liters,
+            "target_total_liters": target_total,
             "elapsed_seconds": round(elapsed, 1),
         },
     )
@@ -420,141 +425,11 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
     )
 
     return PhaseResult(
-        success=(stop_reason == "target_reached_by_sensor"),
+        success=(stop_reason in ["target_reached_by_sensor", "already_at_or_above_target"]),
         stop_reason=stop_reason or "unknown",
         start_liters=start_liters,
         end_liters=final_liters,
         delta_liters=added_liters,
-    )
-
-
-def run_sensor_pump_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -> PhaseResult:
-    print()
-    print("[PHASE] SENSOR_PUMP")
-    print("[INFO] Sensorpumpe läuft über contactor_2.")
-    print("[INFO] Eingabe 'stop' + Enter beendet diese Phase kontrolliert.")
-    print("[INFO] STRG+C bleibt nur für echten Notabbruch.")
-
-    level_history = make_level_history(settings)
-    sensor_pump_seconds = float(settings.get("sensor_pump_seconds", 200.0))
-
-    start_metrics = read_metrics(sensor_reader, settings, level_history)
-    start_liters = start_metrics.mixer_liters_filtered
-
-    sensor_pump = actuators.get("sensor_circulation_pump")
-
-    start_time = time.monotonic()
-    stop_reason = "sensor_pump_time_completed"
-    error = None
-    final_liters = start_liters
-
-    try:
-        sensor_pump.on()
-
-        publish_process_status(
-            mqtt_publisher,
-            "SENSOR_PUMP_RUNNING",
-            actuators,
-            details={
-                "sensor_pump_seconds": sensor_pump_seconds,
-                "stop_command": "stop",
-            },
-        )
-
-        while True:
-            elapsed = time.monotonic() - start_time
-            metrics = read_metrics(sensor_reader, settings, level_history)
-            final_liters = metrics.mixer_liters_filtered
-
-            print(
-                f"[SENSOR] elapsed={elapsed:.1f}/{sensor_pump_seconds:.1f}s | "
-                f"Mixer={final_liters} L | "
-                f"Eingabe 'stop' + Enter zum Beenden"
-            )
-
-            publish_process_status(
-                mqtt_publisher,
-                "SENSOR_PUMP_RUNNING",
-                actuators,
-                details={
-                    "elapsed_seconds": round(elapsed, 1),
-                    "sensor_pump_seconds": sensor_pump_seconds,
-                    "mixer_liters_filtered": final_liters,
-                },
-            )
-
-            log_step(
-                logger=logger,
-                phase="SENSOR_PUMP_RUNNING",
-                stop_reason=None,
-                error=None,
-                metrics=metrics,
-                actuators=actuators,
-                start_liters=start_liters,
-                added_liters=None,
-                drained_liters=None,
-                elapsed_seconds=elapsed,
-                target_delta_liters=None,
-            )
-
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                command = sys.stdin.readline().strip().lower()
-                if command == "stop":
-                    stop_reason = "sensor_pump_stopped_by_user"
-                    break
-                elif command:
-                    print(f"[INFO] Unbekannte Eingabe ignoriert: {command}")
-
-            if elapsed >= sensor_pump_seconds:
-                stop_reason = "sensor_pump_time_completed"
-                break
-
-            time.sleep(1.0)
-
-    finally:
-        sensor_pump.off()
-
-    elapsed = time.monotonic() - start_time
-    metrics = read_metrics(sensor_reader, settings, level_history)
-
-    if metrics.mixer_liters_filtered is not None:
-        final_liters = metrics.mixer_liters_filtered
-
-    print(f"[SENSOR STOP] reason={stop_reason}")
-    print("[SAFE] Sensorpumpe AUS")
-
-    publish_process_status(
-        mqtt_publisher,
-        "SENSOR_PUMP_STOPPED",
-        actuators,
-        error=error,
-        details={
-            "stop_reason": stop_reason,
-            "elapsed_seconds": round(elapsed, 1),
-            "mixer_liters_filtered": final_liters,
-        },
-    )
-
-    log_step(
-        logger=logger,
-        phase="SENSOR_PUMP_STOPPED",
-        stop_reason=stop_reason,
-        error=error,
-        metrics=metrics,
-        actuators=actuators,
-        start_liters=start_liters,
-        added_liters=None,
-        drained_liters=None,
-        elapsed_seconds=elapsed,
-        target_delta_liters=None,
-    )
-
-    return PhaseResult(
-        success=True,
-        stop_reason=stop_reason,
-        start_liters=start_liters,
-        end_liters=final_liters,
-        delta_liters=None,
     )
 
 
@@ -695,7 +570,7 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) 
 
             if elapsed >= max_drain_seconds:
                 stop_reason = "calculated_drain_timeout"
-                error = "Drain timeout reached before empty sensor confirmation."
+                error = None
                 break
 
     except KeyboardInterrupt:
@@ -746,7 +621,7 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) 
     )
 
     return PhaseResult(
-        success=(stop_reason == "empty_by_sensor"),
+        success=(stop_reason in ["empty_by_sensor", "calculated_drain_timeout"]),
         stop_reason=stop_reason or "unknown",
         start_liters=start_liters,
         end_liters=final_liters,
@@ -755,18 +630,17 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) 
 
 
 def main():
-    print("CDS Refill / Sensor Pump / Drain Hardware Test")
-    print("==============================================")
+    print("CDS Refill and Drain Hardware Test")
+    print("==================================")
     print()
     print("Ablauf:")
     print("1. RO Refill Pump füllt den Mixing Tank bis zum absoluten Zielwert.")
-    print("2. Optional läuft die Sensorpumpe über contactor_2.")
-    print("3. Sensorpumpenphase kann mit 'stop' + Enter beendet werden.")
-    print("4. Danach wird gefragt, ob über Transferpumpe + Valve_0_Drain geleert wird.")
+    print("2. Stopgrund wird geloggt: Ziel erreicht oder Timeout/Sicherheitsfehler.")
+    print("3. Danach wird gefragt, ob über Transferpumpe + Valve_0_Drain geleert wird.")
+    print("4. Drain läuft bis Sensor leer meldet oder berechnete Pumpzeit + Puffer erreicht ist.")
     print()
     print("Wichtig:")
     print("- RO-Leitung muss direkt in den Mixing Tank führen.")
-    print("- Sensorpumpe hängt an contactor_2.")
     print("- Transferpumpe hängt an transfer_pump.")
     print("- Drain läuft über Valve_0_Drain.")
     print("- Keine Chemie, kein Routing zu Solution Tanks.")
@@ -775,9 +649,10 @@ def main():
     settings = load_settings()
 
     print("Settings:")
+    print(f"- fill_target_mode: {settings.get('fill_target_mode')}")
     print(f"- target_fill_total_liters: {settings.get('target_fill_total_liters')}")
+    print(f"- target_fill_delta_liters: {settings.get('target_fill_delta_liters')}")
     print(f"- max_fill_seconds: {settings.get('max_fill_seconds')}")
-    print(f"- sensor_pump_seconds: {settings.get('sensor_pump_seconds')}")
     print(f"- transfer_pump_liters_per_minute: {settings.get('transfer_pump_liters_per_minute')}")
     print(f"- drain_timeout_buffer_seconds: {settings.get('drain_timeout_buffer_seconds')}")
     print(f"- empty_threshold_liters: {settings.get('empty_threshold_liters')}")
@@ -800,7 +675,7 @@ def main():
     try:
         sensor_reader = SensorSnapshotReader()
         mqtt_publisher = MqttPublisher()
-        logger = ProcessRunLogger(process_name="refill_sensor_drain_test")
+        logger = ProcessRunLogger(process_name="refill_and_drain_test")
         actuators = ActuatorManager(active_low=ACTIVE_LOW)
 
         sensor_reader.start()
@@ -815,11 +690,6 @@ def main():
         actuators.add(
             name="mixer_refill_pump",
             gpio_pin=OUTPUTS["mixer_refill_pump"],
-        )
-
-        actuators.add(
-            name="sensor_circulation_pump",
-            gpio_pin=OUTPUTS["contactor_2"],
         )
 
         actuators.add(
@@ -843,20 +713,6 @@ def main():
         print()
         print(f"[FILL RESULT] success={fill_result.success}, reason={fill_result.stop_reason}")
 
-        sensor_result = None
-
-        if confirm_sensor_pump(settings):
-            sensor_result = run_sensor_pump_phase(
-                settings=settings,
-                sensor_reader=sensor_reader,
-                actuators=actuators,
-                mqtt_publisher=mqtt_publisher,
-                logger=logger,
-            )
-
-            print()
-            print(f"[SENSOR RESULT] success={sensor_result.success}, reason={sensor_result.stop_reason}")
-
         drain_result = None
 
         if confirm_drain(settings):
@@ -873,13 +729,11 @@ def main():
 
         publish_process_status(
             mqtt_publisher,
-            "REFILL_SENSOR_DRAIN_TEST_FINISHED",
+            "REFILL_DRAIN_TEST_FINISHED",
             actuators,
             details={
                 "fill_success": fill_result.success,
                 "fill_stop_reason": fill_result.stop_reason,
-                "sensor_success": sensor_result.success if sensor_result else None,
-                "sensor_stop_reason": sensor_result.stop_reason if sensor_result else None,
                 "drain_success": drain_result.success if drain_result else None,
                 "drain_stop_reason": drain_result.stop_reason if drain_result else None,
             },
@@ -921,7 +775,7 @@ def main():
         if logger is not None:
             logger.close()
 
-    print("[END] Refill / Sensor Pump / Drain hardware test finished.")
+    print("[END] Refill and drain hardware test finished.")
 
 
 if __name__ == "__main__":

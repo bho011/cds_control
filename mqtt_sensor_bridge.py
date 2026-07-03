@@ -25,7 +25,7 @@ RO_VOLUME_LITERS = 1300.0
 # Temporäre Kalibrierung Mixing-Tank-Sensor.
 # Beobachtung: Sensor zeigt aktuell ungefähr Faktor 10 zu hoch.
 # Beispiel: Rohwert 2.0 L -> kalibrierter Wert 0.2 L
-MIXER_SENSOR_LITER_FACTOR = 0.1
+MIXER_SENSOR_LITER_FACTOR = 0.175
 MIXER_SENSOR_LITER_OFFSET = 0.0
 MIXER_SENSOR_CALIBRATION_STATUS = "temporary_factor_0_1"
 
