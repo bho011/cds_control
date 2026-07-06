@@ -2,6 +2,8 @@ import asyncio
 import csv
 import json
 import math
+import select
+import sys
 import statistics
 import time
 from dataclasses import dataclass, asdict
@@ -43,6 +45,10 @@ SETTINGS_PATH = Path("config/refill_and_drain_test_settings.json")
 # Wenn True, kann das Skript die Transferpumpe + Drainventil steuern.
 # Es wird trotzdem zusätzlich abgefragt und sicherheitsbestätigt.
 DRAIN_PUMP_CONTROL_ENABLED = True
+
+# Safety timeout for manual calibration drain.
+# Enter may stop earlier, but the pump must never run indefinitely.
+DEFAULT_CALIBRATION_DRAIN_MAX_SECONDS = 120.0
 
 # ============================================================
 # AKTUELLE MQTT-BRIDGE-KALIBRIERUNG NUR ZUR DOKUMENTATION
@@ -373,6 +379,18 @@ def run_transfer_drain_until_enter(actuators, settings: dict[str, Any]) -> None:
     drain_valve = actuators.get("drain_valve_0")
     transfer_pump = actuators.get("transfer_pump")
 
+    max_runtime_seconds = float(
+        settings.get(
+            "calibration_drain_max_seconds",
+            DEFAULT_CALIBRATION_DRAIN_MAX_SECONDS,
+        )
+    )
+
+    if max_runtime_seconds <= 0:
+        raise ValueError("calibration_drain_max_seconds must be greater than 0")
+
+    stop_reason = "unknown"
+
     try:
         print("[DRAIN CONTROL] Öffne Drainventil...")
         drain_valve.on()
@@ -382,12 +400,46 @@ def run_transfer_drain_until_enter(actuators, settings: dict[str, Any]) -> None:
         time.sleep(valve_settle_seconds)
 
         print("[DRAIN CONTROL] Starte Transferpumpe.")
+        print(f"[SAFETY] Max. Laufzeit: {max_runtime_seconds:.1f} s")
+        print("[INFO] Enter drücken zum Stoppen.")
         transfer_pump.on()
 
-        input("Transferpumpe läuft. Enter drücken zum Stoppen...")
+        start_time = time.monotonic()
+        last_print_second = -1
+
+        while True:
+            elapsed = time.monotonic() - start_time
+            remaining = max_runtime_seconds - elapsed
+
+            current_second = int(elapsed)
+            if current_second != last_print_second:
+                print(
+                    f"[DRAIN CONTROL] läuft seit {elapsed:.1f}s | "
+                    f"Auto-Stopp in {max(0.0, remaining):.1f}s",
+                    end="\r",
+                )
+                last_print_second = current_second
+
+            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+                sys.stdin.readline()
+                stop_reason = "stopped_by_enter"
+                break
+
+            if elapsed >= max_runtime_seconds:
+                stop_reason = "calibration_drain_timeout"
+                print()
+                print("[SAFETY] Max. Laufzeit erreicht. Drain wird automatisch gestoppt.")
+                break
+
+            time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        stop_reason = "keyboard_interrupt"
+        print("\n[ABORT] Drain durch Benutzer abgebrochen.")
 
     finally:
-        print("[DRAIN CONTROL] Stoppe Transferpumpe und schließe Drainventil.")
+        print()
+        print(f"[DRAIN CONTROL] Stoppe Transferpumpe und schließe Drainventil. reason={stop_reason}")
         try:
             transfer_pump.off()
         finally:

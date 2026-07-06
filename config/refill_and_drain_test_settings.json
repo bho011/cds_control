@@ -20,5 +20,6 @@
   "valve_settle_seconds": 1.0,
   "hardware_execution_enabled": false,
   "required_confirmation_text": "confirmed",
-  "required_drain_confirmation_text": "drain_confirmed"
+  "required_drain_confirmation_text": "drain_confirmed",
+  "calibration_drain_max_seconds": 120.0
 }
