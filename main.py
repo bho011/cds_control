@@ -2,10 +2,7 @@
 """
 Central entry point for the CDS control application.
 
-This file is intentionally small.
-It starts validated routines from one central place.
-
-Current commands:
+Commands:
     python main.py preflight
     python main.py water-cycle
     python main.py safe-drain
@@ -21,53 +18,51 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+VENV_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
+PYTHON_EXECUTABLE = VENV_PYTHON if VENV_PYTHON.exists() else Path(sys.executable)
 
 
 def run_python_script(script_name: str) -> int:
-    """
-    Run an existing Python script with the current Python interpreter.
-    This keeps the currently validated scripts usable while main.py becomes
-    the central entry point.
-    """
     script_path = PROJECT_ROOT / script_name
 
     if not script_path.exists():
         print(f"[ERROR] Script not found: {script_path}")
         return 1
 
-    print(f"[INFO] Running: {script_name}")
-    result = subprocess.run([sys.executable, str(script_path)], cwd=PROJECT_ROOT)
+    print(f"[INFO] Python:  {PYTHON_EXECUTABLE}")
+    print(f"[INFO] Running script: {script_name}")
+
+    result = subprocess.run(
+        [str(PYTHON_EXECUTABLE), str(script_path)],
+        cwd=PROJECT_ROOT,
+    )
+    return result.returncode
+
+
+def run_python_module(module_name: str) -> int:
+    print(f"[INFO] Python:  {PYTHON_EXECUTABLE}")
+    print(f"[INFO] Running module: {module_name}")
+
+    result = subprocess.run(
+        [str(PYTHON_EXECUTABLE), "-m", module_name],
+        cwd=PROJECT_ROOT,
+    )
     return result.returncode
 
 
 def cmd_preflight() -> int:
-    """
-    Run the CDS preflight check.
-    """
     return run_python_script("preflight_check.py")
 
 
 def cmd_water_cycle() -> int:
-    """
-    Run the currently validated refill -> sensorbox -> drain test process.
-
-    This is still based on main_refill_and_drain_test.py.
-    Later, this logic should be moved into proper process modules.
-    """
-    return run_python_script("main_refill_and_drain_test.py")
+    return run_python_module("process.water_cycle")
 
 
 def cmd_safe_drain() -> int:
-    """
-    Run the manual safe drain tool.
-    """
     return run_python_script("main_safe_drain.py")
 
 
 def cmd_sensor_bridge_check() -> int:
-    """
-    Show current sensor bridge service status.
-    """
     print("[INFO] Checking cds-sensor-bridge.service")
     result = subprocess.run(
         ["systemctl", "status", "cds-sensor-bridge.service", "--no-pager"],
