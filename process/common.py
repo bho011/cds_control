@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-SETTINGS_PATH = Path("config/refill_and_drain_test_settings.json")
+SETTINGS_PATH = Path("config/water_cycle_settings.json")
 
 
 @dataclass

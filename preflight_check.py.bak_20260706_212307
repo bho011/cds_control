@@ -24,12 +24,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 CRITICAL_FILES = [
     "mqtt_sensor_bridge.py",
-    "config/water_cycle_settings.json",
-    "process/common.py",
-    "process/refill.py",
-    "process/sensor_circulation.py",
-    "process/drain.py",
-    "process/water_cycle.py",
     "gpio_config.py",
     "services/mqtt_publisher.py",
     "hardware/digital_output.py",
