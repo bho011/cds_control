@@ -107,6 +107,23 @@ def main():
         print()
         print(f"[FILL RESULT] success={fill_result.success}, reason={fill_result.stop_reason}")
 
+        if not fill_result.success:
+            print()
+            print("[ABORT] Water-cycle wird nach fehlgeschlagener Fill-Phase beendet.")
+
+            publish_process_status(
+                mqtt_publisher,
+                "WATER_CYCLE_ABORTED",
+                actuators,
+                error=fill_result.stop_reason,
+                details={
+                    "abort_phase": "fill",
+                    "fill_success": fill_result.success,
+                    "fill_stop_reason": fill_result.stop_reason,
+                },
+            )
+            return
+
         sensor_result = None
 
         if confirm_sensor_pump(settings):
@@ -120,6 +137,23 @@ def main():
 
             print()
             print(f"[SENSOR RESULT] success={sensor_result.success}, reason={sensor_result.stop_reason}")
+
+            if not sensor_result.success:
+                print()
+                print("[ABORT] Water-cycle wird nach fehlgeschlagener Sensorpumpenphase beendet.")
+
+                publish_process_status(
+                    mqtt_publisher,
+                    "WATER_CYCLE_ABORTED",
+                    actuators,
+                    error=sensor_result.stop_reason,
+                    details={
+                        "abort_phase": "sensor_circulation",
+                        "sensor_success": sensor_result.success,
+                        "sensor_stop_reason": sensor_result.stop_reason,
+                    },
+                )
+                return
 
         drain_result = None
 

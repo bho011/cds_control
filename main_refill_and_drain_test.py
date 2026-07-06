@@ -511,6 +511,11 @@ def run_sensor_pump_phase(settings, sensor_reader, actuators, mqtt_publisher, lo
 
             time.sleep(1.0)
 
+    except KeyboardInterrupt:
+        stop_reason = "sensor_pump_keyboard_interrupt"
+        error = "KeyboardInterrupt"
+        print("\n[ABORT] Sensorpumpenphase durch Benutzer abgebrochen.")
+
     finally:
         sensor_pump.off()
 
@@ -550,7 +555,7 @@ def run_sensor_pump_phase(settings, sensor_reader, actuators, mqtt_publisher, lo
     )
 
     return PhaseResult(
-        success=True,
+        success=(stop_reason != "sensor_pump_keyboard_interrupt"),
         stop_reason=stop_reason,
         start_liters=start_liters,
         end_liters=final_liters,
@@ -843,6 +848,23 @@ def main():
         print()
         print(f"[FILL RESULT] success={fill_result.success}, reason={fill_result.stop_reason}")
 
+        if not fill_result.success:
+            print()
+            print("[ABORT] Water-cycle wird nach fehlgeschlagener Fill-Phase beendet.")
+
+            publish_process_status(
+                mqtt_publisher,
+                "WATER_CYCLE_ABORTED",
+                actuators,
+                error=fill_result.stop_reason,
+                details={
+                    "abort_phase": "fill",
+                    "fill_success": fill_result.success,
+                    "fill_stop_reason": fill_result.stop_reason,
+                },
+            )
+            return
+
         sensor_result = None
 
         if confirm_sensor_pump(settings):
@@ -856,6 +878,23 @@ def main():
 
             print()
             print(f"[SENSOR RESULT] success={sensor_result.success}, reason={sensor_result.stop_reason}")
+
+            if not sensor_result.success:
+                print()
+                print("[ABORT] Water-cycle wird nach fehlgeschlagener Sensorpumpenphase beendet.")
+
+                publish_process_status(
+                    mqtt_publisher,
+                    "WATER_CYCLE_ABORTED",
+                    actuators,
+                    error=sensor_result.stop_reason,
+                    details={
+                        "abort_phase": "sensor_circulation",
+                        "sensor_success": sensor_result.success,
+                        "sensor_stop_reason": sensor_result.stop_reason,
+                    },
+                )
+                return
 
         drain_result = None
 

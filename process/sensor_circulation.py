@@ -96,6 +96,11 @@ def run_sensor_pump_phase(settings, sensor_reader, actuators, mqtt_publisher, lo
 
             time.sleep(1.0)
 
+    except KeyboardInterrupt:
+        stop_reason = "sensor_pump_keyboard_interrupt"
+        error = "KeyboardInterrupt"
+        print("\n[ABORT] Sensorpumpenphase durch Benutzer abgebrochen.")
+
     finally:
         sensor_pump.off()
 
@@ -135,7 +140,7 @@ def run_sensor_pump_phase(settings, sensor_reader, actuators, mqtt_publisher, lo
     )
 
     return PhaseResult(
-        success=True,
+        success=(stop_reason != "sensor_pump_keyboard_interrupt"),
         stop_reason=stop_reason,
         start_liters=start_liters,
         end_liters=final_liters,

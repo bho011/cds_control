@@ -171,6 +171,11 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
                 error = None
                 break
 
+    except KeyboardInterrupt:
+        stop_reason = "keyboard_interrupt"
+        error = "KeyboardInterrupt"
+        print("\n[ABORT] Fill durch Benutzer abgebrochen.")
+
     finally:
         refill_pump.off()
 
