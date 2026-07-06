@@ -8,6 +8,8 @@ Commands:
     python main.py safe-drain
     python main.py sensor-bridge-check
     python main.py gpio-check
+    python main.py dashboard
+    python main.py calibrate-mixer
 """
 
 from __future__ import annotations
@@ -108,6 +110,14 @@ def cmd_gpio_check() -> int:
     return run_python_script("scripts/check_gpio_conflicts.py")
 
 
+def cmd_dashboard() -> int:
+    return run_python_module("nicegui_dashboard.app")
+
+
+def cmd_calibrate_mixer() -> int:
+    return run_python_script("calibration_mixing_tank.py")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Central Dosing System control entry point"
@@ -140,6 +150,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check whether Node-RED blocks Python-CDS GPIO pins",
     )
 
+    subparsers.add_parser(
+        "dashboard",
+        help="Start the NiceGUI dashboard",
+    )
+
+    subparsers.add_parser(
+        "calibrate-mixer",
+        help="Run Mixing Tank calibration workflow",
+    )
+
     return parser
 
 
@@ -161,6 +181,12 @@ def main() -> int:
 
     if args.command == "gpio-check":
         return cmd_gpio_check()
+
+    if args.command == "dashboard":
+        return cmd_dashboard()
+
+    if args.command == "calibrate-mixer":
+        return cmd_calibrate_mixer()
 
     parser.print_help()
     return 1

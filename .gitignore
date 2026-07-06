@@ -23,3 +23,6 @@ nicegui_dashboard/static/dashboard_before_*.css
 # Local archive / old generated versions
 archive/backups/
 archive/old_dashboard_versions/
+
+# Local archive only
+archive/

@@ -1,0 +1,4 @@
+asyncua
+paho-mqtt
+nicegui
+lgpio
