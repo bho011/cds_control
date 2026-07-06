@@ -4,3 +4,10 @@ __pycache__/
 logs/*.csv
 dashboard_page_before_css_split.py
 dashboard_page_before_layout_rework
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local backup files
+*.bak_*
