@@ -1,0 +1,7 @@
+{
+  "hardware_execution_enabled": false,
+  "required_confirmation_text": "confirmed",
+  "required_drain_confirmation_text": "drain_confirmed",
+  "valve_settle_seconds": 1.0,
+  "calibration_drain_max_seconds": 120.0
+}

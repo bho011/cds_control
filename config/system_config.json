@@ -1,0 +1,20 @@
+{
+  "opcua": {
+    "endpoint": "opc.tcp://10.8.0.62:14840",
+    "read_timeout_seconds": 3.0
+  },
+  "mqtt": {
+    "host": "localhost",
+    "port": 1883,
+    "sensor_topic": "cds/status/sensors",
+    "process_topic": "cds/status/process",
+    "qos": 1,
+    "publish_timeout_seconds": 2.0
+  },
+  "mixer_level_calibration": {
+    "volume_liters": 200.0,
+    "factor": 0.175,
+    "offset": 0.0,
+    "status": "temporary_factor_0_175"
+  }
+}

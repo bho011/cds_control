@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
+from services.system_config import get_mqtt_config, get_mixer_level_calibration, get_opcua_config
 from typing import Any, Optional, Sequence
 
 from asyncua import Client
@@ -18,7 +19,12 @@ from asyncua import Client
 # KONFIGURATION
 # ============================================================
 
-OPCUA_ENDPOINT = "opc.tcp://10.8.0.62:14840"
+
+_SYSTEM_OPCUA_CONFIG = get_opcua_config()
+_SYSTEM_MQTT_CONFIG = get_mqtt_config()
+_SYSTEM_MIXER_CALIBRATION = get_mixer_level_calibration()
+
+OPCUA_ENDPOINT = str(_SYSTEM_OPCUA_CONFIG["endpoint"])
 
 # Mixing-Tank-Wasserstand / Sensorwert.
 # Wichtig: Das ist der OPC-UA-Wert, den wir kalibrieren wollen.
@@ -40,7 +46,7 @@ DATA_DIR = Path("calibration_data")
 
 # Settings aus deinem bestehenden Refill/Drain-Test.
 # Wird für Sicherheitsbestätigung und valve_settle_seconds genutzt.
-SETTINGS_PATH = Path("config/refill_and_drain_test_settings.json")
+SETTINGS_PATH = Path("config/calibration_settings.json")
 
 # Wenn True, kann das Skript die Transferpumpe + Drainventil steuern.
 # Es wird trotzdem zusätzlich abgefragt und sicherheitsbestätigt.
@@ -56,10 +62,10 @@ DEFAULT_CALIBRATION_DRAIN_MAX_SECONDS = 120.0
 # sondern nur mitgeloggt und zum Vergleich berechnet.
 # ============================================================
 
-BRIDGE_MIXER_VOLUME_LITERS = 200.0
-BRIDGE_MIXER_SENSOR_LITER_FACTOR = 0.175
-BRIDGE_MIXER_SENSOR_LITER_OFFSET = 0.0
-BRIDGE_MIXER_SENSOR_CALIBRATION_STATUS = "temporary_factor_0_1"
+BRIDGE_MIXER_VOLUME_LITERS = float(_SYSTEM_MIXER_CALIBRATION["volume_liters"])
+BRIDGE_MIXER_SENSOR_LITER_FACTOR = float(_SYSTEM_MIXER_CALIBRATION["factor"])
+BRIDGE_MIXER_SENSOR_LITER_OFFSET = float(_SYSTEM_MIXER_CALIBRATION["offset"])
+BRIDGE_MIXER_SENSOR_CALIBRATION_STATUS = str(_SYSTEM_MIXER_CALIBRATION["status"])
 
 
 # ============================================================

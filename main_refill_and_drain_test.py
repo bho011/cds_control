@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from services.system_config import get_mixer_level_calibration
+
 from gpio_config import OUTPUTS, ACTIVE_LOW
 from hardware.actuator_manager import ActuatorManager
 from services.mqtt_publisher import MqttPublisher
@@ -14,7 +16,7 @@ from services.process_run_logger import ProcessRunLogger
 from services.sensor_snapshot import SensorSnapshotReader
 
 
-SETTINGS_PATH = Path("config/refill_and_drain_test_settings.json")
+SETTINGS_PATH = Path("config/water_cycle_settings.json")
 
 
 @dataclass
@@ -105,8 +107,9 @@ def mixer_liters_from_snapshot(snapshot: dict[str, Any], settings: dict) -> floa
 
     raw_liters = mixer.get("volume_liters_raw")
     if raw_liters is not None:
-        factor = float(settings.get("mixer_sensor_liter_factor", 0.1))
-        offset = float(settings.get("mixer_sensor_liter_offset", 0.0))
+        calibration = get_mixer_level_calibration()
+        factor = float(calibration["factor"])
+        offset = float(calibration["offset"])
         return max(0.0, (float(raw_liters) * factor) + offset)
 
     level_percent = mixer.get("level_percent")

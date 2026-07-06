@@ -11,12 +11,23 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from services.system_config import get_mqtt_config, get_mixer_level_calibration, get_opcua_config
 from typing import Any
 
 import paho.mqtt.client as mqtt
 from asyncua import Client as OpcUaClient
 
-from mqtt_sensor_bridge import OPCUA_ENDPOINT, NODE_IDS, MQTT_HOST, MQTT_PORT, MQTT_TOPIC
+from mqtt_sensor_bridge import NODE_IDS
+
+_SYSTEM_OPCUA_CONFIG = get_opcua_config()
+_SYSTEM_MQTT_CONFIG = get_mqtt_config()
+_SYSTEM_MIXER_CALIBRATION = get_mixer_level_calibration()
+
+OPCUA_ENDPOINT = str(_SYSTEM_OPCUA_CONFIG["endpoint"])
+MQTT_HOST = str(_SYSTEM_MQTT_CONFIG["host"])
+MQTT_PORT = int(_SYSTEM_MQTT_CONFIG["port"])
+MQTT_TOPIC = str(_SYSTEM_MQTT_CONFIG["sensor_topic"])
+MQTT_QOS = int(_SYSTEM_MQTT_CONFIG["qos"])
 from gpio_config import OUTPUTS, ACTIVE_LOW
 
 

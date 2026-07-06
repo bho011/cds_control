@@ -1,13 +1,25 @@
-__pycache__/
-*.py[cod]
-.venv/
-logs/*.csv
-dashboard_page_before_css_split.py
-dashboard_page_before_layout_rework
-# Python cache files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+.venv/
+
+# Logs and runtime files
+logs/*
+!logs/.gitkeep
+*.log
+*.out
 
 # Local backup files
 *.bak_*
+
+# Calibration output data
+calibration_data/*.csv
+
+# Archived/generated dashboard versions
+nicegui_dashboard/pages/dashboard_page_before_*.py
+nicegui_dashboard/static/dashboard_before_*.css
+
+# Local archive / old generated versions
+archive/backups/
+archive/old_dashboard_versions/

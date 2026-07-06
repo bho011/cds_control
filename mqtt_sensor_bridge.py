@@ -1,13 +1,19 @@
 import asyncio
 import json
 from datetime import datetime
+from services.system_config import get_mqtt_config, get_mixer_level_calibration, get_opcua_config
 from typing import Any
 
 import paho.mqtt.client as mqtt
 from asyncua import Client
 
 
-OPCUA_ENDPOINT = "opc.tcp://10.8.0.62:14840"
+
+_SYSTEM_OPCUA_CONFIG = get_opcua_config()
+_SYSTEM_MQTT_CONFIG = get_mqtt_config()
+_SYSTEM_MIXER_CALIBRATION = get_mixer_level_calibration()
+
+OPCUA_ENDPOINT = str(_SYSTEM_OPCUA_CONFIG["endpoint"])
 
 NODE_IDS = {
     "mixer_level_raw_cel1": "ns=4;s=Values.CEL1.PV_WaterLevel",
@@ -25,24 +31,24 @@ RO_VOLUME_LITERS = 1300.0
 # Temporäre Kalibrierung Mixing-Tank-Sensor.
 # Beobachtung: Sensor zeigt aktuell ungefähr Faktor 10 zu hoch.
 # Beispiel: Rohwert 2.0 L -> kalibrierter Wert 0.2 L
-MIXER_SENSOR_LITER_FACTOR = 0.175
-MIXER_SENSOR_LITER_OFFSET = 0.0
-MIXER_SENSOR_CALIBRATION_STATUS = "temporary_factor_0_1"
+MIXER_SENSOR_LITER_FACTOR = float(_SYSTEM_MIXER_CALIBRATION["factor"])
+MIXER_SENSOR_LITER_OFFSET = float(_SYSTEM_MIXER_CALIBRATION["offset"])
+MIXER_SENSOR_CALIBRATION_STATUS = str(_SYSTEM_MIXER_CALIBRATION["status"])
 
 READ_INTERVAL_SECONDS = 1.0
 
 # Safety: Ein einzelner OPC-UA-Read darf den Sensor-Bridge-Loop
 # nicht dauerhaft blockieren.
-OPCUA_READ_TIMEOUT_SECONDS = 3.0
+OPCUA_READ_TIMEOUT_SECONDS = float(_SYSTEM_OPCUA_CONFIG["read_timeout_seconds"])
 
 # Sensorwerte sind für Dashboard/Prozessdiagnose relevant.
 # Daher QoS 1 mit Publish-Bestätigung statt fire-and-forget.
-MQTT_QOS = 1
-MQTT_PUBLISH_TIMEOUT_SECONDS = 2.0
+MQTT_QOS = int(_SYSTEM_MQTT_CONFIG["qos"])
+MQTT_PUBLISH_TIMEOUT_SECONDS = float(_SYSTEM_MQTT_CONFIG["publish_timeout_seconds"])
 
-MQTT_HOST = "localhost"
-MQTT_PORT = 1883
-MQTT_TOPIC = "cds/status/sensors"
+MQTT_HOST = str(_SYSTEM_MQTT_CONFIG["host"])
+MQTT_PORT = int(_SYSTEM_MQTT_CONFIG["port"])
+MQTT_TOPIC = str(_SYSTEM_MQTT_CONFIG["sensor_topic"])
 
 
 def calculate_liters_from_percent(value: float, max_volume_liters: float) -> float:
