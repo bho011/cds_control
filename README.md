@@ -1,185 +1,230 @@
-# CDS Control – Python/NiceGUI Steuerung
+# Central Dosing System – Python Control Layer
 
-**Projektkontext:** Central Dosing System (CDS)  
-**Stand:** 06.07.2026  
-**Status:** Validierungs- und Entwicklungsstand, keine produktive Chemikaliendosierung
-
-Diese README beschreibt den aktuellen kompakten Stand der Python-/NiceGUI-Implementierung für das CDS. Ziel ist eine gut wartbare, sichere und schrittweise erweiterbare Steuerungslogik für Wasserprozess, Sensorik, Dashboard und spätere Rezept-/Dosierfunktionen.
+Stand: 07.07.2026  
+Projektstatus: Entwicklungs- und Validierungsphase  
+Ziel: sichere, nachvollziehbare und modular erweiterbare Steuerungslogik für den wasserbasierten CDS-Prozess.
 
 ---
 
 ## 1. Kurzüberblick
 
-Das CDS wird aktuell schrittweise von einzelnen Hardwaretests zu einer strukturierten Python-Steuerung überführt.
-
-Aktueller Fokus:
-
-- sichere Hardware-Ansteuerung über GPIO/Relais,
-- OPC-UA-Sensoranbindung,
-- MQTT-Statuskommunikation,
-- NiceGUI-Dashboard,
-- modularer Water-Cycle-Prozess,
-- Recipe-Editor als Dashboard-Visualisierung,
-- Sicherheitsprüfungen vor Hardwareläufen.
-
-Aktuell **nicht aktiv**:
-
-- produktive Chemikaliendosierung,
-- automatische Peristaltikpumpensteuerung,
-- automatische Rezeptausführung mit Dosierung,
-- Routing zu Solution Tanks,
-- produktiver Dauerbetrieb.
-
----
-
-## 2. Aktueller Prozessstand
-
-Der zentrale Wasserpfad wurde hardwareseitig erfolgreich getestet:
+Dieses Repository enthält die Python-Implementierung für die Steuerungs- und Visualisierungsebene eines Central-Dosing-Systems. Der aktuelle Fokus liegt auf dem sicheren wasserbasierten Grundprozess:
 
 ```text
-RO-Tank → Refill-Pumpe → Mixing Tank
-Mixing Tank → Sensorbox → zurück in Mixing Tank
-Mixing Tank → Transferpumpe + Drain-Ventil → Drain
+RO-Wasser → Mixing Tank → Sensorbox-Zirkulation → Drain
 ```
 
-Validiert wurde:
+Chemikaliendosierung, Peristaltikpumpensteuerung und produktive Rezeptausführung sind noch nicht aktiv. Diese Funktionen werden erst nach weiterer Hardware-, Sensor- und Sicherheitsvalidierung ergänzt.
 
-- Befüllen des Mixing Tanks,
-- Sensorbox-Zirkulation,
-- Rückfluss aus der Sensorbox in den Mixing Tank,
-- Drain über Transferpumpe und Drain-Ventil,
-- Drain-Stopp anhand des Levelsignals bei leerem Tank.
-
-Der neue modulare Einstieg über `python main.py water-cycle` startet und ist softwareseitig vorbereitet. Der **vollständige Hardwarelauf nach dem Refactor** muss jedoch noch einmal real am System getestet werden.
+Die Steuerungslogik wurde von einzelnen Testskripten in eine modulare Struktur überführt. `main.py` ist der zentrale Einstiegspunkt für Preflight, Water-Cycle, Dashboard, Kalibrierung und Statusprüfungen.
 
 ---
 
-## 3. Wichtige Projektstruktur
+## 2. Aktueller Funktionsstand
+
+Aktuell umgesetzt:
+
+- MQTT-Sensor-Bridge für OPC-UA-Sensordaten
+- NiceGUI-Dashboard zur Visualisierung
+- modularer Water-Cycle-Prozess
+- Refill-Phase für den Mixing Tank
+- Sensorbox-Zirkulationsphase
+- Drain-Phase
+- zentraler Preflight-Check
+- GPIO-Konfliktprüfung gegen Node-RED-GPIO-Helper
+- Recipe-Editor im Dashboard mit drei Favoriten und JSON-Ablage
+- Mixing-Tank-Kalibrierung mit abgesichertem Drain-Timeout
+- zentrale Systemkonfiguration für OPC-UA, MQTT und Mixer-Level-Kalibrierung
+
+Der neue modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor steht noch aus.
+
+---
+
+## 3. Zentrale Einstiegspunkte
+
+Alle Hauptfunktionen sollen über `main.py` gestartet werden.
+
+```bash
+python main.py --help
+python main.py preflight
+python main.py gpio-check
+python main.py water-cycle
+python main.py calibrate-mixer
+python main.py dashboard
+python main.py sensor-bridge-check
+python main.py safe-drain
+```
+
+Wichtige Befehle:
+
+```bash
+cd ~/cds_control
+source .venv/bin/activate
+python main.py preflight
+```
+
+Vor jedem Hardwaretest muss der kombinierte Preflight erfolgreich sein.
+
+---
+
+## 4. Projektstruktur
 
 ```text
 cds_control/
 ├── main.py
 ├── config/
-│   ├── process_settings.json
+│   ├── system_config.json
 │   ├── water_cycle_settings.json
-│   └── refill_and_drain_test_settings.json
+│   ├── calibration_settings.json
+│   └── process_settings.json
 ├── process/
 │   ├── common.py
 │   ├── refill.py
 │   ├── sensor_circulation.py
 │   ├── drain.py
 │   └── water_cycle.py
-├── hardware/
 ├── services/
+│   ├── system_config.py
+│   ├── mqtt_publisher.py
+│   ├── process_run_logger.py
+│   └── sensor_snapshot.py
+├── hardware/
+│   ├── digital_output.py
+│   └── actuator_manager.py
 ├── nicegui_dashboard/
-├── recipes/
-│   └── dashboard_recipes.json
+│   ├── app.py
+│   ├── cds_controller.py
+│   ├── process_controller.py
+│   ├── recipe_store.py
+│   ├── mqtt_topic_reader.py
+│   ├── pages/
+│   └── static/
 ├── scripts/
 │   └── check_gpio_conflicts.py
-├── calibration_mixing_tank.py
+├── recipes/
+│   └── dashboard_recipes.json
+├── logs/
+├── calibration_data/
 ├── mqtt_sensor_bridge.py
+├── calibration_mixing_tank.py
 ├── preflight_check.py
-└── logs/
+└── requirements.txt
 ```
 
 ---
 
-## 4. Hauptbefehle
+## 5. Konfiguration
 
-Virtuelle Umgebung aktivieren:
+Zentrale technische Systemwerte liegen in:
 
-```bash
-cd ~/cds_control
-source .venv/bin/activate
+```text
+config/system_config.json
 ```
 
-Hilfe anzeigen:
+Dort sind definiert:
 
-```bash
-python main.py --help
+- OPC-UA Endpoint
+- OPC-UA Read Timeout
+- MQTT Host
+- MQTT Port
+- MQTT Topics
+- MQTT QoS
+- MQTT Publish Timeout
+- Mixer-Level-Kalibrierung
+
+Beispiel:
+
+```json
+{
+  "opcua": {
+    "endpoint": "opc.tcp://10.8.0.62:14840",
+    "read_timeout_seconds": 3.0
+  },
+  "mqtt": {
+    "host": "localhost",
+    "port": 1883,
+    "sensor_topic": "cds/status/sensors",
+    "process_topic": "cds/status/process",
+    "qos": 1,
+    "publish_timeout_seconds": 2.0
+  },
+  "mixer_level_calibration": {
+    "volume_liters": 200.0,
+    "factor": 0.175,
+    "offset": 0.0,
+    "status": "temporary_factor_0_175"
+  }
+}
 ```
 
-Preflight ausführen:
+Prozessbezogene Water-Cycle-Werte liegen in:
 
-```bash
-python main.py preflight
+```text
+config/water_cycle_settings.json
 ```
 
-GPIO-Konfliktcheck einzeln ausführen:
+Kalibrierbezogene Einstellungen liegen in:
 
-```bash
-python main.py gpio-check
-```
-
-Sensor-Bridge-Status prüfen:
-
-```bash
-python main.py sensor-bridge-check
-```
-
-Water-Cycle starten:
-
-```bash
-python main.py water-cycle
-```
-
-Manuelles Safe-Drain-Tool starten:
-
-```bash
-python main.py safe-drain
+```text
+config/calibration_settings.json
 ```
 
 ---
 
-## 5. Sicherheitsgrundsätze
+## 6. Sicherheitsgrundsätze
 
-Das Projekt ist bewusst defensiv aufgebaut. Hardware darf nicht unbeabsichtigt anlaufen.
+Das System ist bewusst defensiv aufgebaut.
 
-### 5.1 Hardware ist im Repo standardmäßig deaktiviert
+Wichtige Regeln:
 
-In den Konfigurationsdateien ist standardmäßig gesetzt:
+- Hardwareausführung ist im Repository standardmäßig deaktiviert.
+- `hardware_execution_enabled` muss für reale Tests bewusst lokal auf `true` gesetzt werden.
+- Vor jedem Hardwarelauf muss `python main.py preflight` erfolgreich sein.
+- Node-RED darf keine GPIOs blockieren, die Python für den CDS-Prozess benötigt.
+- Chemikaliendosierung ist aktuell nicht aktiv.
+- Produktive Peristaltikpumpensteuerung ist aktuell nicht aktiv.
+- Sensorwerte werden nicht blind als zuverlässige Wahrheit angenommen.
+- Aktoren werden über zentrale Safe-Shutdown-Pfade ausgeschaltet.
+- Manuelle Kalibrier-Drain-Funktionen besitzen ein Safety-Timeout.
+- KeyboardInterrupt wird im Water-Cycle einheitlich behandelt.
+
+Standardzustand in den Configs:
 
 ```json
 "hardware_execution_enabled": false
 ```
 
-Betroffene Dateien:
+Dadurch werden keine GPIO-Ausgänge initialisiert oder geschaltet, solange die Hardwareausführung nicht explizit aktiviert wird.
 
-```text
-config/process_settings.json
-config/water_cycle_settings.json
-config/refill_and_drain_test_settings.json
-```
+---
 
-Für echte Vor-Ort-Tests muss dieser Wert bewusst lokal auf `true` gesetzt werden. Zusätzlich ist der korrekte Bestätigungstext erforderlich.
+## 7. Preflight und GPIO-Konfliktprüfung
 
-### 5.2 Preflight vor Hardwareläufen
+Der kombinierte Preflight prüft:
 
-Vor jedem Hardwarelauf muss der kombinierte Preflight grün sein:
+- wichtige Projektdateien
+- Python-Syntax relevanter Module
+- GPIO-Konfiguration
+- doppelte GPIO-Zuordnungen
+- aktive Systemdienste
+- MQTT-Erreichbarkeit
+- OPC-UA-Lesbarkeit
+- aktuelle Sensor-MQTT-Payload-Struktur
+- Node-RED-GPIO-Konflikte
+
+Start:
 
 ```bash
 python main.py preflight
 ```
 
-Der Preflight prüft unter anderem:
+Zusätzlicher Einzeltest:
 
-- wichtige Dateien,
-- Python-Syntax,
-- GPIO-Konfiguration,
-- doppelte GPIO-Belegungen,
-- MQTT-Verbindung,
-- OPC-UA-Lesetest,
-- Sensor-Payload-Struktur,
-- Sensor-Bridge-Status,
-- Node-RED-/GPIO-Konflikte.
+```bash
+python main.py gpio-check
+```
 
-Der Preflight ist hardwareseitig read-only und schaltet keine Pumpen, Ventile oder Relais.
-
-### 5.3 Node-RED darf keine Python-CDS-GPIOs blockieren
-
-Node-RED darf für getrennte Funktionen genutzt werden, darf aber keine kritischen GPIOs blockieren, die Python für den CDS-Prozess benötigt.
-
-Kritisch für Python-CDS:
+Kritische CDS-GPIOs für Python:
 
 ```text
 GPIO20 = mixer_refill_pump
@@ -188,267 +233,262 @@ GPIO22 = contactor_2 / sensor_circulation_pump
 GPIO26 = transfer_pump
 ```
 
-Der GPIO-Konfliktcheck meldet einen Fehler, wenn Node-RED diese Pins über `nrpio.py` belegt.
-
-### 5.4 Emergency Stop und Thread-Sicherheit
-
-Der NiceGUI-Controller wurde gehärtet:
-
-- kein `daemon=True` für Prozess-Threads,
-- kein Doppelstart während Cleanup/Teardown,
-- Emergency Stop verhindert erneutes Einschalten durch parallele Update-Ticks,
-- Aktoren werden per `safe_shutdown_all()` abgeschaltet,
-- Hintergrundthread kann gejoint werden,
-- `is_running` wird nicht mehr zu früh freigegeben.
-
-### 5.5 Drain- und Kalibrier-Sicherheit
-
-Die Kalibrierfunktion für den Mixing Tank steuert Drain-Ventil und Transferpumpe nicht mehr unbegrenzt bis Enter, sondern besitzt einen Safety-Timeout:
-
-```json
-"calibration_drain_max_seconds": 120.0
-```
-
-Enter stoppt weiterhin manuell früher, aber die Pumpe läuft nicht mehr unbegrenzt.
-
-### 5.6 KeyboardInterrupt-Verhalten
-
-`STRG+C` wurde im Water-Cycle vereinheitlicht:
-
-- Phase wird kontrolliert beendet,
-- zugehörige Aktoren werden ausgeschaltet,
-- Folgephasen werden übersprungen,
-- globaler Safe-Shutdown läuft trotzdem.
+Node-RED darf diese Pins nicht blockieren. Falls Node-RED nur unabhängige Funktionen wie RO-Machine betreibt, ist das zulässig, solange keine CDS-GPIOs blockiert werden.
 
 ---
 
-## 6. Sensorik und MQTT
+## 8. Sensor-Bridge
 
-### 6.1 Sensor-Bridge
+Die Datei `mqtt_sensor_bridge.py` liest Sensordaten über OPC-UA und veröffentlicht sie per MQTT.
 
-Die Datei `mqtt_sensor_bridge.py` liest OPC-UA-Werte und veröffentlicht sie per MQTT.
-
-Wichtiger Dienst:
-
-```bash
-systemctl status cds-sensor-bridge.service
-journalctl -u cds-sensor-bridge.service -f
-sudo systemctl restart cds-sensor-bridge.service
-```
-
-MQTT-Topic:
+Topic:
 
 ```text
 cds/status/sensors
 ```
 
-Prüfen:
+Veröffentlichte Werte:
+
+- RO-Tank-Füllstand
+- Mixing-Tank-Füllstand
+- EC
+- pH
+- Wassertemperatur
+- Dissolved Oxygen
+- Bridge-Status
+- Fehlerstatus
+
+Der OPC-UA-Read ist mit Timeout abgesichert. MQTT wird mit QoS 1 und Publish-Bestätigung verwendet.
+
+Servicebefehle:
 
 ```bash
-mosquitto_sub -h localhost -t cds/status/sensors -C 1 -v
+systemctl status cds-sensor-bridge.service
+sudo systemctl restart cds-sensor-bridge.service
+journalctl -u cds-sensor-bridge.service -f
 ```
 
-### 6.2 Aktuelle Sensorwerte
+MQTT-Test:
 
-Aktuell werden verarbeitet:
-
-- RO-Tank-Level,
-- Mixing-Tank-Level,
-- EC,
-- pH,
-- Temperatur,
-- gelöster Sauerstoff / DO.
-
-pH und DO wurden an der Hardware geprüft und sind nicht vertauscht.
-
-### 6.3 Mixing-Tank-Level
-
-Der Mixing-Tank-Levelsensor ist grundsätzlich nutzbar für:
-
-- leer/voll-Erkennung,
-- Trend,
-- Prozessabschaltung,
-- Drain-Erkennung.
-
-Die Litergenauigkeit ist noch nicht final validiert. Es gibt bereits Kalibrierdaten, aber die endgültige Sensorformel oder Kalibriertabelle muss noch sauber abgeleitet und getestet werden.
+```bash
+mosquitto_sub -h localhost -t cds/status/sensors -v
+```
 
 ---
 
-## 7. Water-Cycle-Prozess
+## 9. Water-Cycle-Prozess
 
-Der neue Water-Cycle ist modular aufgebaut:
+Der aktuelle Water-Cycle ist modular aufgebaut:
 
 ```text
-process/water_cycle.py          → Orchestrator
-process/refill.py               → Befüllen bis absoluter Zielwert
-process/sensor_circulation.py   → Sensorbox-Zirkulation
-process/drain.py                → Drain mit Sensor-Leererkennung und Timeout
-process/common.py               → gemeinsame Helfer, Logging, Sensorwertauswertung, Settings
+process/water_cycle.py
+→ Orchestrator
+
+process/refill.py
+→ Mixing Tank befüllen
+
+process/sensor_circulation.py
+→ Sensorbox durchströmen
+
+process/drain.py
+→ Mixing Tank entleeren
+
+process/common.py
+→ gemeinsame Hilfsfunktionen
 ```
+
+Start:
+
+```bash
+python main.py water-cycle
+```
+
+Der Water-Cycle führt automatisch zuerst den Preflight aus. Wenn der Preflight fehlschlägt, startet der Prozess nicht.
 
 Aktueller Ablauf:
 
 ```text
-Preflight
-→ Sicherheitsbestätigung
-→ Refill bis Zielmenge
-→ optionale Sensorzirkulation
-→ optionale Drain-Abfrage
-→ Drain bis leer oder Timeout
-→ Safe-Shutdown
+1. Sicherheitsabfrage
+2. Sensor-Payload prüfen
+3. Refill bis Zielwert
+4. optionale Sensorbox-Zirkulation
+5. optionale Drain-Phase
+6. Safe-Shutdown
 ```
 
-Wichtig: Der modulare `water-cycle` muss nach dem Refactor noch einmal mit echter Hardware vollständig getestet werden.
+Wichtiger Status:
+
+```text
+Der modulare Water-Cycle muss nach dem Refactor noch einmal vollständig real mit Hardware getestet werden.
+```
 
 ---
 
-## 8. NiceGUI-Dashboard
+## 10. NiceGUI-Dashboard
 
-Das NiceGUI-Dashboard ist die aktuelle Python-basierte Bedien- und Visualisierungsebene für das CDS.
+Das NiceGUI-Dashboard visualisiert:
 
-Aktuelle Funktionen:
+- RO-Tank
+- Mixing Tank
+- pH
+- EC
+- Temperatur
+- Dissolved Oxygen
+- Sensor-Bridge-Status
+- Prozessstatus
+- Aktorstatus
+- Rezept-/Sollwerte
+- Prozesslog
 
-- Tank-/Füllstandsanzeige,
-- Sensorwerte,
-- Systemstatus,
-- Prozessstatus,
-- Prozesslog,
-- Recipe-/Sollwertkarte,
-- Recipe-Editor mit drei Favoriten.
-
-Service:
+Start über systemd:
 
 ```bash
-systemctl status cds-nicegui-dashboard.service
 sudo systemctl restart cds-nicegui-dashboard.service
+systemctl status cds-nicegui-dashboard.service --no-pager
 ```
 
 Manueller Start:
 
 ```bash
-python -m nicegui_dashboard.app
+python main.py dashboard
 ```
+
+Die Oberfläche ist HMI/Visualisierung. Hardwarelogik soll weiterhin in Python-Prozessmodulen bleiben.
 
 ---
 
-## 9. Recipe-Editor
+## 11. Recipe-Editor
 
-Der Recipe-Editor ist im Dashboard integriert und speichert aktuell drei Favoriten in:
+Im Dashboard existiert ein Recipe-Editor mit drei Favoriten.
+
+Ablage:
 
 ```text
 recipes/dashboard_recipes.json
 ```
 
-Aktuelle Rezeptfelder:
+Aktueller Zweck:
 
-- Rezeptname,
-- Ziel-Tank,
-- Zielmenge Mixing Tank,
-- EC-Sollwert,
-- EC-Mischzeit,
-- Stock-Volumen,
-- pH-Sollwert,
-- Säure-/Base-Volumen,
-- pH-Mischzeit,
-- Addons,
-- Sensorzirkulation,
-- Sensorpumpenzeit,
-- Drain nach Prozess,
-- Notiz.
+- Rezeptwerte anzeigen
+- Rezeptfavoriten bearbeiten
+- JSON speichern
+- spätere Prozess-/Dosierlogik vorbereiten
 
-Wichtig: Der Recipe-Editor ist aktuell **nur Visualisierung und JSON-Ablage**. Die Werte werden noch nicht automatisch für Peristaltikpumpen oder Dosierung verwendet.
+Noch nicht aktiv:
+
+- automatische Chemikaliendosierung
+- Peristaltikpumpensteuerung
+- automatische pH-/EC-Regelung
+
+Diese Funktionen werden erst später auf Basis der gespeicherten Rezeptwerte ergänzt.
 
 ---
 
-## 10. Kalibrierung
+## 12. Kalibrierung
 
-Für den Mixing-Tank-Levelsensor gibt es:
+Die Mixing-Tank-Kalibrierung erfolgt über:
 
 ```bash
-python calibration_mixing_tank.py
+python main.py calibrate-mixer
 ```
 
-Das Skript unterstützt:
-
-- Nullpunkt,
-- manuelle Fill-Messpunkte,
-- Drain-Messpunkte,
-- CSV-Logging,
-- lineare Auswertung,
-- Dokumentation der aktuellen Bridge-Kalibrierung.
-
-Daten liegen unter:
+Die Kalibrierung liest OPC-UA-Rohwerte und speichert Messpunkte als CSV unter:
 
 ```text
 calibration_data/
 ```
 
-Die Ergebnisse sollen später genutzt werden für:
+Die automatische Drain-Unterstützung in der Kalibrierung ist abgesichert durch:
 
-- finale Sensorformel,
-- Kalibriertabelle,
-- Interpolation,
-- Plausibilitätsgrenzen.
+```json
+"calibration_drain_max_seconds": 120.0
+```
+
+Damit kann die Transferpumpe nicht unbegrenzt laufen, falls Enter vergessen wird oder die SSH-/Terminal-Session hängt.
 
 ---
 
-## 11. Git- und Datei-Hygiene
+## 13. Git- und Repo-Hygiene
 
-Nicht ins Repo gehören:
+Nicht ins Repository gehören:
 
 ```text
 __pycache__/
 *.pyc
-*.bak_*
 .venv/
-temporäre Logs
+logs/*
+*.log
+*.out
+*.bak_*
+calibration_data/*.csv
+archive/
 ```
 
-Wichtiger Statuscheck:
+Wichtige Regel:
+
+```text
+Git-History ersetzt lokale Backup-Dateien.
+```
+
+Vor Commits prüfen:
 
 ```bash
 git status
-```
-
-Commit-Beispiel:
-
-```bash
-git add .
-git commit -m "Describe change"
-git push origin main
-```
-
-Falls zusätzlich ein GitLab-Remote genutzt wird:
-
-```bash
-git remote -v
-git push gitlab main
+git diff --check
+python main.py preflight
 ```
 
 ---
 
-## 12. Offene Punkte
+## 14. Dependencies
 
-Aktuell offen:
-
-- modularen `python main.py water-cycle` einmal vollständig mit Hardware testen,
-- Mixing-Tank-Levelsensor final kalibrieren,
-- Recipe-Werte kontrolliert mit `water_cycle_settings.json` verbinden,
-- Recipe-Editor-UX weiter verbessern,
-- Peristaltikpumpensteuerung erst nach stabiler Recipe-/Prozessbasis planen,
-- pH-/EC-Regelung erst nach Sensorvalidierung,
-- Logik für spätere Dosier- und Mischprozesse definieren,
-- alte Referenz-Testskripte erst nach erfolgreichem modularen Hardwaretest verschieben.
-
----
-
-## 13. Aktuelle Entwicklungsregel
+Die wichtigsten Python-Abhängigkeiten stehen in:
 
 ```text
-Sicherheit vor Komfort.
-Hardware nur nach grünem Preflight.
-Kein Start ohne bewusste Hardwarefreigabe.
-Keine Chemie, solange Wasserprozess und Sensorik nicht stabil validiert sind.
+requirements.txt
 ```
 
-Der nächste empfohlene technische Schritt ist ein kontrollierter Vor-Ort-Test des modularen Water-Cycle-Prozesses mit `hardware_execution_enabled=true` in der lokalen Config und anschließendem Log-Review.
+Installation in einer virtuellen Umgebung:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+## 15. Aktuell offene Punkte
+
+Nächste sinnvolle Schritte:
+
+1. Modularen Water-Cycle real mit Hardware testen.
+2. README und Sicherheitsstand aktuell halten.
+3. Logging schrittweise von `print()` auf `logging` umstellen.
+4. MQTT-Staleness-/Payload-Reader vereinheitlichen.
+5. Automatisierte Tests für config- und safety-nahe Funktionen ergänzen.
+6. Recipe-Editor-UX später weiter verbessern.
+7. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
+8. Peristaltikpumpensteuerung erst nach weiterer Sicherheitsvalidierung vorbereiten.
+
+---
+
+## 16. Entwicklungsregel
+
+Für dieses Projekt gilt:
+
+```text
+Erst sicher.
+Dann nachvollziehbar.
+Dann automatisiert.
+Dann produktiv.
+```
+
+Neue Hardwarefunktionen werden nur aufgenommen, wenn:
+
+- die reale Hardwarezuordnung geprüft wurde,
+- der Wasserpfad nachvollziehbar sicher ist,
+- Preflight erfolgreich ist,
+- ein Safe-Shutdown vorhanden ist,
+- ein Timeout oder plausibler Abbruchpfad existiert,
+- und der Ablauf zunächst mit Wasser getestet wurde.
