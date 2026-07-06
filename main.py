@@ -52,7 +52,26 @@ def run_python_module(module_name: str) -> int:
 
 
 def cmd_preflight() -> int:
-    return run_python_script("preflight_check.py")
+    print("[INFO] Running combined CDS preflight.")
+    print()
+
+    preflight_result = run_python_script("preflight_check.py")
+    if preflight_result != 0:
+        print()
+        print("[FAIL] Base preflight failed. GPIO conflict check skipped.")
+        return preflight_result
+
+    print()
+    print("[INFO] Base preflight OK. Running GPIO conflict check.")
+    gpio_result = run_python_script("scripts/check_gpio_conflicts.py")
+    if gpio_result != 0:
+        print()
+        print("[FAIL] GPIO conflict check failed.")
+        return gpio_result
+
+    print()
+    print("[OK] Combined CDS preflight successful.")
+    return 0
 
 
 def cmd_water_cycle() -> int:
