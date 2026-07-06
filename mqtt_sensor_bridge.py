@@ -31,6 +31,15 @@ MIXER_SENSOR_CALIBRATION_STATUS = "temporary_factor_0_1"
 
 READ_INTERVAL_SECONDS = 1.0
 
+# Safety: Ein einzelner OPC-UA-Read darf den Sensor-Bridge-Loop
+# nicht dauerhaft blockieren.
+OPCUA_READ_TIMEOUT_SECONDS = 3.0
+
+# Sensorwerte sind für Dashboard/Prozessdiagnose relevant.
+# Daher QoS 1 mit Publish-Bestätigung statt fire-and-forget.
+MQTT_QOS = 1
+MQTT_PUBLISH_TIMEOUT_SECONDS = 2.0
+
 MQTT_HOST = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC = "cds/status/sensors"
@@ -80,9 +89,29 @@ async def main():
 
     mqtt_client = create_mqtt_client()
     last_error = None
+    last_publish_error = None
 
     async def publish_payload(payload: dict[str, Any]):
-        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=0)
+        message_info = mqtt_client.publish(
+            MQTT_TOPIC,
+            json.dumps(payload),
+            qos=MQTT_QOS,
+        )
+
+        if message_info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with rc={message_info.rc}")
+
+        if MQTT_QOS > 0:
+            await asyncio.to_thread(
+                message_info.wait_for_publish,
+                MQTT_PUBLISH_TIMEOUT_SECONDS,
+            )
+
+            if not message_info.is_published():
+                raise TimeoutError(
+                    f"MQTT publish confirmation timeout after "
+                    f"{MQTT_PUBLISH_TIMEOUT_SECONDS:.1f}s"
+                )
 
     try:
         async with Client(url=OPCUA_ENDPOINT) as opcua_client:
@@ -94,7 +123,15 @@ async def main():
             async def safe_read(node_key: str, label: str):
                 try:
                     node = opcua_client.get_node(NODE_IDS[node_key])
-                    return await node.read_value()
+                    return await asyncio.wait_for(
+                        node.read_value(),
+                        timeout=OPCUA_READ_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise RuntimeError(
+                        f"{label} read timeout after "
+                        f"{OPCUA_READ_TIMEOUT_SECONDS:.1f}s"
+                    ) from exc
                 except Exception as exc:
                     raise RuntimeError(f"{label} read error: {exc}") from exc
 
@@ -236,7 +273,19 @@ async def main():
                     "error": error,
                 }
 
-                await publish_payload(payload)
+                try:
+                    await publish_payload(payload)
+
+                    if last_publish_error:
+                        print(f"{timestamp} | [OK] MQTT publish recovered.")
+                        last_publish_error = None
+
+                except Exception as exc:
+                    publish_error = f"MQTT publish error: {exc}"
+
+                    if publish_error != last_publish_error:
+                        print(f"{timestamp} | [ERROR] {publish_error}")
+                        last_publish_error = publish_error
 
                 # Nur loggen, wenn sich der Fehlerstatus ändert.
                 if error != last_error:
