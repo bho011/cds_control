@@ -18,6 +18,8 @@ class ProcessController:
     - GPIOs werden erst nach gültiger Sicherheitsprüfung erzeugt.
     - hardware_execution_enabled muss true sein.
     - required_confirmation_text muss exakt passen.
+    - Ein Emergency Stop darf nicht durch einen parallelen Update-Tick
+      wieder überschrieben werden.
     """
 
     def __init__(
@@ -29,6 +31,7 @@ class ProcessController:
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._stop_requested = False
+        self._teardown_in_progress = False
 
         self.state_machine = None
         self.actuators = None
@@ -44,6 +47,9 @@ class ProcessController:
     def load_settings(self) -> dict[str, Any]:
         with SETTINGS_PATH.open("r", encoding="utf-8") as file:
             return json.load(file)
+
+    def _thread_is_alive_locked(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     def get_status(self) -> dict[str, Any]:
         try:
@@ -68,6 +74,8 @@ class ProcessController:
 
             return {
                 "is_running": self.is_running,
+                "thread_alive": self._thread_is_alive_locked(),
+                "teardown_in_progress": self._teardown_in_progress,
                 "state_name": state_name,
                 "error": error_message,
                 "last_message": self.last_message,
@@ -97,8 +105,11 @@ class ProcessController:
 
     def start_fill_and_measure(self, confirmation_text: str) -> dict[str, Any]:
         with self._lock:
-            if self.is_running:
-                return self._result(False, "Ein Prozess läuft bereits.")
+            if self.is_running or self._thread_is_alive_locked() or self._teardown_in_progress:
+                return self._result(
+                    False,
+                    "Start blockiert: Prozess, Hintergrundthread oder Cleanup läuft noch.",
+                )
 
             self.last_start_request = datetime.now().isoformat(timespec="seconds")
             self.last_error = None
@@ -135,8 +146,15 @@ class ProcessController:
             return self._result(False, message)
 
         with self._lock:
+            if self.is_running or self._thread_is_alive_locked() or self._teardown_in_progress:
+                return self._result(
+                    False,
+                    "Start blockiert: Prozess, Hintergrundthread oder Cleanup läuft noch.",
+                )
+
             self.is_running = True
             self._stop_requested = False
+            self._teardown_in_progress = False
             self.last_error = None
             self.last_message = "Fill-and-Measure-Prozess wird gestartet."
             self.display_state = "START_REQUESTED"
@@ -144,16 +162,20 @@ class ProcessController:
             self._thread = threading.Thread(
                 target=self._run_fill_and_measure,
                 args=(settings,),
-                daemon=True,
+                daemon=False,
+                name="cds-fill-and-measure",
             )
             self._thread.start()
 
         return self._result(True, "Fill-and-Measure-Prozess gestartet.")
 
     def emergency_stop(self) -> dict[str, Any]:
+        thread_to_join: threading.Thread | None = None
+
         with self._lock:
             self._stop_requested = True
             self.last_message = "Emergency Stop requested from NiceGUI."
+            self.display_state = "EMERGENCY_STOP_REQUESTED"
 
             try:
                 if self.state_machine is not None:
@@ -167,21 +189,63 @@ class ProcessController:
             except Exception as exc:
                 self.last_error = f"Actuator emergency stop failed: {exc}"
 
-            self.is_running = False
+            if self._thread_is_alive_locked():
+                thread_to_join = self._thread
 
-        return self._result(True, "Emergency Stop wurde ausgelöst.")
+        if thread_to_join is not None and thread_to_join is not threading.current_thread():
+            thread_to_join.join(timeout=2.0)
+
+        with self._lock:
+            if self._thread_is_alive_locked():
+                return self._result(
+                    True,
+                    "Emergency Stop wurde ausgelöst. Cleanup läuft noch.",
+                )
+
+        return self._result(True, "Emergency Stop wurde ausgelöst und bestätigt.")
+
+    def shutdown(self, timeout_seconds: float = 5.0) -> dict[str, Any]:
+        """
+        Für späteren NiceGUI/App-Shutdown:
+        Stop anfordern, Aktoren abschalten, Thread kurz joinen.
+        """
+        thread_to_join: threading.Thread | None = None
+
+        with self._lock:
+            self._stop_requested = True
+            self.last_message = "Controller shutdown requested."
+            self.display_state = "SHUTDOWN_REQUESTED"
+
+            try:
+                if self.actuators is not None:
+                    self.actuators.safe_shutdown_all()
+            except Exception as exc:
+                self.last_error = f"Actuator shutdown failed: {exc}"
+
+            if self._thread_is_alive_locked():
+                thread_to_join = self._thread
+
+        if thread_to_join is not None and thread_to_join is not threading.current_thread():
+            thread_to_join.join(timeout=timeout_seconds)
+
+        with self._lock:
+            if self._thread_is_alive_locked():
+                return self._result(False, "Shutdown timeout: Hintergrundthread läuft noch.")
+
+        return self._result(True, "Controller shutdown abgeschlossen.")
 
     def acknowledge_error(self) -> dict[str, Any]:
         with self._lock:
-            thread_alive = self._thread is not None and self._thread.is_alive()
+            thread_alive = self._thread_is_alive_locked()
 
-            if self.is_running or thread_alive:
+            if self.is_running or thread_alive or self._teardown_in_progress:
                 return self._result(
                     False,
-                    "Reset blockiert: Prozess oder Hintergrundthread läuft noch."
+                    "Reset blockiert: Prozess, Hintergrundthread oder Cleanup läuft noch."
                 )
 
             self._stop_requested = False
+            self._teardown_in_progress = False
             self._thread = None
             self.state_machine = None
             self.actuators = None
@@ -249,77 +313,104 @@ class ProcessController:
                 self.process_logger = process_logger
                 self.state_machine = state_machine
                 self.last_message = "State Machine initialized."
+                self.display_state = "STATE_MACHINE_INITIALIZED"
 
-            state_machine.start()
-            self._publish_status()
-            self._log_step()
+                if self._stop_requested:
+                    state_machine.error("Stop requested before process start.")
+                    return
 
-            while not state_machine.is_done:
-                with self._lock:
-                    if self._stop_requested:
-                        state_machine.error("Stop requested from NiceGUI.")
-                        break
-
-                state_machine.update()
+                state_machine.start()
                 self._publish_status()
                 self._log_step()
+
+            while True:
+                with self._lock:
+                    if self._stop_requested:
+                        if state_machine.error_message is None:
+                            state_machine.error("Stop requested from NiceGUI.")
+                        else:
+                            state_machine.safe_shutdown()
+                        break
+
+                    if state_machine.is_done:
+                        break
+
+                    state_machine.update()
+                    self._publish_status()
+                    self._log_step()
 
                 time.sleep(0.5)
 
         except Exception as exc:
             self._set_error(f"Process failed: {exc}")
 
-            try:
-                if self.state_machine is not None:
-                    self.state_machine.safe_shutdown()
-            except Exception:
-                pass
+            with self._lock:
+                try:
+                    if self.state_machine is not None:
+                        self.state_machine.safe_shutdown()
+                except Exception:
+                    pass
 
-            try:
-                if self.actuators is not None:
-                    self.actuators.safe_shutdown_all()
-            except Exception:
-                pass
+                try:
+                    if self.actuators is not None:
+                        self.actuators.safe_shutdown_all()
+                except Exception:
+                    pass
 
         finally:
-            try:
-                if self.state_machine is not None:
-                    self.state_machine.safe_shutdown()
-            except Exception:
-                pass
-
-            try:
-                self._publish_status()
-            except Exception:
-                pass
-
-            try:
-                self._log_step()
-            except Exception:
-                pass
-
-            try:
-                if self.mqtt_publisher is not None:
-                    self.mqtt_publisher.close()
-            except Exception:
-                pass
-
-            try:
-                if self.actuators is not None:
-                    self.actuators.close_all()
-            except Exception:
-                pass
-
-            try:
-                if self.process_logger is not None:
-                    self.process_logger.close()
-            except Exception:
-                pass
-
             with self._lock:
+                self._teardown_in_progress = True
+                self.display_state = "TEARDOWN"
+                self.last_message = "Fill-and-Measure cleanup läuft."
+
+                try:
+                    if self.state_machine is not None:
+                        self.state_machine.safe_shutdown()
+                except Exception:
+                    pass
+
+                try:
+                    if self.actuators is not None:
+                        self.actuators.safe_shutdown_all()
+                except Exception:
+                    pass
+
+                try:
+                    self._publish_status()
+                except Exception:
+                    pass
+
+                try:
+                    self._log_step()
+                except Exception:
+                    pass
+
+                try:
+                    if self.mqtt_publisher is not None:
+                        self.mqtt_publisher.close()
+                except Exception:
+                    pass
+
+                try:
+                    if self.actuators is not None:
+                        self.actuators.close_all()
+                except Exception:
+                    pass
+
+                try:
+                    if self.process_logger is not None:
+                        self.process_logger.close()
+                except Exception:
+                    pass
+
                 self.is_running = False
                 self._stop_requested = False
+                self._teardown_in_progress = False
                 self.last_message = "Fill-and-Measure-Prozess beendet."
+
+                if self.last_error is None and self.state_machine is not None:
+                    if self.state_machine.error_message:
+                        self.last_error = self.state_machine.error_message
 
     def _publish_status(self) -> None:
         if self.mqtt_publisher is None or self.state_machine is None:
