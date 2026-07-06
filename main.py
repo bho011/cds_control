@@ -75,6 +75,19 @@ def cmd_preflight() -> int:
 
 
 def cmd_water_cycle() -> int:
+    print("[INFO] Running safety preflight before water-cycle.")
+    print()
+
+    preflight_result = cmd_preflight()
+    if preflight_result != 0:
+        print()
+        print("[BLOCKED] Water-cycle not started because preflight failed.")
+        return preflight_result
+
+    print()
+    print("[OK] Safety preflight passed. Starting water-cycle.")
+    print()
+
     return run_python_module("process.water_cycle")
 
 
