@@ -3,6 +3,12 @@ from typing import Any
 from nicegui import ui
 
 from nicegui_dashboard.cds_controller import CdsController
+from nicegui_dashboard.recipe_store import (
+    get_active_recipe,
+    get_recipe_by_slot,
+    load_recipe_book,
+    save_recipe_to_slot,
+)
 
 
 def fmt(value: Any, unit: str = "", decimals: int = 2) -> str:
@@ -153,8 +159,47 @@ def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
     }
 
 
+
+def number_or_zero(value: Any) -> float:
+    try:
+        if value is None or value == "":
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def int_or_zero(value: Any) -> int:
+    return int(round(number_or_zero(value)))
+
+
+def yes_no(value: Any) -> str:
+    return "ja" if value is True else "nein"
+
+
+def recipe_summary(recipe: dict[str, Any]) -> str:
+    return (
+        f"Tank={recipe.get('target_tank', '-')} | "
+        f"Wasser={recipe.get('target_fill_total_liters', '-')} L | "
+        f"EC={recipe.get('target_ec_ms_cm', '-')} mS/cm | "
+        f"pH={recipe.get('target_ph', '-')}"
+    )
+
+
+def dosing_summary(recipe: dict[str, Any]) -> str:
+    return (
+        f"Stock1={recipe.get('volume_stock_1_ml', '-')} ml | "
+        f"Stock2={recipe.get('volume_stock_2_ml', '-')} ml | "
+        f"Acid1={recipe.get('volume_acid_1_ml', '-')} ml | "
+        f"Acid2={recipe.get('volume_acid_2_ml', '-')} ml | "
+        f"Base={recipe.get('volume_base_ml', '-')} ml | "
+        f"Addons={recipe.get('addon_1_ml', '-')} / {recipe.get('addon_2_ml', '-')} ml"
+    )
+
 def create_dashboard_page(controller: CdsController) -> None:
-    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=grid2">')
+    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=recipe1">')
+
+    recipe_state: dict[str, Any] = {"book": load_recipe_book()}
 
     with ui.column().classes("dashboard-root gap-5"):
         with ui.row().classes("w-full items-start justify-between"):
@@ -290,19 +335,105 @@ def create_dashboard_page(controller: CdsController) -> None:
     
                     with ui.card().classes("panel recipe-panel"):
                         ui.label("Rezept / Sollwerte").classes("panel-title")
-                        ui.label("Aktuelle Werte aus process_settings.json").classes(
+                        ui.label("Aktives Rezept aus recipes/dashboard_recipes.json").classes(
                             "panel-subtitle"
                         )
-    
+
+                        recipe_name_label = ui.label("Rezept: -").classes("recipe-name")
+                        recipe_summary_label = ui.label("-").classes("recipe-summary")
+                        recipe_dosing_label = ui.label("-").classes("recipe-detail")
+                        recipe_process_label = ui.label("-").classes("recipe-detail")
+
+                        with ui.row().classes("recipe-favorites-row"):
+                            favorite_badges = {
+                                1: ui.label("F1").classes("recipe-favorite-badge"),
+                                2: ui.label("F2").classes("recipe-favorite-badge"),
+                                3: ui.label("F3").classes("recipe-favorite-badge"),
+                            }
+
+                        with ui.row().classes("w-full gap-3 mt-3"):
+                            edit_recipe_button = ui.button("Rezept bearbeiten").classes(
+                                "flex-1 font-bold"
+                            ).props("color=primary")
+                            apply_recipe_button = ui.button("Aktives Rezept anzeigen").classes(
+                                "flex-1 font-bold"
+                            ).props("color=secondary outline")
+
                         hardware_enabled_label = ui.label(
                             "hardware_execution_enabled: -"
-                        ).classes("warn-text")
-                        fill_settings_label = ui.label("Settings: -").classes(
+                        ).classes("warn-text mt-3")
+                        fill_settings_label = ui.label("Water-cycle settings: -").classes(
                             "text-sm text-slate-300"
                         )
                         required_text_label = ui.label(
                             "required_confirmation_text: -"
                         ).classes("text-sm text-slate-400")
+
+                        with ui.dialog() as recipe_dialog, ui.card().classes("recipe-dialog-card"):
+                            ui.label("Recipe Editor").classes("panel-title")
+                            ui.label(
+                                "Drei Favoriten können gespeichert werden. Aktuell nur Visualisierung und JSON-Ablage, noch keine Peristaltiksteuerung."
+                            ).classes("panel-subtitle")
+
+                            with ui.row().classes("w-full gap-3"):
+                                recipe_slot_select = ui.select(
+                                    options=[1, 2, 3],
+                                    value=int(recipe_state["book"].get("active_slot", 1)),
+                                    label="Favorit-Slot",
+                                ).classes("control-input flex-1")
+                                recipe_make_active_switch = ui.switch(
+                                    "Als aktives Rezept setzen",
+                                    value=True,
+                                ).classes("text-slate-200")
+
+                            recipe_name_input = ui.input("Rezeptname").classes(
+                                "control-input w-full"
+                            )
+                            target_tank_input = ui.input("Tank Selection").classes(
+                                "control-input w-full"
+                            )
+                            target_fill_input = ui.number(
+                                "Zielmenge Mixing Tank", suffix="L", min=0, max=200
+                            ).classes("control-input w-full")
+
+                            with ui.row().classes("w-full gap-4"):
+                                with ui.column().classes("recipe-form-section"):
+                                    ui.label("EC").classes("recipe-section-title")
+                                    target_ec_input = ui.number("EC Sollwert", suffix="mS/cm", min=0)
+                                    ec_mixing_time_input = ui.number("Mixing time", suffix="s", min=0)
+                                    volume_stock_1_input = ui.number("Volume Stock 1", suffix="ml", min=0)
+                                    volume_stock_2_input = ui.number("Volume Stock 2", suffix="ml", min=0)
+                                    volume_ro_correction_input = ui.number("Volume RO - cor.", suffix="L", min=0)
+                                    ec_adjustment_factor_input = ui.number("Adjustment factor", min=0)
+
+                                with ui.column().classes("recipe-form-section"):
+                                    ui.label("pH").classes("recipe-section-title")
+                                    target_ph_input = ui.number("pH Sollwert", min=0, max=14)
+                                    volume_acid_1_input = ui.number("Volume acid 1", suffix="ml", min=0)
+                                    volume_acid_2_input = ui.number("Volume acid 2", suffix="ml", min=0)
+                                    volume_base_input = ui.number("Volume base", suffix="ml", min=0)
+                                    ph_mixing_time_input = ui.number("Mixing time", suffix="s", min=0)
+                                    ph_adjustment_factor_input = ui.number("Adjustment factor", min=0)
+
+                                with ui.column().classes("recipe-form-section"):
+                                    ui.label("Addons / Prozess").classes("recipe-section-title")
+                                    addon_1_input = ui.number("Addon 1", suffix="ml", min=0)
+                                    addon_2_input = ui.number("Addon 2", suffix="ml", min=0)
+                                    sensor_circulation_switch = ui.switch("Sensorzirkulation", value=True)
+                                    sensor_pump_seconds_input = ui.number("Sensorpumpenzeit", suffix="s", min=0)
+                                    drain_after_process_switch = ui.switch("Drain nach Prozess", value=False)
+
+                            recipe_notes_input = ui.textarea("Notiz").classes(
+                                "control-input w-full"
+                            )
+
+                            with ui.row().classes("w-full justify-end gap-3"):
+                                ui.button("Abbrechen", on_click=recipe_dialog.close).props(
+                                    "color=grey outline"
+                                )
+                                save_recipe_button = ui.button("Rezept speichern").props(
+                                    "color=positive"
+                                )
     
                 with ui.column().classes("gap-5 w-full area-side"):
                     with ui.card().classes("panel"):
@@ -387,6 +518,122 @@ def create_dashboard_page(controller: CdsController) -> None:
             gauge["liters"].set_text("-")
 
         gauge["percent"].set_text(f"{fmt(percent, '%')}")
+
+    def update_recipe_card() -> None:
+        recipe_book = recipe_state["book"]
+        active_slot = int(recipe_book.get("active_slot", 1))
+        active_recipe = get_active_recipe(recipe_book)
+
+        recipe_name_label.set_text(
+            f"Favorit {active_slot}: {active_recipe.get('recipe_name', '-')}"
+        )
+        recipe_summary_label.set_text(recipe_summary(active_recipe))
+        recipe_dosing_label.set_text(dosing_summary(active_recipe))
+        recipe_process_label.set_text(
+            f"Sensorzirkulation={yes_no(active_recipe.get('sensor_circulation_enabled'))} | "
+            f"Sensorpumpe={active_recipe.get('sensor_pump_seconds', '-')} s | "
+            f"Drain danach={yes_no(active_recipe.get('drain_after_process'))}"
+        )
+
+        for slot, badge in favorite_badges.items():
+            recipe = get_recipe_by_slot(recipe_book, slot)
+            badge.set_text(f"F{slot}: {recipe.get('recipe_name', '-')}")
+            badge.classes(remove="recipe-favorite-active")
+            if slot == active_slot:
+                badge.classes("recipe-favorite-active")
+
+    def load_recipe_form_from_slot() -> None:
+        recipe_book = recipe_state["book"]
+        slot = int(recipe_slot_select.value or 1)
+        recipe = get_recipe_by_slot(recipe_book, slot)
+
+        recipe_name_input.value = recipe.get("recipe_name", "")
+        target_tank_input.value = recipe.get("target_tank", "")
+        target_fill_input.value = recipe.get("target_fill_total_liters", 0)
+
+        target_ec_input.value = recipe.get("target_ec_ms_cm", 0)
+        ec_mixing_time_input.value = recipe.get("ec_mixing_time_seconds", 0)
+        volume_stock_1_input.value = recipe.get("volume_stock_1_ml", 0)
+        volume_stock_2_input.value = recipe.get("volume_stock_2_ml", 0)
+        volume_ro_correction_input.value = recipe.get("volume_ro_correction_liters", 0)
+        ec_adjustment_factor_input.value = recipe.get("ec_adjustment_factor", 0)
+
+        target_ph_input.value = recipe.get("target_ph", 0)
+        volume_acid_1_input.value = recipe.get("volume_acid_1_ml", 0)
+        volume_acid_2_input.value = recipe.get("volume_acid_2_ml", 0)
+        volume_base_input.value = recipe.get("volume_base_ml", 0)
+        ph_mixing_time_input.value = recipe.get("ph_mixing_time_seconds", 0)
+        ph_adjustment_factor_input.value = recipe.get("ph_adjustment_factor", 0)
+
+        addon_1_input.value = recipe.get("addon_1_ml", 0)
+        addon_2_input.value = recipe.get("addon_2_ml", 0)
+        sensor_circulation_switch.value = bool(recipe.get("sensor_circulation_enabled", True))
+        sensor_pump_seconds_input.value = recipe.get("sensor_pump_seconds", 0)
+        drain_after_process_switch.value = bool(recipe.get("drain_after_process", False))
+        recipe_notes_input.value = recipe.get("notes", "")
+
+    def open_recipe_dialog() -> None:
+        recipe_state["book"] = load_recipe_book()
+        recipe_slot_select.value = int(recipe_state["book"].get("active_slot", 1))
+        recipe_make_active_switch.value = True
+        load_recipe_form_from_slot()
+        recipe_dialog.open()
+
+    def handle_apply_active_recipe() -> None:
+        recipe_state["book"] = load_recipe_book()
+        update_recipe_card()
+        active_recipe = get_active_recipe(recipe_state["book"])
+        ui.notify(
+            f"Aktives Rezept geladen: {active_recipe.get('recipe_name', '-')}",
+            color="positive",
+        )
+        add_log(f"[RECIPE] Aktives Rezept: {active_recipe.get('recipe_name', '-')}")
+
+    def handle_save_recipe() -> None:
+        slot = int(recipe_slot_select.value or 1)
+        recipe = {
+            "recipe_name": recipe_name_input.value or f"Favorit {slot}",
+            "target_tank": target_tank_input.value or "Ch 1 - T1",
+            "target_fill_total_liters": number_or_zero(target_fill_input.value),
+
+            "target_ec_ms_cm": number_or_zero(target_ec_input.value),
+            "ec_mixing_time_seconds": int_or_zero(ec_mixing_time_input.value),
+            "volume_stock_1_ml": number_or_zero(volume_stock_1_input.value),
+            "volume_stock_2_ml": number_or_zero(volume_stock_2_input.value),
+            "volume_ro_correction_liters": number_or_zero(volume_ro_correction_input.value),
+            "ec_adjustment_factor": number_or_zero(ec_adjustment_factor_input.value),
+
+            "target_ph": number_or_zero(target_ph_input.value),
+            "volume_acid_1_ml": number_or_zero(volume_acid_1_input.value),
+            "volume_acid_2_ml": number_or_zero(volume_acid_2_input.value),
+            "volume_base_ml": number_or_zero(volume_base_input.value),
+            "ph_mixing_time_seconds": int_or_zero(ph_mixing_time_input.value),
+            "ph_adjustment_factor": number_or_zero(ph_adjustment_factor_input.value),
+
+            "addon_1_ml": number_or_zero(addon_1_input.value),
+            "addon_2_ml": number_or_zero(addon_2_input.value),
+            "sensor_circulation_enabled": bool(sensor_circulation_switch.value),
+            "sensor_pump_seconds": int_or_zero(sensor_pump_seconds_input.value),
+            "drain_after_process": bool(drain_after_process_switch.value),
+            "notes": recipe_notes_input.value or "",
+        }
+
+        recipe_state["book"] = save_recipe_to_slot(
+            slot=slot,
+            recipe=recipe,
+            make_active=bool(recipe_make_active_switch.value),
+        )
+
+        update_recipe_card()
+        recipe_dialog.close()
+        ui.notify("Rezept gespeichert.", color="positive")
+        add_log(f"[RECIPE] Favorit {slot} gespeichert: {recipe['recipe_name']}")
+
+    edit_recipe_button.on_click(open_recipe_dialog)
+    apply_recipe_button.on_click(handle_apply_active_recipe)
+    save_recipe_button.on_click(handle_save_recipe)
+    recipe_slot_select.on_value_change(lambda _: load_recipe_form_from_slot())
+    update_recipe_card()
 
     def handle_start() -> None:
         control_data = controller.get_process_control_status()
