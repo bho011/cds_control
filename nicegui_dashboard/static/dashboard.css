@@ -521,3 +521,315 @@ body {
 .recipe-dialog-card .q-toggle__label {
     color: #e5eefb;
 }
+
+/* =========================================================
+   Recipe editor wide layout fix
+   ========================================================= */
+
+.recipe-dialog-card {
+    width: min(1280px, 96vw) !important;
+    max-width: none !important;
+}
+
+.q-dialog__inner > .recipe-dialog-card {
+    width: min(1280px, 96vw) !important;
+    max-width: none !important;
+}
+
+.recipe-form-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(260px, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.recipe-form-section {
+    width: 100%;
+    min-width: 0;
+}
+
+.recipe-form-section .q-field,
+.recipe-form-section .nicegui-input,
+.recipe-form-section .nicegui-number,
+.recipe-form-section .nicegui-textarea {
+    width: 100% !important;
+}
+
+.recipe-dialog-card .q-field {
+    width: 100%;
+}
+
+.recipe-dialog-card .q-field__suffix,
+.recipe-dialog-card .q-field__prefix {
+    color: #cbd5e1 !important;
+}
+
+.recipe-dialog-card .q-field__label {
+    color: #cbd5e1 !important;
+}
+
+.recipe-dialog-card .q-field__native,
+.recipe-dialog-card .q-field__input {
+    color: #f8fafc !important;
+}
+
+@media (max-width: 1100px) {
+    .recipe-form-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* =========================================================
+   Recipe editor padding / spacing refinement
+   ========================================================= */
+
+.recipe-dialog-card {
+    padding: 28px 32px 30px 32px !important;
+    gap: 18px;
+}
+
+.recipe-dialog-card > .q-card__section,
+.recipe-dialog-card > div {
+    box-sizing: border-box;
+}
+
+.recipe-dialog-card .q-field {
+    margin-bottom: 10px;
+}
+
+.recipe-dialog-card .q-toggle {
+    margin-top: 8px;
+    margin-bottom: 12px;
+}
+
+.recipe-form-grid {
+    margin-top: 14px;
+    margin-bottom: 18px;
+    gap: 18px !important;
+}
+
+.recipe-form-section {
+    padding: 20px 22px !important;
+}
+
+.recipe-section-title {
+    margin-bottom: 14px !important;
+}
+
+.recipe-dialog-card textarea {
+    min-height: 90px;
+}
+
+.recipe-dialog-card .q-textarea {
+    margin-top: 8px;
+}
+
+.recipe-dialog-card .q-btn {
+    min-height: 42px;
+    padding-left: 18px;
+    padding-right: 18px;
+}
+
+/* Top area: slot + active switch cleaner */
+.recipe-dialog-card > .nicegui-row:first-of-type {
+    align-items: center;
+    margin-top: 12px;
+    margin-bottom: 8px;
+}
+
+/* Give the first recipe fields more breathing room */
+.recipe-dialog-card .control-input {
+    margin-bottom: 10px;
+}
+
+/* Prevent inputs from feeling glued to section borders */
+.recipe-form-section .q-field:first-of-type {
+    margin-top: 2px;
+}
+
+.recipe-form-section .q-field:last-child {
+    margin-bottom: 0;
+}
+
+/* =========================================================
+   Recipe editor top fields layout fix
+   ========================================================= */
+
+.recipe-dialog-card {
+    padding: 34px 38px 34px 38px !important;
+}
+
+.recipe-top-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 18px;
+    margin-top: 18px;
+    margin-bottom: 18px;
+}
+
+.recipe-top-grid .q-field {
+    width: 100%;
+    margin-bottom: 0 !important;
+}
+
+.recipe-dialog-card .q-field__control {
+    min-height: 56px;
+}
+
+.recipe-dialog-card .q-field {
+    border-radius: 14px;
+}
+
+.recipe-form-grid {
+    margin-top: 22px !important;
+}
+
+@media (max-width: 1100px) {
+    .recipe-top-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* =========================================================
+   Recipe editor top fields layout fix
+   ========================================================= */
+
+.recipe-dialog-card {
+    padding: 34px 38px 34px 38px !important;
+}
+
+.recipe-top-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 18px;
+    margin-top: 18px;
+    margin-bottom: 18px;
+}
+
+.recipe-top-grid .q-field {
+    width: 100%;
+    margin-bottom: 0 !important;
+}
+
+.recipe-dialog-card .q-field__control {
+    min-height: 56px;
+}
+
+.recipe-dialog-card .q-field {
+    border-radius: 14px;
+}
+
+.recipe-form-grid {
+    margin-top: 22px !important;
+}
+
+@media (max-width: 1100px) {
+    .recipe-top-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* =========================================================
+   Recipe editor input inner padding fix
+   ========================================================= */
+
+.recipe-dialog-card .q-field__control {
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+    min-height: 60px !important;
+}
+
+.recipe-dialog-card .q-field__native,
+.recipe-dialog-card .q-field__input {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+    padding-top: 18px !important;
+    font-size: 14px !important;
+    line-height: 1.4 !important;
+}
+
+.recipe-dialog-card .q-field__label {
+    left: 14px !important;
+    top: 16px !important;
+    font-size: 12px !important;
+    color: #cbd5e1 !important;
+}
+
+.recipe-dialog-card .q-field--float .q-field__label {
+    transform: translateY(-40%) scale(0.82) !important;
+}
+
+.recipe-dialog-card .q-field__suffix {
+    padding-right: 8px !important;
+    padding-left: 8px !important;
+    color: #cbd5e1 !important;
+}
+
+.recipe-dialog-card .q-textarea .q-field__native {
+    padding-top: 22px !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+    min-height: 90px !important;
+}
+
+.recipe-dialog-card .q-toggle__label {
+    padding-left: 10px !important;
+}
+
+/* =========================================================
+   Recipe editor input label alignment refinement
+   ========================================================= */
+
+.recipe-dialog-card .q-field__control {
+    min-height: 60px !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+
+.recipe-dialog-card .q-field__native,
+.recipe-dialog-card .q-field__input {
+    padding-left: 18px !important;
+    padding-right: 18px !important;
+    padding-top: 20px !important;
+    padding-bottom: 8px !important;
+    font-size: 15px !important;
+    line-height: 1.25 !important;
+}
+
+.recipe-dialog-card .q-field__label {
+    left: 18px !important;
+    top: 10px !important;
+    font-size: 11px !important;
+    line-height: 1.1 !important;
+    color: #cbd5e1 !important;
+    transform: none !important;
+}
+
+.recipe-dialog-card .q-field--float .q-field__label {
+    transform: none !important;
+}
+
+.recipe-dialog-card .q-field__suffix {
+    padding-right: 18px !important;
+    padding-left: 8px !important;
+    align-self: center !important;
+    color: #cbd5e1 !important;
+    font-size: 14px !important;
+}
+
+.recipe-dialog-card .q-field--focused .q-field__control {
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.55) inset !important;
+}
+
+.recipe-dialog-card .q-field--focused .q-field__label {
+    color: #93c5fd !important;
+}
+
+/* Number input spinner less intrusive */
+.recipe-dialog-card input[type="number"]::-webkit-inner-spin-button,
+.recipe-dialog-card input[type="number"]::-webkit-outer-spin-button {
+    opacity: 0.55;
+}

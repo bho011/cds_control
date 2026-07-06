@@ -197,7 +197,7 @@ def dosing_summary(recipe: dict[str, Any]) -> str:
     )
 
 def create_dashboard_page(controller: CdsController) -> None:
-    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=recipe1">')
+    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=recipe6">')
 
     recipe_state: dict[str, Any] = {"book": load_recipe_book()}
 
@@ -386,17 +386,18 @@ def create_dashboard_page(controller: CdsController) -> None:
                                     value=True,
                                 ).classes("text-slate-200")
 
-                            recipe_name_input = ui.input("Rezeptname").classes(
-                                "control-input w-full"
-                            )
-                            target_tank_input = ui.input("Tank Selection").classes(
-                                "control-input w-full"
-                            )
-                            target_fill_input = ui.number(
-                                "Zielmenge Mixing Tank", suffix="L", min=0, max=200
-                            ).classes("control-input w-full")
+                            with ui.element("div").classes("recipe-top-grid"):
+                                recipe_name_input = ui.input("Rezeptname").classes(
+                                    "control-input"
+                                )
+                                target_tank_input = ui.input("Tank Selection").classes(
+                                    "control-input"
+                                )
+                                target_fill_input = ui.number(
+                                    "Zielmenge Mixing Tank", suffix="L", min=0, max=200
+                                ).classes("control-input")
 
-                            with ui.row().classes("w-full gap-4"):
+                            with ui.element("div").classes("recipe-form-grid"):
                                 with ui.column().classes("recipe-form-section"):
                                     ui.label("EC").classes("recipe-section-title")
                                     target_ec_input = ui.number("EC Sollwert", suffix="mS/cm", min=0)
