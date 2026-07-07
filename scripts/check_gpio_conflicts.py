@@ -9,7 +9,8 @@ Allowed:
 Critical for Python CDS:
     GPIO20 -> mixer_refill_pump
     GPIO21 -> valve_0_drain
-    GPIO22 -> contactor_2 / sensor circulation pump
+    GPIO22 -> sensor_circulation_pump
+    GPIO23 -> mixing_circulation_pump
     GPIO26 -> transfer_pump
 """
 
@@ -23,7 +24,8 @@ import sys
 CRITICAL_GPIO_PINS = {
     20: "mixer_refill_pump",
     21: "valve_0_drain",
-    22: "contactor_2 / sensor_circulation_pump",
+    22: "sensor_circulation_pump",
+    23: "mixing_circulation_pump",
     26: "transfer_pump",
 }
 

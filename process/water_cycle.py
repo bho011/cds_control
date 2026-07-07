@@ -6,15 +6,14 @@ from services.mqtt_publisher import MqttPublisher
 from services.process_run_logger import ProcessRunLogger
 from services.sensor_snapshot import SensorSnapshotReader
 
+from .auto_circulation import AutoCirculationController, load_auto_circulation_config
 from .common import (
     load_settings,
     require_hardware_confirmation,
-    confirm_sensor_pump,
     confirm_drain,
     publish_process_status,
 )
 from .refill import run_fill_phase
-from .sensor_circulation import run_sensor_pump_phase
 from .drain import run_drain_phase
 
 
@@ -24,28 +23,33 @@ def main():
     print()
     print("Ablauf:")
     print("1. RO Refill Pump füllt den Mixing Tank bis zum absoluten Zielwert.")
-    print("2. Optional läuft die Sensorpumpe über contactor_2.")
-    print("3. Sensorpumpenphase kann mit 'stop' + Enter beendet werden.")
+    print("2. Ab auto_circulation_start_liters laufen die Zirkulationspumpen automatisch.")
+    print("3. Unter auto_circulation_stop_liters werden die Zirkulationspumpen automatisch abgeschaltet.")
     print("4. Danach wird gefragt, ob über Transferpumpe + Valve_0_Drain geleert wird.")
     print()
     print("Wichtig:")
     print("- RO-Leitung muss direkt in den Mixing Tank führen.")
-    print("- Sensorpumpe hängt an contactor_2.")
+    print("- Sensor-Circulation-Pump wird automatisch füllstandsabhängig gesteuert.")
+    print("- Mixing-Circulation-Pump wird automatisch füllstandsabhängig gesteuert.")
     print("- Transferpumpe hängt an transfer_pump.")
     print("- Drain läuft über Valve_0_Drain.")
     print("- Keine Chemie, kein Routing zu Solution Tanks.")
     print()
 
     settings = load_settings()
+    auto_circulation_config = load_auto_circulation_config(settings)
 
     print("Settings:")
     print(f"- target_fill_total_liters: {settings.get('target_fill_total_liters')}")
     print(f"- max_fill_seconds: {settings.get('max_fill_seconds')}")
-    print(f"- sensor_pump_seconds: {settings.get('sensor_pump_seconds')}")
     print(f"- transfer_pump_liters_per_minute: {settings.get('transfer_pump_liters_per_minute')}")
     print(f"- drain_timeout_buffer_seconds: {settings.get('drain_timeout_buffer_seconds')}")
     print(f"- empty_threshold_liters: {settings.get('empty_threshold_liters')}")
     print(f"- hardware_execution_enabled: {settings.get('hardware_execution_enabled')}")
+    print(f"- auto_circulation_enabled: {auto_circulation_config.enabled}")
+    print(f"- auto_circulation_start_liters: {auto_circulation_config.start_liters}")
+    print(f"- auto_circulation_stop_liters: {auto_circulation_config.stop_liters}")
+    print(f"- auto_circulation_outputs: {auto_circulation_config.outputs}")
     print()
 
     confirm = input("Fortfahren? ja/nein: ").strip().lower()
@@ -60,6 +64,7 @@ def main():
     mqtt_publisher = None
     logger = None
     actuators = None
+    auto_circulation = None
 
     try:
         sensor_reader = SensorSnapshotReader()
@@ -83,7 +88,12 @@ def main():
 
         actuators.add(
             name="sensor_circulation_pump",
-            gpio_pin=OUTPUTS["contactor_2"],
+            gpio_pin=OUTPUTS["sensor_circulation_pump"],
+        )
+
+        actuators.add(
+            name="mixing_circulation_pump",
+            gpio_pin=OUTPUTS["mixing_circulation_pump"],
         )
 
         actuators.add(
@@ -96,12 +106,18 @@ def main():
             gpio_pin=OUTPUTS["valve_0_drain"],
         )
 
+        auto_circulation = AutoCirculationController(
+            actuators=actuators,
+            config=auto_circulation_config,
+        )
+
         fill_result = run_fill_phase(
             settings=settings,
             sensor_reader=sensor_reader,
             actuators=actuators,
             mqtt_publisher=mqtt_publisher,
             logger=logger,
+            auto_circulation=auto_circulation,
         )
 
         print()
@@ -124,37 +140,6 @@ def main():
             )
             return
 
-        sensor_result = None
-
-        if confirm_sensor_pump(settings):
-            sensor_result = run_sensor_pump_phase(
-                settings=settings,
-                sensor_reader=sensor_reader,
-                actuators=actuators,
-                mqtt_publisher=mqtt_publisher,
-                logger=logger,
-            )
-
-            print()
-            print(f"[SENSOR RESULT] success={sensor_result.success}, reason={sensor_result.stop_reason}")
-
-            if not sensor_result.success:
-                print()
-                print("[ABORT] Water-cycle wird nach fehlgeschlagener Sensorpumpenphase beendet.")
-
-                publish_process_status(
-                    mqtt_publisher,
-                    "WATER_CYCLE_ABORTED",
-                    actuators,
-                    error=sensor_result.stop_reason,
-                    details={
-                        "abort_phase": "sensor_circulation",
-                        "sensor_success": sensor_result.success,
-                        "sensor_stop_reason": sensor_result.stop_reason,
-                    },
-                )
-                return
-
         drain_result = None
 
         if confirm_drain(settings):
@@ -164,6 +149,7 @@ def main():
                 actuators=actuators,
                 mqtt_publisher=mqtt_publisher,
                 logger=logger,
+                auto_circulation=auto_circulation,
             )
 
             print()
@@ -176,8 +162,6 @@ def main():
             details={
                 "fill_success": fill_result.success,
                 "fill_stop_reason": fill_result.stop_reason,
-                "sensor_success": sensor_result.success if sensor_result else None,
-                "sensor_stop_reason": sensor_result.stop_reason if sensor_result else None,
                 "drain_success": drain_result.success if drain_result else None,
                 "drain_stop_reason": drain_result.stop_reason if drain_result else None,
             },
@@ -196,6 +180,9 @@ def main():
 
     finally:
         print("[SAFE] Shutdown all actuators.")
+
+        if auto_circulation is not None:
+            auto_circulation.stop()
 
         if actuators is not None:
             actuators.safe_shutdown_all()

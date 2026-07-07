@@ -11,7 +11,7 @@ from .common import (
 )
 
 
-def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -> PhaseResult:
+def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, auto_circulation=None) -> PhaseResult:
     print()
     print("[PHASE] FILL_ABSOLUTE")
     print("[INFO] RO refill line must lead directly into the Mixing Tank.")
@@ -84,6 +84,9 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -
 
             elapsed = time.monotonic() - fill_start_time
             metrics = read_metrics(sensor_reader, settings, level_history)
+
+            if auto_circulation is not None:
+                auto_circulation.update(metrics.mixer_liters_filtered)
 
             if metrics.mixer_liters_filtered is None:
                 stop_reason = "missing_mixer_level_during_fill"

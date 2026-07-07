@@ -18,7 +18,16 @@
   "level_filter_samples": 5,
   "target_reached_confirm_samples": 3,
   "valve_settle_seconds": 1.0,
-  "hardware_execution_enabled": false,
+  "hardware_execution_enabled": true,
   "required_confirmation_text": "confirmed",
-  "required_drain_confirmation_text": "drain_confirmed"
+  "required_drain_confirmation_text": "drain_confirmed",
+
+  "auto_circulation_enabled": true,
+  "auto_circulation_start_liters": 30.0,
+  "auto_circulation_stop_liters": 25.0,
+  
+  "auto_circulation_outputs": [
+  "sensor_circulation_pump",
+  "mixing_circulation_pump"
+]
 }

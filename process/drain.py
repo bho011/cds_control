@@ -11,7 +11,7 @@ from .common import (
 )
 
 
-def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) -> PhaseResult:
+def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, auto_circulation=None) -> PhaseResult:
     print()
     print("[PHASE] DRAIN_BY_PUMP_CAPACITY")
     print("[INFO] Sensor is used for early empty detection and trend logging.")
@@ -46,6 +46,9 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) 
     print(f"[DRAIN CALC] Expected drain time={expected_seconds:.1f}s")
     print(f"[DRAIN CALC] Max runtime with buffer={max_drain_seconds:.1f}s")
     print(f"[DRAIN TARGET] Empty threshold <= {empty_threshold:.2f} L for {empty_confirm_samples} samples")
+
+    if auto_circulation is not None:
+        auto_circulation.update(start_liters)
 
     drain_valve = actuators.get("drain_valve_0")
     transfer_pump = actuators.get("transfer_pump")
@@ -82,6 +85,9 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger) 
 
             elapsed = time.monotonic() - drain_start_time
             metrics = read_metrics(sensor_reader, settings, level_history)
+
+            if auto_circulation is not None:
+                auto_circulation.update(metrics.mixer_liters_filtered)
 
             if metrics.mixer_liters_filtered is not None:
                 final_liters = metrics.mixer_liters_filtered

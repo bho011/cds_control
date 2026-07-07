@@ -3,8 +3,8 @@
 OUTPUTS = {
     "contactor_0": 12,
     "mixer_refill_pump": 20, #phys. Contactor 1 / GPIO20 / PIN 38,
-    "contactor_2": 22, # phys. Contactor 2 / GPIO22 / PIN 15,
-    "contactor_3": 23, # phys. Contactor 3 / GPIO23 / PIN 16
+    "sensor_circulation_pump": 22, # phys. Contactor 2 / GPIO22 / PIN 15,
+    "mixing_circulation_pump": 23, # phys. Contactor 3 / GPIO23 / PIN 16
     "transfer_pump": 26, # phys. Transfer Pump / GPIO26 / PIN 37
     "contactor_5": 13,
 

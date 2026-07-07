@@ -54,7 +54,8 @@ CRITICAL_FILES = [
 
 REQUIRED_GPIO_KEYS = [
     "mixer_refill_pump",
-    "contactor_2",
+    "sensor_circulation_pump",
+    "mixing_circulation_pump",
     "transfer_pump",
     "valve_0_drain",
 ]
