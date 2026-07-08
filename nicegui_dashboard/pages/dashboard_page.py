@@ -57,11 +57,12 @@ def create_status_row(title: str, subtitle: str) -> dict[str, Any]:
     }
 
 
-def create_actuator_row(title: str, subtitle: str) -> dict[str, Any]:
+def create_actuator_row(title: str, subtitle: str = "") -> dict[str, Any]:
     with ui.row().classes("actuator-row"):
         with ui.column().classes("gap-0 flex-1"):
             ui.label(title).classes("actuator-title")
-            ui.label(subtitle).classes("actuator-subtitle")
+            if subtitle:
+                ui.label(subtitle).classes("actuator-subtitle")
 
         badge = ui.label("-").classes("actuator-badge badge-unknown")
 
@@ -217,7 +218,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                 ).props("outline color=grey-5 icon=terminal")
 
         with ui.element("div").classes("layout-grid w-full"):
-            with ui.column().classes("gap-5 w-full area-left"):
+            with ui.column().classes("gap-3 w-full area-left"):
                 with ui.card().classes("panel"):
                     ui.label("System Status").classes("panel-title")
                     ui.label("Communication and process modules").classes(
@@ -243,34 +244,22 @@ def create_dashboard_page(controller: CdsController) -> None:
 
                 with ui.card().classes("panel"):
                     ui.label("Actuators / Outputs").classes("panel-title")
-                    ui.label("Read-only MQTT state, no direct control").classes(
-                        "panel-subtitle"
-                    )
 
-                    mixer_refill_pump_row = create_actuator_row(
-                        "Mixer Refill Pump",
-                        "Contactor 1 / GPIO20 / Pin 38",
-                    )
-                    supply_valve_6_row = create_actuator_row(
-                        "Supply Valve 6",
-                        "Valve 6 / GPIO6 / Pin 31",
-                    )
-                    drain_valve_0_row = create_actuator_row(
-                        "Drain Valve 0",
-                        "validated drain / MQTT",
-                    )
-                    transfer_pump_row = create_actuator_row(
-                        "Transfer Pump",
-                        "future extension point",
-                    )
+                    mixer_refill_pump_row = create_actuator_row("Mixer Refill Pump")
+                    supply_valve_6_row = create_actuator_row("Supply Valve 6")
+                    drain_valve_0_row = create_actuator_row("Drain Valve 0")
+                    transfer_pump_row = create_actuator_row("Transfer Pump")
                     mixing_circulation_pump_row = create_actuator_row(
-                        "Mixing Circulation Pump",
-                        "optional from settings",
+                        "Mixing Circulation Pump"
                     )
                     sensor_circulation_pump_row = create_actuator_row(
-                        "Sensor Circulation Pump",
-                        "optional from settings",
+                        "Sensor Circulation Pump"
                     )
+                    valve_1_row = create_actuator_row("Valve 1")
+                    valve_2_row = create_actuator_row("Valve 2")
+                    valve_3_row = create_actuator_row("Valve 3")
+                    valve_4_row = create_actuator_row("Valve 4")
+                    valve_5_row = create_actuator_row("Valve 5")
 
                 with ui.dialog() as dev_info_dialog, ui.card().classes(
                     "recipe-dialog-card dev-info-dialog-card"
@@ -299,9 +288,9 @@ def create_dashboard_page(controller: CdsController) -> None:
                 with ui.column().classes("gap-5 w-full area-main"):
                     with ui.card().classes("panel process-state-panel"):
                         ui.label("Current Process State").classes("panel-title")
-                        ui.label("Live process state from MQTT and local controller").classes(
-                            "panel-subtitle"
-                        )
+                        #ui.label("Live process state from MQTT and local controller").classes(
+                        #    "panel-subtitle"
+                        #)
 
                         with ui.column().classes("process-display process-display-large"):
                             ui.label("Current state").classes("process-label")
@@ -410,9 +399,9 @@ def create_dashboard_page(controller: CdsController) -> None:
                 with ui.column().classes("gap-5 w-full area-side"):
                     with ui.card().classes("panel process-control-panel"):
                         ui.label("Process Control").classes("panel-title")
-                        ui.label("Start, reset, emergency stop and maintenance actions").classes(
-                            "panel-subtitle"
-                        )
+                        #ui.label("Start, reset, emergency stop and maintenance actions").classes(
+                        #    "panel-subtitle"
+                        #)
 
                         ui.label("Safety Confirmation").classes("control-section-title")
                         confirmation_input = ui.input(
@@ -466,9 +455,9 @@ def create_dashboard_page(controller: CdsController) -> None:
                 with ui.column().classes("gap-5 w-full area-data"):
                     with ui.card().classes("panel sensor-panel"):
                         ui.label("Sensor Values").classes("panel-title")
-                        ui.label("pH, EC, temperature and dissolved oxygen").classes(
-                            "panel-subtitle"
-                        )
+                        #ui.label("pH, EC, temperature and dissolved oxygen").classes(
+                        #    "panel-subtitle"
+                        #)
 
                         with ui.row().classes("w-full gap-3"):
                             ph_metric = create_metric_box("pH")
@@ -480,9 +469,9 @@ def create_dashboard_page(controller: CdsController) -> None:
 
                     with ui.card().classes("panel tank-panel"):
                         ui.label("Tanks / Levels").classes("panel-title")
-                        ui.label("Live values from the sensor MQTT bridge").classes(
-                            "panel-subtitle"
-                        )
+                        #ui.label("Live values from the sensor MQTT bridge").classes(
+                        #    "panel-subtitle"
+                        #)
 
                         with ui.column().classes("w-full gap-3"):
                             ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
@@ -814,6 +803,11 @@ def create_dashboard_page(controller: CdsController) -> None:
         set_actuator(transfer_pump_row, process_data["transfer_pump"])
         set_actuator(mixing_circulation_pump_row, process_data["mixing_circulation_pump"])
         set_actuator(sensor_circulation_pump_row, process_data["sensor_circulation_pump"])
+        set_actuator(valve_1_row, process_data["valve_1"])
+        set_actuator(valve_2_row, process_data["valve_2"])
+        set_actuator(valve_3_row, process_data["valve_3"])
+        set_actuator(valve_4_row, process_data["valve_4"])
+        set_actuator(valve_5_row, process_data["valve_5"])
 
         hardware_enabled = control_data["hardware_execution_enabled"]
 

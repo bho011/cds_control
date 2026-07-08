@@ -188,6 +188,11 @@ class CdsController:
             "sensor_circulation_pump": self._get_nested(
                 payload, "actuators", "sensor_circulation_pump"
             ),
+            "valve_1": self._get_nested(payload, "actuators", "valve_1"),
+            "valve_2": self._get_nested(payload, "actuators", "valve_2"),
+            "valve_3": self._get_nested(payload, "actuators", "valve_3"),
+            "valve_4": self._get_nested(payload, "actuators", "valve_4"),
+            "valve_5": self._get_nested(payload, "actuators", "valve_5"),
         }
 
     def close(self) -> None:
