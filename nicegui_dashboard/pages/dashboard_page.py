@@ -198,7 +198,7 @@ def dosing_summary(recipe: dict[str, Any]) -> str:
     )
 
 def create_dashboard_page(controller: CdsController) -> None:
-    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=control1">')
+    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=control2">')
 
     recipe_state: dict[str, Any] = {"book": load_recipe_book()}
 
@@ -473,7 +473,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                         #    "panel-subtitle"
                         #)
 
-                        with ui.column().classes("w-full gap-3"):
+                        with ui.column().classes("w-full gap-3 tank-gauge-stack"):
                             ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
                             mixer_tank_gauge = create_tank_gauge("Mixing Tank", max_percent=100)
     

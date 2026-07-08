@@ -238,7 +238,9 @@ body {
                 padding: 18px;
                 flex: 1;
                 width: 100%;
+                min-width: 0;
                 box-sizing: border-box;
+                overflow: hidden;
             }
 
             .tank-title {
@@ -984,4 +986,22 @@ body {
     min-width: 42px;
     padding: 4px 6px;
     font-size: 10.5px;
+}
+
+/* =========================================================
+   Tank gauge width stability
+   Flex/grid children default to min-width: auto, which lets
+   content (e.g. a longer liter value) push the card wider on
+   every refresh. Close the whole chain with min-width: 0 so
+   the card width is dictated only by the grid column, never
+   by its content.
+   ========================================================= */
+
+.tank-panel {
+    min-width: 0;
+}
+
+.tank-gauge-stack {
+    min-width: 0;
+    width: 100%;
 }

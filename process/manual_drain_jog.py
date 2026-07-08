@@ -77,7 +77,7 @@ class ManualDrainJog:
             )
             self._thread.start()
 
-        return self._result(True, "Manual Drain Jog started. Keep button pressed.")
+        return self._result(True, "Manual Drain started. Keep button pressed.")
 
     def stop(self, reason: str = "button_released") -> dict[str, Any]:
         thread_to_join: threading.Thread | None = None
@@ -93,9 +93,9 @@ class ManualDrainJog:
 
         with self._lock:
             if self.is_active():
-                return self._result(True, "Manual Drain Jog stop requested; cleanup still running.")
+                return self._result(True, "Manual Drain stop requested; cleanup still running.")
 
-        return self._result(True, "Manual Drain Jog stopped.")
+        return self._result(True, "Manual Drain stopped.")
 
     def shutdown(self) -> None:
         self.stop(reason="shutdown")
@@ -146,7 +146,7 @@ class ManualDrainJog:
             self._mqtt_publisher = MqttPublisher()
 
             drain_valve.on()
-            self._publish("MANUAL_DRAIN_JOG_VALVE_OPEN")
+            self._publish("Manual Drain: Valve Open")
 
             if self._stop_event.wait(self.valve_settle_seconds):
                 self._stop_reason = self._stop_reason or "button_released_before_pump_start"
@@ -154,8 +154,8 @@ class ManualDrainJog:
 
             transfer_pump.on()
             with self._lock:
-                self._last_message = "Manual Drain Jog running."
-            self._publish("MANUAL_DRAIN_JOG_RUNNING")
+                self._last_message = "Manual Drain running."
+            self._publish("Manual Drain: Running")
 
             started = time.monotonic()
             while not self._stop_event.is_set():
@@ -163,7 +163,7 @@ class ManualDrainJog:
                 if elapsed >= self.max_seconds:
                     with self._lock:
                         self._stop_reason = "max_runtime_reached"
-                        self._last_message = "Manual Drain Jog stopped by 30 s watchdog."
+                        self._last_message = "Manual Drain stopped by 30 s watchdog."
                     break
 
                 time.sleep(0.1)
@@ -187,7 +187,7 @@ class ManualDrainJog:
             except Exception:
                 pass
 
-            self._publish("MANUAL_DRAIN_JOG_STOPPED")
+            self._publish("Manual Drain: Stopped")
 
             try:
                 if self._actuators is not None:
@@ -210,8 +210,8 @@ class ManualDrainJog:
             with self._lock:
                 if self._stop_reason is None:
                     self._stop_reason = "button_released"
-                if self._last_error is None and self._last_message == "Manual Drain Jog running.":
-                    self._last_message = "Manual Drain Jog stopped."
+                if self._last_error is None and self._last_message == "Manual Drain running.":
+                    self._last_message = "Manual Drain stopped."
                 self._actuators = None
                 self._mqtt_publisher = None
 
