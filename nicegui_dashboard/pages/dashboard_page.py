@@ -146,7 +146,7 @@ def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
                     }
                 ],
             }
-        ).classes("w-full h-60")
+        ).classes("w-full h-52")
 
         liters_label = ui.label("-").classes("tank-liters")
         percent_label = ui.label("-").classes("tank-percent")
@@ -174,7 +174,7 @@ def int_or_zero(value: Any) -> int:
 
 
 def yes_no(value: Any) -> str:
-    return "ja" if value is True else "nein"
+    return "yes" if value is True else "no"
 
 
 def recipe_summary(recipe: dict[str, Any]) -> str:
@@ -197,7 +197,7 @@ def dosing_summary(recipe: dict[str, Any]) -> str:
     )
 
 def create_dashboard_page(controller: CdsController) -> None:
-    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=recipe6">')
+    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=control1">')
 
     recipe_state: dict[str, Any] = {"book": load_recipe_book()}
 
@@ -208,21 +208,19 @@ def create_dashboard_page(controller: CdsController) -> None:
                 with ui.column().classes("gap-0"):
                     ui.label("Central Dosing System Dashboard").classes("headline")
                     ui.label(
-                        "NiceGUI-HMI – Live-Sensorwerte über Python-Core-Anbindung auf dem Raspberry Pi."
+                        "NiceGUI HMI – live sensor values via Python core on Raspberry Pi."
                     ).classes("subtitle")
 
-            with ui.row().classes("gap-2"):
-                ui.label("RASPI LIVE").classes("top-badge badge-green")
-                ui.label("PYTHON CORE").classes("top-badge badge-blue")
-                last_update_badge = ui.label("Update: -").classes(
-                    "top-badge badge-orange"
-                )
+            with ui.row().classes("gap-2 items-center"):
+                dev_info_button = ui.button("Dev Info").classes(
+                    "dev-info-button"
+                ).props("outline color=grey-5 icon=terminal")
 
         with ui.element("div").classes("layout-grid w-full"):
             with ui.column().classes("gap-5 w-full area-left"):
                 with ui.card().classes("panel"):
-                    ui.label("Systemstatus").classes("panel-title")
-                    ui.label("Kommunikations- und Prozessmodule").classes(
+                    ui.label("System Status").classes("panel-title")
+                    ui.label("Communication and process modules").classes(
                         "panel-subtitle"
                     )
 
@@ -232,20 +230,20 @@ def create_dashboard_page(controller: CdsController) -> None:
                     )
                     process_reader_row = create_status_row(
                         "Process MQTT Reader",
-                        "liest cds/status/process",
+                        "reads cds/status/process",
                     )
                     snapshot_row = create_status_row(
                         "Sensor Snapshot",
-                        "max. 5 Sekunden alt",
+                        "max. 5 seconds old",
                     )
                     process_payload_row = create_status_row(
                         "Process Payload",
-                        "max. 30 Sekunden alt",
+                        "max. 30 seconds old",
                     )
 
                 with ui.card().classes("panel"):
-                    ui.label("Aktoren / Outputs").classes("panel-title")
-                    ui.label("Read-only Anzeige aus MQTT, keine Direktsteuerung").classes(
+                    ui.label("Actuators / Outputs").classes("panel-title")
+                    ui.label("Read-only MQTT state, no direct control").classes(
                         "panel-subtitle"
                     )
 
@@ -259,87 +257,70 @@ def create_dashboard_page(controller: CdsController) -> None:
                     )
                     drain_valve_0_row = create_actuator_row(
                         "Drain Valve 0",
-                        "validierter Drain / aus MQTT",
+                        "validated drain / MQTT",
                     )
                     transfer_pump_row = create_actuator_row(
                         "Transfer Pump",
-                        "späterer Erweiterungspunkt",
+                        "future extension point",
                     )
                     mixing_circulation_pump_row = create_actuator_row(
                         "Mixing Circulation Pump",
-                        "optional aus Settings",
+                        "optional from settings",
                     )
                     sensor_circulation_pump_row = create_actuator_row(
                         "Sensor Circulation Pump",
-                        "optional aus Settings",
+                        "optional from settings",
                     )
+
+                with ui.dialog() as dev_info_dialog, ui.card().classes(
+                    "recipe-dialog-card dev-info-dialog-card"
+                ):
+                    ui.label("Developer Info").classes("panel-title")
+                    ui.label(
+                        "Live status badges and dashboard event log. For development and troubleshooting only."
+                    ).classes("panel-subtitle")
+
+                    with ui.row().classes("gap-2 mt-2"):
+                        ui.label("RASPI LIVE").classes("top-badge badge-green")
+                        ui.label("PYTHON CORE").classes("top-badge badge-blue")
+                        last_update_badge = ui.label("Update: -").classes(
+                            "top-badge badge-orange"
+                        )
+
+                    ui.label("Process Log").classes("control-section-title mt-4")
+                    log_box = ui.label("").classes("log-box")
+
+                    with ui.row().classes("w-full justify-end gap-3 mt-3"):
+                        ui.button("Close", on_click=dev_info_dialog.close).props(
+                            "color=grey outline"
+                        )
 
             with ui.element("div").classes("content-grid w-full"):
                 with ui.column().classes("gap-5 w-full area-main"):
-                    with ui.card().classes("panel"):
-                        ui.label("Process State Machine").classes("panel-title")
-                        ui.label("Live-Prozessstatus aus MQTT und lokalem Controller").classes(
-                            "panel-subtitle"
-                        )
-    
-                        with ui.row().classes("w-full gap-4 items-stretch"):
-                            with ui.column().classes("process-display"):
-                                ui.label("Aktueller Prozesszustand").classes(
-                                    "process-label"
-                                )
-                                process_state_label = ui.label("-").classes(
-                                    "process-state"
-                                )
-                                process_timestamp_label = ui.label(
-                                    "Process timestamp: -"
-                                ).classes("process-meta")
-                                process_source_label = ui.label("Source: -").classes(
-                                    "process-meta"
-                                )
-    
-                            with ui.column().classes("gap-2 flex-1"):
-                                control_state_label = ui.label(
-                                    "Controller state: -"
-                                ).classes("text-sm text-slate-300")
-                                control_message_label = ui.label("Message: -").classes(
-                                    "text-sm text-slate-300"
-                                )
-                                process_error_label = ui.label("").classes("error-text")
-                                control_error_label = ui.label("").classes("error-text")
-    
-                        confirmation_input = ui.input(
-                            label="Sicherheitsfreigabe",
-                            placeholder="Zum Start exakt: confirmed",
-                            password=False,
-                        ).classes("control-input w-full mt-4")
-    
-                        ui.label(
-                            "Zum Prozessstart exakt „confirmed“ eingeben. "
-                            "Später wird dieses Feld durch einen Sicherheitsdialog mit Checkliste ersetzt."
-                        ).classes("confirmation-help")
-    
-                        with ui.row().classes("w-full gap-3 mt-3"):
-                            start_button = ui.button("Start Fill & Measure").classes(
-                                "flex-1 font-bold"
-                            ).props("color=positive")
-                            reset_button = ui.button("Reset / Acknowledge").classes(
-                                "flex-1 font-bold"
-                            ).props("color=primary")
-                            stop_button = ui.button("Emergency Stop").classes(
-                                "flex-1 font-bold"
-                            ).props("color=negative")
-    
-                        ui.label(
-                            "GPIOs werden erst nach gültiger Bestätigung und hardware_execution_enabled=true initialisiert."
-                        ).classes("warn-text mt-2")
-    
-                    with ui.card().classes("panel recipe-panel"):
-                        ui.label("Rezept / Sollwerte").classes("panel-title")
-                        ui.label("Aktives Rezept aus recipes/dashboard_recipes.json").classes(
+                    with ui.card().classes("panel process-state-panel"):
+                        ui.label("Current Process State").classes("panel-title")
+                        ui.label("Live process state from MQTT and local controller").classes(
                             "panel-subtitle"
                         )
 
-                        recipe_name_label = ui.label("Rezept: -").classes("recipe-name")
+                        with ui.column().classes("process-display process-display-large"):
+                            ui.label("Current state").classes("process-label")
+                            process_state_label = ui.label("-").classes("process-state")
+                            control_message_label = ui.label("Ready").classes("process-message")
+                            process_error_label = ui.label("").classes("error-text")
+                            control_error_label = ui.label("").classes("error-text")
+
+                        process_timestamp_label = ui.label("Process timestamp: -").classes("hidden")
+                        process_source_label = ui.label("Source: -").classes("hidden")
+                        control_state_label = ui.label("Controller state: -").classes("hidden")
+
+                    with ui.card().classes("panel recipe-panel"):
+                        ui.label("Recipe / Setpoints").classes("panel-title")
+                        ui.label("Active recipe from recipes/dashboard_recipes.json").classes(
+                            "panel-subtitle"
+                        )
+
+                        recipe_name_label = ui.label("Recipe: -").classes("recipe-name")
                         recipe_summary_label = ui.label("-").classes("recipe-summary")
                         recipe_dosing_label = ui.label("-").classes("recipe-detail")
                         recipe_process_label = ui.label("-").classes("recipe-detail")
@@ -352,12 +333,125 @@ def create_dashboard_page(controller: CdsController) -> None:
                             }
 
                         with ui.row().classes("w-full gap-3 mt-3"):
-                            edit_recipe_button = ui.button("Rezept bearbeiten").classes(
+                            edit_recipe_button = ui.button("Edit Recipe").classes(
                                 "flex-1 font-bold"
                             ).props("color=primary")
-                            apply_recipe_button = ui.button("Aktives Rezept anzeigen").classes(
+                            apply_recipe_button = ui.button("Reload Active Recipe").classes(
                                 "flex-1 font-bold"
                             ).props("color=secondary outline")
+
+                        with ui.dialog() as recipe_dialog, ui.card().classes("recipe-dialog-card"):
+                            ui.label("Recipe Editor").classes("panel-title")
+                            ui.label(
+                                "Three favorites can be saved. Visualization and JSON storage only; dosing control is not active yet."
+                            ).classes("panel-subtitle")
+
+                            with ui.row().classes("w-full gap-3"):
+                                recipe_slot_select = ui.select(
+                                    options=[1, 2, 3],
+                                    value=int(recipe_state["book"].get("active_slot", 1)),
+                                    label="Favorite Slot",
+                                ).classes("control-input flex-1")
+                                recipe_make_active_switch = ui.switch(
+                                    "Set as active recipe",
+                                    value=True,
+                                ).classes("text-slate-200")
+
+                            with ui.element("div").classes("recipe-top-grid"):
+                                recipe_name_input = ui.input("Recipe Name").classes(
+                                    "control-input"
+                                )
+                                target_tank_input = ui.input("Tank Selection").classes(
+                                    "control-input"
+                                )
+                                target_fill_input = ui.number(
+                                    "Target Mixing Tank volume", suffix="L", min=0, max=200
+                                ).classes("control-input")
+
+                            with ui.element("div").classes("recipe-form-grid"):
+                                with ui.column().classes("recipe-form-section"):
+                                    ui.label("EC").classes("recipe-section-title")
+                                    target_ec_input = ui.number("EC Setpoint", suffix="mS/cm", min=0)
+                                    ec_mixing_time_input = ui.number("Mixing time", suffix="s", min=0)
+                                    volume_stock_1_input = ui.number("Volume Stock 1", suffix="ml", min=0)
+                                    volume_stock_2_input = ui.number("Volume Stock 2", suffix="ml", min=0)
+                                    volume_ro_correction_input = ui.number("Volume RO - cor.", suffix="L", min=0)
+                                    ec_adjustment_factor_input = ui.number("Adjustment factor", min=0)
+
+                                with ui.column().classes("recipe-form-section"):
+                                    ui.label("pH").classes("recipe-section-title")
+                                    target_ph_input = ui.number("pH Setpoint", min=0, max=14)
+                                    volume_acid_1_input = ui.number("Volume acid 1", suffix="ml", min=0)
+                                    volume_acid_2_input = ui.number("Volume acid 2", suffix="ml", min=0)
+                                    volume_base_input = ui.number("Volume base", suffix="ml", min=0)
+                                    ph_mixing_time_input = ui.number("Mixing time", suffix="s", min=0)
+                                    ph_adjustment_factor_input = ui.number("Adjustment factor", min=0)
+
+                                with ui.column().classes("recipe-form-section"):
+                                    ui.label("Addons / Process").classes("recipe-section-title")
+                                    addon_1_input = ui.number("Addon 1", suffix="ml", min=0)
+                                    addon_2_input = ui.number("Addon 2", suffix="ml", min=0)
+                                    sensor_circulation_switch = ui.switch("Sensor circulation", value=True)
+                                    sensor_pump_seconds_input = ui.number("Sensor pump time", suffix="s", min=0)
+                                    drain_after_process_switch = ui.switch("Drain after process", value=False)
+
+                            recipe_notes_input = ui.textarea("Note").classes(
+                                "control-input w-full"
+                            )
+
+                            with ui.row().classes("w-full justify-end gap-3"):
+                                ui.button("Cancel", on_click=recipe_dialog.close).props(
+                                    "color=grey outline"
+                                )
+                                save_recipe_button = ui.button("Save Recipe").props(
+                                    "color=positive"
+                                )
+    
+                with ui.column().classes("gap-5 w-full area-side"):
+                    with ui.card().classes("panel process-control-panel"):
+                        ui.label("Process Control").classes("panel-title")
+                        ui.label("Start, reset, emergency stop and maintenance actions").classes(
+                            "panel-subtitle"
+                        )
+
+                        ui.label("Safety Confirmation").classes("control-section-title")
+                        confirmation_input = ui.input(
+                            label="Confirmation",
+                            placeholder="type exactly: confirmed",
+                            password=False,
+                        ).classes("control-input w-full")
+
+                        ui.label(
+                            "To start the process, type exactly 'confirmed'. GPIOs are only initialized after valid confirmation and hardware_execution_enabled=true."
+                        ).classes("confirmation-help")
+
+                        with ui.row().classes("w-full gap-3 mt-3"):
+                            start_button = ui.button("Start Process").classes(
+                                "flex-1 font-bold"
+                            ).props("color=positive")
+                            reset_button = ui.button("Reset / Ack").classes(
+                                "flex-1 font-bold"
+                            ).props("color=primary")
+
+                        stop_button = ui.button("Emergency Stop").classes(
+                            "w-full font-bold mt-3"
+                        ).props("color=negative")
+
+                        ui.separator().classes("control-separator")
+
+                        ui.label("Maintenance").classes("control-section-title")
+                        manual_drain_status_label = ui.label("Manual Drain Jog: ready").classes(
+                            "manual-drain-status"
+                        )
+                        manual_drain_progress = ui.linear_progress(value=0.0).classes(
+                            "manual-drain-progress w-full"
+                        )
+                        manual_drain_button = ui.button("Hold to Drain – max. 30 s").classes(
+                            "manual-drain-button w-full font-bold"
+                        ).props("color=warning")
+                        ui.label(
+                            "Press and hold. Release stops immediately. Server-side watchdog stops after 30 seconds."
+                        ).classes("confirmation-help")
 
                         hardware_enabled_label = ui.label(
                             "hardware_execution_enabled: -"
@@ -369,106 +463,32 @@ def create_dashboard_page(controller: CdsController) -> None:
                             "required_confirmation_text: -"
                         ).classes("text-sm text-slate-400")
 
-                        with ui.dialog() as recipe_dialog, ui.card().classes("recipe-dialog-card"):
-                            ui.label("Recipe Editor").classes("panel-title")
-                            ui.label(
-                                "Drei Favoriten können gespeichert werden. Aktuell nur Visualisierung und JSON-Ablage, noch keine Peristaltiksteuerung."
-                            ).classes("panel-subtitle")
-
-                            with ui.row().classes("w-full gap-3"):
-                                recipe_slot_select = ui.select(
-                                    options=[1, 2, 3],
-                                    value=int(recipe_state["book"].get("active_slot", 1)),
-                                    label="Favorit-Slot",
-                                ).classes("control-input flex-1")
-                                recipe_make_active_switch = ui.switch(
-                                    "Als aktives Rezept setzen",
-                                    value=True,
-                                ).classes("text-slate-200")
-
-                            with ui.element("div").classes("recipe-top-grid"):
-                                recipe_name_input = ui.input("Rezeptname").classes(
-                                    "control-input"
-                                )
-                                target_tank_input = ui.input("Tank Selection").classes(
-                                    "control-input"
-                                )
-                                target_fill_input = ui.number(
-                                    "Zielmenge Mixing Tank", suffix="L", min=0, max=200
-                                ).classes("control-input")
-
-                            with ui.element("div").classes("recipe-form-grid"):
-                                with ui.column().classes("recipe-form-section"):
-                                    ui.label("EC").classes("recipe-section-title")
-                                    target_ec_input = ui.number("EC Sollwert", suffix="mS/cm", min=0)
-                                    ec_mixing_time_input = ui.number("Mixing time", suffix="s", min=0)
-                                    volume_stock_1_input = ui.number("Volume Stock 1", suffix="ml", min=0)
-                                    volume_stock_2_input = ui.number("Volume Stock 2", suffix="ml", min=0)
-                                    volume_ro_correction_input = ui.number("Volume RO - cor.", suffix="L", min=0)
-                                    ec_adjustment_factor_input = ui.number("Adjustment factor", min=0)
-
-                                with ui.column().classes("recipe-form-section"):
-                                    ui.label("pH").classes("recipe-section-title")
-                                    target_ph_input = ui.number("pH Sollwert", min=0, max=14)
-                                    volume_acid_1_input = ui.number("Volume acid 1", suffix="ml", min=0)
-                                    volume_acid_2_input = ui.number("Volume acid 2", suffix="ml", min=0)
-                                    volume_base_input = ui.number("Volume base", suffix="ml", min=0)
-                                    ph_mixing_time_input = ui.number("Mixing time", suffix="s", min=0)
-                                    ph_adjustment_factor_input = ui.number("Adjustment factor", min=0)
-
-                                with ui.column().classes("recipe-form-section"):
-                                    ui.label("Addons / Prozess").classes("recipe-section-title")
-                                    addon_1_input = ui.number("Addon 1", suffix="ml", min=0)
-                                    addon_2_input = ui.number("Addon 2", suffix="ml", min=0)
-                                    sensor_circulation_switch = ui.switch("Sensorzirkulation", value=True)
-                                    sensor_pump_seconds_input = ui.number("Sensorpumpenzeit", suffix="s", min=0)
-                                    drain_after_process_switch = ui.switch("Drain nach Prozess", value=False)
-
-                            recipe_notes_input = ui.textarea("Notiz").classes(
-                                "control-input w-full"
-                            )
-
-                            with ui.row().classes("w-full justify-end gap-3"):
-                                ui.button("Abbrechen", on_click=recipe_dialog.close).props(
-                                    "color=grey outline"
-                                )
-                                save_recipe_button = ui.button("Rezept speichern").props(
-                                    "color=positive"
-                                )
-    
-                with ui.column().classes("gap-5 w-full area-side"):
-                    with ui.card().classes("panel"):
-                        ui.label("Prozesslog").classes("panel-title")
-                        ui.label("Dashboard-Ereignisse und Live-Status").classes(
-                            "panel-subtitle"
-                        )
-                        log_box = ui.label("").classes("log-box")
-    
+                with ui.column().classes("gap-5 w-full area-data"):
                     with ui.card().classes("panel sensor-panel"):
-                        ui.label("Sensorwerte").classes("panel-title")
-                        ui.label("pH, EC, Temperatur und gelöster Sauerstoff").classes(
+                        ui.label("Sensor Values").classes("panel-title")
+                        ui.label("pH, EC, temperature and dissolved oxygen").classes(
                             "panel-subtitle"
                         )
-    
+
                         with ui.row().classes("w-full gap-3"):
                             ph_metric = create_metric_box("pH")
                             ec_metric = create_metric_box("EC", "mS/cm")
-    
+
                         with ui.row().classes("w-full gap-3"):
-                            temperature_metric = create_metric_box("Temperatur", "°C")
+                            temperature_metric = create_metric_box("Temperature", "°C")
                             do_metric = create_metric_box("DO", "mg/L")
+
+                    with ui.card().classes("panel tank-panel"):
+                        ui.label("Tanks / Levels").classes("panel-title")
+                        ui.label("Live values from the sensor MQTT bridge").classes(
+                            "panel-subtitle"
+                        )
+
+                        with ui.column().classes("w-full gap-3"):
+                            ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
+                            mixer_tank_gauge = create_tank_gauge("Mixing Tank", max_percent=100)
     
-                with ui.card().classes("panel tank-panel w-full"):
-                    ui.label("Tanks / Füllstände").classes("panel-title")
-                    ui.label("Livewerte aus Sensor-MQTT-Bridge als Gauges").classes(
-                        "panel-subtitle"
-                    )
-    
-                    with ui.row().classes("w-full gap-5"):
-                        ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
-                        mixer_tank_gauge = create_tank_gauge("Mixing Tank", max_percent=100)
-    
-    event_log: list[str] = ["[OK] NiceGUI Dashboard geladen."]
+    event_log: list[str] = ["[OK] NiceGUI dashboard loaded."]
 
     def add_log(message: str) -> None:
         if not event_log or event_log[-1] != message:
@@ -526,14 +546,14 @@ def create_dashboard_page(controller: CdsController) -> None:
         active_recipe = get_active_recipe(recipe_book)
 
         recipe_name_label.set_text(
-            f"Favorit {active_slot}: {active_recipe.get('recipe_name', '-')}"
+            f"Favorite {active_slot}: {active_recipe.get('recipe_name', '-')}"
         )
         recipe_summary_label.set_text(recipe_summary(active_recipe))
         recipe_dosing_label.set_text(dosing_summary(active_recipe))
         recipe_process_label.set_text(
-            f"Sensorzirkulation={yes_no(active_recipe.get('sensor_circulation_enabled'))} | "
-            f"Sensorpumpe={active_recipe.get('sensor_pump_seconds', '-')} s | "
-            f"Drain danach={yes_no(active_recipe.get('drain_after_process'))}"
+            f"Sensor circulation={yes_no(active_recipe.get('sensor_circulation_enabled'))} | "
+            f"Sensor pump={active_recipe.get('sensor_pump_seconds', '-')} s | "
+            f"Drain after process={yes_no(active_recipe.get('drain_after_process'))}"
         )
 
         for slot, badge in favorite_badges.items():
@@ -585,10 +605,10 @@ def create_dashboard_page(controller: CdsController) -> None:
         update_recipe_card()
         active_recipe = get_active_recipe(recipe_state["book"])
         ui.notify(
-            f"Aktives Rezept geladen: {active_recipe.get('recipe_name', '-')}",
+            f"Active recipe loaded: {active_recipe.get('recipe_name', '-')}",
             color="positive",
         )
-        add_log(f"[RECIPE] Aktives Rezept: {active_recipe.get('recipe_name', '-')}")
+        add_log(f"[RECIPE] Active recipe: {active_recipe.get('recipe_name', '-')}")
 
     def handle_save_recipe() -> None:
         slot = int(recipe_slot_select.value or 1)
@@ -627,9 +647,10 @@ def create_dashboard_page(controller: CdsController) -> None:
 
         update_recipe_card()
         recipe_dialog.close()
-        ui.notify("Rezept gespeichert.", color="positive")
-        add_log(f"[RECIPE] Favorit {slot} gespeichert: {recipe['recipe_name']}")
+        ui.notify("Recipe saved.", color="positive")
+        add_log(f"[RECIPE] Favorite {slot} saved: {recipe['recipe_name']}")
 
+    dev_info_button.on_click(dev_info_dialog.open)
     edit_recipe_button.on_click(open_recipe_dialog)
     apply_recipe_button.on_click(handle_apply_active_recipe)
     save_recipe_button.on_click(handle_save_recipe)
@@ -641,8 +662,8 @@ def create_dashboard_page(controller: CdsController) -> None:
 
         if not control_data["hardware_execution_enabled"]:
             message = (
-                "Start blockiert: hardware_execution_enabled ist false. "
-                "NiceGUI bleibt im Beobachtungsmodus."
+                "Start blocked: hardware_execution_enabled is false. "
+                "NiceGUI remains in monitor mode."
             )
             ui.notify(message, color="negative")
             add_log(f"[SAFE] {message}")
@@ -652,13 +673,13 @@ def create_dashboard_page(controller: CdsController) -> None:
         required_text = str(control_data["required_confirmation_text"]).strip()
 
         add_log(
-            f"[DEBUG] Confirmation erhalten: '{entered_text}' | erwartet: '{required_text}'"
+            f"[DEBUG] Confirmation received: '{entered_text}' | required: '{required_text}'"
         )
 
         if entered_text != required_text:
             message = (
-                "Start blockiert: Bestätigungstext ist falsch. "
-                f"Eingegeben='{entered_text}' Erwartet='{required_text}'"
+                "Start blocked: confirmation text is wrong. "
+                f"Entered='{entered_text}' Required='{required_text}'"
             )
             ui.notify(message, color="negative")
             add_log(f"[BLOCKED] {message}")
@@ -693,9 +714,29 @@ def create_dashboard_page(controller: CdsController) -> None:
             ui.notify(result["message"], color="negative")
             add_log(f"[ERROR] {result['message']}")
 
+    def handle_manual_drain_start() -> None:
+        result = controller.start_manual_drain_jog()
+
+        if result["success"]:
+            add_log(f"[MANUAL DRAIN] {result['message']}")
+        else:
+            ui.notify(result["message"], color="negative")
+            add_log(f"[BLOCKED] {result['message']}")
+
+    def handle_manual_drain_stop() -> None:
+        result = controller.stop_manual_drain_jog()
+        add_log(f"[MANUAL DRAIN] {result['message']}")
+
     start_button.on_click(handle_start)
     reset_button.on_click(handle_reset)
     stop_button.on_click(handle_stop)
+
+    manual_drain_button.on("mousedown", lambda _: handle_manual_drain_start())
+    manual_drain_button.on("mouseup", lambda _: handle_manual_drain_stop())
+    manual_drain_button.on("mouseleave", lambda _: handle_manual_drain_stop())
+    manual_drain_button.on("touchstart", lambda _: handle_manual_drain_start())
+    manual_drain_button.on("touchend", lambda _: handle_manual_drain_stop())
+    manual_drain_button.on("touchcancel", lambda _: handle_manual_drain_stop())
 
     def refresh() -> None:
         sensor_data = controller.get_sensor_status()
@@ -714,19 +755,19 @@ def create_dashboard_page(controller: CdsController) -> None:
         )
 
         set_dot(mqtt_bridge_row, mqtt_bridge_ok)
-        mqtt_bridge_row["value"].set_text("verbunden" if mqtt_bridge_ok else "prüfen")
+        mqtt_bridge_row["value"].set_text("connected" if mqtt_bridge_ok else "check")
 
         set_dot(process_reader_row, process_data["reader_started"])
         process_reader_row["value"].set_text(
-            "läuft" if process_data["reader_started"] else "gestoppt"
+            "running" if process_data["reader_started"] else "stopped"
         )
 
         set_dot(snapshot_row, sensor_available)
-        snapshot_row["value"].set_text("aktuell" if sensor_available else "veraltet")
+        snapshot_row["value"].set_text("current" if sensor_available else "stale")
 
         set_dot(process_payload_row, process_available)
         process_payload_row["value"].set_text(
-            "aktuell" if process_available else "kein Payload"
+            "current" if process_available else "no payload"
         )
 
         update_tank_gauge(
@@ -801,27 +842,57 @@ def create_dashboard_page(controller: CdsController) -> None:
             f"added={fmt(control_data['added_liters'], 'L')}"
         )
 
-        control_message_label.set_text(f"Message: {control_data['last_message']}")
+        control_message_label.set_text(str(control_data["last_message"] or "Ready"))
 
         if control_data["error"]:
             control_error_label.set_text(f"Controller error: {control_data['error']}")
         else:
             control_error_label.set_text("")
 
-        if control_data["is_running"] or not hardware_enabled:
+        manual_drain_status = control_data.get("manual_drain_jog", {}) or {}
+        manual_drain_active = bool(manual_drain_status.get("is_active", False))
+        manual_drain_elapsed = float(manual_drain_status.get("elapsed_seconds", 0.0) or 0.0)
+        manual_drain_max = float(manual_drain_status.get("max_seconds", 30.0) or 30.0)
+        manual_drain_progress_value = float(manual_drain_status.get("progress", 0.0) or 0.0)
+
+        manual_drain_progress.set_value(manual_drain_progress_value)
+
+        if manual_drain_active:
+            manual_drain_button.set_text(
+                f"Draining... {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s"
+            )
+            manual_drain_button.classes("manual-drain-active")
+            manual_drain_status_label.set_text(
+                f"Manual Drain Jog: running | {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s"
+            )
+        else:
+            manual_drain_button.set_text("Hold to Drain – max. 30 s")
+            manual_drain_button.classes(remove="manual-drain-active")
+            manual_drain_status_label.set_text(
+                f"Manual Drain Jog: {manual_drain_status.get('last_message', 'ready')}"
+            )
+
+        if control_data["is_running"] or manual_drain_active or not hardware_enabled:
             start_button.disable()
         else:
             start_button.enable()
 
-        if control_data["is_running"]:
+        if control_data["is_running"] or manual_drain_active:
             reset_button.disable()
         else:
             reset_button.enable()
 
+        if control_data["is_running"] or not hardware_enabled:
+            manual_drain_button.disable()
+        else:
+            manual_drain_button.enable()
+
         if control_data["is_running"]:
             add_log(f"[STATE] {fmt(process_state)}")
+        elif manual_drain_active:
+            add_log(f"[MANUAL DRAIN] running {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s")
         elif not hardware_enabled:
-            add_log("[SAFE] Hardware execution disabled. Start button locked.")
+            add_log("[SAFE] Hardware execution disabled. Start and Manual Drain are locked.")
 
     refresh()
     ui.timer(1.0, refresh)

@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from process.manual_drain_jog import ManualDrainJog
+
 
 SETTINGS_PATH = Path("config/process_settings.json")
 
@@ -43,6 +45,10 @@ class ProcessController:
         self.last_message: str = "ProcessController initialized."
         self.last_start_request: str | None = None
         self.display_state: str | None = "IDLE"
+
+        self.manual_drain_jog = ManualDrainJog(
+            get_sensor_snapshot=self.get_sensor_snapshot,
+        )
 
     def load_settings(self) -> dict[str, Any]:
         with SETTINGS_PATH.open("r", encoding="utf-8") as file:
@@ -101,14 +107,20 @@ class ProcessController:
 
                 "start_mixer_liters": start_mixer_liters,
                 "added_liters": added_liters,
+                "manual_drain_jog": self.manual_drain_jog.get_status(),
             }
 
     def start_fill_and_measure(self, confirmation_text: str) -> dict[str, Any]:
         with self._lock:
-            if self.is_running or self._thread_is_alive_locked() or self._teardown_in_progress:
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+            ):
                 return self._result(
                     False,
-                    "Start blockiert: Prozess, Hintergrundthread oder Cleanup läuft noch.",
+                    "Start blocked: process, cleanup, background thread, or Manual Drain Jog is still active.",
                 )
 
             self.last_start_request = datetime.now().isoformat(timespec="seconds")
@@ -146,10 +158,15 @@ class ProcessController:
             return self._result(False, message)
 
         with self._lock:
-            if self.is_running or self._thread_is_alive_locked() or self._teardown_in_progress:
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+            ):
                 return self._result(
                     False,
-                    "Start blockiert: Prozess, Hintergrundthread oder Cleanup läuft noch.",
+                    "Start blocked: process, cleanup, background thread, or Manual Drain Jog is still active.",
                 )
 
             self.is_running = True
@@ -184,6 +201,11 @@ class ProcessController:
                 self.last_error = f"State machine emergency stop failed: {exc}"
 
             try:
+                self.manual_drain_jog.stop(reason="emergency_stop")
+            except Exception as exc:
+                self.last_error = f"Manual Drain Jog emergency stop failed: {exc}"
+
+            try:
                 if self.actuators is not None:
                     self.actuators.safe_shutdown_all()
             except Exception as exc:
@@ -204,6 +226,38 @@ class ProcessController:
 
         return self._result(True, "Emergency Stop wurde ausgelöst und bestätigt.")
 
+    def start_manual_drain_jog(self) -> dict[str, Any]:
+        with self._lock:
+            if self.is_running or self._thread_is_alive_locked() or self._teardown_in_progress:
+                return self._result(False, "Manual Drain Jog blocked: main process is running or cleaning up.")
+
+        try:
+            settings = self.load_settings()
+        except Exception as exc:
+            message = f"Settings could not be loaded: {exc}"
+            self._set_error(message)
+            return self._result(False, message)
+
+        result = self.manual_drain_jog.start(settings)
+
+        with self._lock:
+            self.last_message = result.get("message", "Manual Drain Jog start requested.")
+            self.display_state = "MANUAL_DRAIN_JOG" if result.get("success") else self.display_state
+            if not result.get("success"):
+                self.last_error = result.get("message")
+
+        return result
+
+    def stop_manual_drain_jog(self) -> dict[str, Any]:
+        result = self.manual_drain_jog.stop(reason="button_released")
+
+        with self._lock:
+            self.last_message = result.get("message", "Manual Drain Jog stop requested.")
+            if not self.is_running and not self.manual_drain_jog.is_active():
+                self.display_state = "IDLE"
+
+        return result
+
     def shutdown(self, timeout_seconds: float = 5.0) -> dict[str, Any]:
         """
         Für späteren NiceGUI/App-Shutdown:
@@ -215,6 +269,11 @@ class ProcessController:
             self._stop_requested = True
             self.last_message = "Controller shutdown requested."
             self.display_state = "SHUTDOWN_REQUESTED"
+
+            try:
+                self.manual_drain_jog.stop(reason="controller_shutdown")
+            except Exception as exc:
+                self.last_error = f"Manual Drain Jog shutdown failed: {exc}"
 
             try:
                 if self.actuators is not None:
@@ -286,13 +345,13 @@ class ProcessController:
             if settings.get("enable_mixing_circulation", False):
                 mixing_circulation_pump = actuators.add(
                     name="mixing_circulation_pump",
-                    gpio_pin=OUTPUTS["contactor_2"],
+                    gpio_pin=OUTPUTS["mixing_circulation_pump"],
                 )
 
             if settings.get("enable_sensor_circulation", False):
                 sensor_circulation_pump = actuators.add(
                     name="sensor_circulation_pump",
-                    gpio_pin=OUTPUTS["contactor_3"],
+                    gpio_pin=OUTPUTS["sensor_circulation_pump"],
                 )
 
             mqtt_publisher = MqttPublisher()
