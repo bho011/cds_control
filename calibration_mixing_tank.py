@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import csv
 import json
@@ -6,7 +7,7 @@ import select
 import sys
 import statistics
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from datetime import datetime
 from pathlib import Path
 from services.system_config import get_mqtt_config, get_mixer_level_calibration, get_opcua_config
@@ -564,6 +565,108 @@ def save_csv(path: Path, measurements: list[Measurement]) -> None:
             writer.writerow(asdict(measurement))
 
 
+# ============================================================
+# CSV EINLESEN (fuer --analyze, ohne Hardware)
+# ============================================================
+
+def _row_float(row: dict[str, str], key: str, default: float) -> float:
+    value = (row.get(key) or "").strip()
+    return float(value) if value else default
+
+
+def _row_optional_float(row: dict[str, str], key: str) -> Optional[float]:
+    value = (row.get(key) or "").strip()
+    return float(value) if value else None
+
+
+def _row_int(row: dict[str, str], key: str, default: int) -> int:
+    value = (row.get(key) or "").strip()
+    return int(float(value)) if value else default
+
+
+def _row_optional_int(row: dict[str, str], key: str) -> Optional[int]:
+    value = (row.get(key) or "").strip()
+    return int(float(value)) if value else None
+
+
+def _row_bool(row: dict[str, str], key: str, default: bool) -> bool:
+    value = row.get(key)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() == "true"
+
+
+def load_csv(path: Path) -> list[Measurement]:
+    """
+    Loads previously saved calibration measurements back from CSV.
+
+    Inverse of save_csv(). Used by --analyze to re-run the fit on
+    already-collected data without a live hardware session. Older CSVs
+    (from before the bridge_*/valid_for_fit/invalid_reason columns existed)
+    are still readable: missing columns fall back to sensible defaults and
+    never block loading.
+    """
+    with path.open("r", newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file, delimiter=";")
+        rows = list(reader)
+
+    measurements = []
+
+    for row in rows:
+        measurements.append(
+            Measurement(
+                timestamp=row.get("timestamp", ""),
+                phase=row.get("phase", ""),
+                step=_row_int(row, "step", 0),
+                manual_added_l=_row_float(row, "manual_added_l", 0.0),
+                manual_drained_l=_row_float(row, "manual_drained_l", 0.0),
+                reference_volume_l=_row_float(row, "reference_volume_l", 0.0),
+
+                sensor_raw_avg=_row_float(row, "sensor_raw_avg", 0.0),
+                sensor_raw_min=_row_float(row, "sensor_raw_min", 0.0),
+                sensor_raw_max=_row_float(row, "sensor_raw_max", 0.0),
+                sensor_raw_std=_row_float(row, "sensor_raw_std", 0.0),
+                sensor_raw_first=_row_float(row, "sensor_raw_first", 0.0),
+                sensor_raw_last=_row_float(row, "sensor_raw_last", 0.0),
+                sensor_raw_drift=_row_float(row, "sensor_raw_drift", 0.0),
+                sensor_raw_samples=_row_int(row, "sensor_raw_samples", 0),
+                sensor_raw_series=row.get("sensor_raw_series", ""),
+
+                system_liters_avg=_row_optional_float(row, "system_liters_avg"),
+                system_liters_min=_row_optional_float(row, "system_liters_min"),
+                system_liters_max=_row_optional_float(row, "system_liters_max"),
+                system_liters_std=_row_optional_float(row, "system_liters_std"),
+                system_liters_first=_row_optional_float(row, "system_liters_first"),
+                system_liters_last=_row_optional_float(row, "system_liters_last"),
+                system_liters_drift=_row_optional_float(row, "system_liters_drift"),
+                system_liters_samples=_row_optional_int(row, "system_liters_samples"),
+                system_liters_series=row.get("system_liters_series") or None,
+
+                bridge_mixer_volume_liters=_row_float(
+                    row, "bridge_mixer_volume_liters", BRIDGE_MIXER_VOLUME_LITERS
+                ),
+                bridge_sensor_liter_factor=_row_float(
+                    row, "bridge_sensor_liter_factor", BRIDGE_MIXER_SENSOR_LITER_FACTOR
+                ),
+                bridge_sensor_liter_offset=_row_float(
+                    row, "bridge_sensor_liter_offset", BRIDGE_MIXER_SENSOR_LITER_OFFSET
+                ),
+                bridge_sensor_calibration_status=row.get(
+                    "bridge_sensor_calibration_status", BRIDGE_MIXER_SENSOR_CALIBRATION_STATUS
+                ),
+                bridge_calculated_liters=_row_float(row, "bridge_calculated_liters", 0.0),
+                bridge_error_liters=_row_float(row, "bridge_error_liters", 0.0),
+
+                valid_for_fit=_row_bool(row, "valid_for_fit", True),
+                invalid_reason=row.get("invalid_reason", "") or "",
+
+                note=row.get("note", "") or "",
+            )
+        )
+
+    return measurements
+
+
 async def capture_measurement(
     phase: str,
     step: int,
@@ -653,6 +756,7 @@ def build_fit(
     measurements: list[Measurement],
     phases: Optional[set[str]],
     name: str,
+    min_reference_volume_l: float = 0.0,
 ) -> Optional[LinearFitResult]:
     selected = []
 
@@ -663,7 +767,7 @@ def build_fit(
         if not measurement.valid_for_fit:
             continue
 
-        if measurement.reference_volume_l < 0:
+        if measurement.reference_volume_l < min_reference_volume_l:
             continue
 
         if not math.isfinite(measurement.sensor_raw_avg):
@@ -675,6 +779,120 @@ def build_fit(
     ys = [measurement.reference_volume_l for measurement in selected]
 
     return linear_regression(xs, ys, name)
+
+
+# ============================================================
+# MEHRERE CSVs GEMEINSAM AUSWERTEN (--analyze)
+# ============================================================
+
+def find_zero_raw(measurements: list[Measurement]) -> Optional[float]:
+    """Average raw sensor value at this session's empty-tank zero point(s), if any."""
+    zero_values = [
+        measurement.sensor_raw_avg
+        for measurement in measurements
+        if measurement.phase in ("zero", "zero_after_drain") and measurement.valid_for_fit
+    ]
+    return statistics.mean(zero_values) if zero_values else None
+
+
+def zero_normalize(measurements: list[Measurement], zero_raw: float) -> list[Measurement]:
+    """
+    Returns copies of the measurements with sensor_raw_avg shifted so this
+    session's own zero point sits at 0. Lets fits pool raw values across
+    calibration sessions whose absolute zero-point drifted (e.g. between
+    two runs on different days), without touching the saved CSVs.
+    """
+    return [replace(measurement, sensor_raw_avg=measurement.sensor_raw_avg - zero_raw) for measurement in measurements]
+
+
+def check_monotonic(measurements: list[Measurement], phase: str) -> list[str]:
+    """
+    Advisory warnings (not auto-exclusion) for points where the raw sensor
+    value didn't increase even though reference_volume_l did, within one
+    phase, in step order. A real hydrostatic sensor should be monotonic
+    while filling or draining; a dip usually means a data entry error, a
+    splash, or a sensor glitch worth reviewing by hand.
+    """
+    warnings: list[str] = []
+    ordered = sorted(
+        (measurement for measurement in measurements if measurement.phase == phase),
+        key=lambda measurement: measurement.step,
+    )
+
+    for previous, current in zip(ordered, ordered[1:]):
+        if current.reference_volume_l > previous.reference_volume_l and current.sensor_raw_avg <= previous.sensor_raw_avg:
+            warnings.append(
+                f"  [WARN] nicht-monoton in phase={phase}: step {previous.step}->{current.step}, "
+                f"ref {previous.reference_volume_l:.1f}L->{current.reference_volume_l:.1f}L, "
+                f"raw {previous.sensor_raw_avg:.3f}->{current.sensor_raw_avg:.3f}"
+            )
+
+    return warnings
+
+
+def analyze_csv_files(paths: list[Path]) -> None:
+    """
+    Offline analysis of already-collected calibration CSVs. Never touches
+    GPIO, OPC-UA, or any actuator - pure CSV parsing plus the same
+    regression math used at the end of a live session.
+    """
+    print("============================================================")
+    print("Kalibrier-Auswertung (offline, aus gespeicherten CSV-Dateien)")
+    print("============================================================")
+
+    raw_measurements: list[Measurement] = []
+    normalized_measurements: list[Measurement] = []
+    zero_points: dict[str, float] = {}
+
+    for path in paths:
+        measurements = load_csv(path)
+        print(f"\n{path.name}: {len(measurements)} Messpunkte geladen.")
+
+        for phase in ("fill", "drain"):
+            for warning in check_monotonic(measurements, phase):
+                print(warning)
+
+        zero_raw = find_zero_raw(measurements)
+        if zero_raw is not None:
+            zero_points[path.name] = zero_raw
+            normalized_measurements.extend(zero_normalize(measurements, zero_raw))
+        else:
+            print(f"  [WARN] Kein Nullpunkt in {path.name} gefunden, wird nicht zero-normalisiert.")
+            normalized_measurements.extend(measurements)
+
+        raw_measurements.extend(measurements)
+
+    if len(zero_points) >= 2:
+        print("\nNullpunkt-Vergleich zwischen Sessions (sollte bei stabilem Sensor nahe 0 liegen):")
+        names = list(zero_points)
+        for name in names:
+            print(f"  {name}: raw={zero_points[name]:.3f}")
+        for a, b in zip(names, names[1:]):
+            print(f"  Delta {a} -> {b}: {zero_points[b] - zero_points[a]:+.3f}")
+
+    print("\n--- Unveraenderte Rohdaten, wie am Ende einer Live-Session ---")
+    analyze_measurements(raw_measurements)
+
+    print("\n--- Zero-normalisiert und ueber alle Dateien gepoolt ---")
+    print_fit_result(
+        build_fit(normalized_measurements, phases={"zero", "fill"}, name="Zero-normalisiert, FILL, alle Dateien")
+    )
+    print_fit_result(
+        build_fit(
+            normalized_measurements,
+            phases={"zero", "fill"},
+            name="Zero-normalisiert, FILL, alle Dateien, ref >= 10L",
+            min_reference_volume_l=10.0,
+        )
+    )
+    print_fit_result(
+        build_fit(
+            normalized_measurements,
+            phases=None,
+            name="Zero-normalisiert, FILL+DRAIN, alle Dateien, ref >= 10L",
+            min_reference_volume_l=10.0,
+        )
+    )
 
 
 def print_fit_result(result: Optional[LinearFitResult]) -> None:
@@ -995,6 +1213,22 @@ async def run_calibration() -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Mixing Tank Sensor-Kalibrierung")
+    parser.add_argument(
+        "--analyze",
+        nargs="+",
+        metavar="CSV",
+        help=(
+            "Nur bereits gespeicherte Kalibrier-CSVs auswerten und beenden. "
+            "Startet keine Hardware, OPC-UA oder Live-Session."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.analyze:
+        analyze_csv_files([Path(csv_path) for csv_path in args.analyze])
+        return
+
     try:
         asyncio.run(run_calibration())
     except KeyboardInterrupt:

@@ -28,9 +28,9 @@ Die Steuerungslogik wurde von einzelnen Testskripten in eine modulare Struktur �
 
 ```text
                      ┌──────────────────────┐
-                     │   OPC-UA-Server       │
-                     │ (RO/Mixing-Tank,      │
-                     │  pH, EC, Temp, DO)    │
+                     │   OPC-UA-Server      │
+                     │ (RO/Mixing-Tank,     │
+                     │  pH, EC, Temp, DO)   │
                      └──────────┬───────────┘
                                 │ OPC-UA read (Timeout-abgesichert)
                                 ▼
@@ -42,7 +42,7 @@ gpio_config.py ──► hardware/ ──► process/ ──► statemachine/   
                                      auto_circulation/                 │
                                      manual_drain_jog/                 │
                                      tank_cleaning)                    │
-        │                 │                │                          │
+        │                 │                │                           │
         └─────────────────┴────────────────┴──► MQTT: cds/status/process
                                                         │
                                           ┌─────────────┴──────────────┐
@@ -365,14 +365,14 @@ Dashboard: Button "Start Tank Cleaning" im Bereich "Process Control → Tank Cle
 Das Dashboard wurde auf ein 4-Spalten-Layout umgebaut, das ohne Scrollen auskommt:
 
 ```text
-┌─────────────┬───────────────────┬────────────────────┬──────────────────┐
-│ System      │ Current Process   │ Process Control     │ Sensor Values    │
-│ Status      │ State             │  - Safety            │                   │
-│             │                   │    Confirmation      │ Tanks / Levels    │
-│ Actuators / │ Recipe /          │  - Maintenance        │ (RO + Mixing,     │
-│ Outputs     │ Setpoints         │    (Manual Drain Jog) │  untereinander    │
-│             │                   │  - Tank Cleaning      │  gestapelt)       │
-└─────────────┴───────────────────┴────────────────────┴──────────────────┘
+┌─────────────┬───────────────────┬──────────────────────┬────────────────┐
+│ System      │ Current Process   │ Process Control      │ Sensor Values  │
+│ Status      │ State             │  - Safety            │                │
+│             │                   │    Confirmation      │ Tanks / Levels │
+│ Actuators / │ Recipe /          │  - Maintenance       │ (RO + Mixing,  │
+│ Outputs     │ Setpoints         │    (Manual Drain Jog)│  untereinander │
+│             │                   │  - Tank Cleaning     │  gestapelt)    │
+└─────────────┴───────────────────┴──────────────────────┴────────────────┘
 ```
 
 - **System Status / Actuators**: nur noch die tatsächlich genutzten Ausgänge (Mixer Refill Pump, Supply Valve 6, Drain Valve 0, Transfer Pump, Mixing/Sensor Circulation Pump, Valve 1–5). Unbenutzte Pins (`contactor_0/5`, `valve_7/8/9`) sind aus der Anzeige entfernt, um die Karte nicht unnötig zu füllen.

@@ -35,12 +35,12 @@ Safety:
 
 from __future__ import annotations
 
-import threading
 import time
 from datetime import datetime
 from typing import Any, Callable
 
 from .auto_circulation import AutoCirculationController, load_auto_circulation_config
+from .background_process import BackgroundHardwareProcess
 from .common import make_level_history, mixer_liters_from_snapshot, ro_liters_from_snapshot
 
 
@@ -55,36 +55,32 @@ class TankCleaningPhase:
     ERROR = "ERROR"
 
 
-class TankCleaningController:
+class TankCleaningController(BackgroundHardwareProcess):
     """
     Server-side controller for the "Tank Cleaning" maintenance cycle.
 
-    Mirrors the ManualDrainJog pattern already used in this dashboard:
-    a background thread plus a lock-protected status dict, so it can be
+    Built on BackgroundHardwareProcess (process/background_process.py), the
+    same thread/lock/status base class ManualDrainJog uses, so it can be
     started/stopped safely from NiceGUI button clicks without blocking the
     web server.
     """
+
+    label = "Tank Cleaning"
+    # A full fill/hold/drain cycle can take several minutes, but every phase
+    # loop reacts to the stop event within ~0.5s, so this join timeout only
+    # needs to cover that normal-case teardown, not the whole cycle.
+    stop_join_timeout_seconds = 5.0
 
     def __init__(
         self,
         get_sensor_snapshot: Callable[[], dict[str, Any] | None],
     ) -> None:
-        self.get_sensor_snapshot = get_sensor_snapshot
+        super().__init__(get_sensor_snapshot)
 
-        self._lock = threading.RLock()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-
-        self._actuators = None
-        self._mqtt_publisher = None
         self._auto_circulation = None
 
         self._phase = TankCleaningPhase.IDLE
         self._phase_started_at: float | None = None
-        self._started_at_iso: str | None = None
-        self._stop_reason: str | None = None
-        self._last_error: str | None = None
-        self._last_message = "Tank Cleaning ready."
 
         self._current_liters: float | None = None
         self._target_liters: float | None = None
@@ -92,66 +88,23 @@ class TankCleaningController:
 
     # ---- public dashboard API -----------------------------------------
 
-    def is_active(self) -> bool:
-        with self._lock:
-            return self._thread is not None and self._thread.is_alive()
-
     def start(self, settings: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             if self.is_active():
                 return self._result(True, "Tank Cleaning is already running.")
 
-            if not bool(settings.get("hardware_execution_enabled", False)):
-                self._last_error = "hardware_execution_enabled is false."
-                self._last_message = "Tank Cleaning locked by hardware safety setting."
-                return self._result(False, self._last_message)
+            block_message = self._check_start_preconditions_locked(settings)
+            if block_message is not None:
+                return self._result(False, block_message)
 
-            snapshot = self.get_sensor_snapshot()
-            if snapshot is None:
-                self._last_error = "No current sensor snapshot available."
-                self._last_message = "Tank Cleaning locked: no current sensor snapshot."
-                return self._result(False, self._last_message)
-
-            self._stop_event.clear()
-            self._stop_reason = None
-            self._last_error = None
             self._current_liters = None
             self._target_liters = float(settings.get("target_fill_total_liters", 200.0))
             self._hold_seconds = float(settings.get("cleaning_hold_seconds", 300.0))
-            self._started_at_iso = datetime.now().isoformat(timespec="seconds")
             self._last_message = "Tank Cleaning start requested."
             self._change_phase_locked(TankCleaningPhase.FILLING)
-
-            self._thread = threading.Thread(
-                target=self._run,
-                args=(settings,),
-                daemon=False,
-                name="cds-tank-cleaning",
-            )
-            self._thread.start()
+            self._begin_run_locked("cds-tank-cleaning", settings)
 
         return self._result(True, "Tank Cleaning started: fill -> hold -> drain.")
-
-    def stop(self, reason: str = "stopped_by_user") -> dict[str, Any]:
-        thread_to_join: threading.Thread | None = None
-
-        with self._lock:
-            self._stop_reason = reason
-            self._stop_event.set()
-            if self._thread is not None and self._thread.is_alive():
-                thread_to_join = self._thread
-
-        if thread_to_join is not None and thread_to_join is not threading.current_thread():
-            # A full fill/hold/drain cycle can take several minutes, but every
-            # phase loop below reacts to the stop event within ~0.5s, so a
-            # short join timeout here is enough to catch the normal case.
-            thread_to_join.join(timeout=5.0)
-
-        with self._lock:
-            if self.is_active():
-                return self._result(True, "Tank Cleaning stop requested; cleanup still running.")
-
-        return self._result(True, "Tank Cleaning stopped.")
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
@@ -538,7 +491,3 @@ class TankCleaningController:
             self._mqtt_publisher.publish_json(payload)
         except Exception:
             pass
-
-    @staticmethod
-    def _result(success: bool, message: str) -> dict[str, Any]:
-        return {"success": success, "message": message}

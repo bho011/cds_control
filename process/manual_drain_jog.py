@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import threading
 import time
 from datetime import datetime
 from typing import Any, Callable
 
+from .background_process import BackgroundHardwareProcess
 
-class ManualDrainJog:
+
+class ManualDrainJog(BackgroundHardwareProcess):
     """
     Server-side dead-man / jog control for manual maintenance drain.
 
@@ -15,47 +16,30 @@ class ManualDrainJog:
     browser, websocket, or user input gets stuck.
     """
 
+    label = "Manual Drain Jog"
+    stop_label = "Manual Drain"
+    stop_join_timeout_seconds = 2.0
+
     def __init__(
         self,
         get_sensor_snapshot: Callable[[], dict[str, Any] | None],
         max_seconds: float = 30.0,
         valve_settle_seconds: float = 0.5,
     ) -> None:
-        self.get_sensor_snapshot = get_sensor_snapshot
+        super().__init__(get_sensor_snapshot)
+
         self.max_seconds = float(max_seconds)
         self.valve_settle_seconds = float(valve_settle_seconds)
-
-        self._lock = threading.RLock()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-
-        self._actuators = None
-        self._mqtt_publisher = None
         self._started_at_monotonic: float | None = None
-        self._started_at_iso: str | None = None
-        self._stop_reason: str | None = None
-        self._last_error: str | None = None
-        self._last_message = "Manual Drain Jog ready."
-
-    def is_active(self) -> bool:
-        with self._lock:
-            return self._thread is not None and self._thread.is_alive()
 
     def start(self, settings: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             if self.is_active():
                 return self._result(True, "Manual Drain Jog is already running.")
 
-            if not bool(settings.get("hardware_execution_enabled", False)):
-                self._last_error = "hardware_execution_enabled is false."
-                self._last_message = "Manual Drain Jog locked by hardware safety setting."
-                return self._result(False, self._last_message)
-
-            snapshot = self.get_sensor_snapshot()
-            if snapshot is None:
-                self._last_error = "No current sensor snapshot available."
-                self._last_message = "Manual Drain Jog locked: no current sensor snapshot."
-                return self._result(False, self._last_message)
+            block_message = self._check_start_preconditions_locked(settings)
+            if block_message is not None:
+                return self._result(False, block_message)
 
             self.max_seconds = float(settings.get("manual_drain_jog_max_seconds", 30.0))
             self.valve_settle_seconds = float(settings.get("manual_drain_jog_valve_settle_seconds", 0.5))
@@ -63,42 +47,11 @@ class ManualDrainJog:
             if self.max_seconds <= 0:
                 self.max_seconds = 30.0
 
-            self._stop_event.clear()
-            self._stop_reason = None
-            self._last_error = None
             self._last_message = "Manual Drain Jog start requested."
             self._started_at_monotonic = time.monotonic()
-            self._started_at_iso = datetime.now().isoformat(timespec="seconds")
-
-            self._thread = threading.Thread(
-                target=self._run,
-                daemon=False,
-                name="cds-manual-drain-jog",
-            )
-            self._thread.start()
+            self._begin_run_locked("cds-manual-drain-jog", settings)
 
         return self._result(True, "Manual Drain started. Keep button pressed.")
-
-    def stop(self, reason: str = "button_released") -> dict[str, Any]:
-        thread_to_join: threading.Thread | None = None
-
-        with self._lock:
-            self._stop_reason = reason
-            self._stop_event.set()
-            if self._thread is not None and self._thread.is_alive():
-                thread_to_join = self._thread
-
-        if thread_to_join is not None and thread_to_join is not threading.current_thread():
-            thread_to_join.join(timeout=2.0)
-
-        with self._lock:
-            if self.is_active():
-                return self._result(True, "Manual Drain stop requested; cleanup still running.")
-
-        return self._result(True, "Manual Drain stopped.")
-
-    def shutdown(self) -> None:
-        self.stop(reason="shutdown")
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
@@ -122,7 +75,7 @@ class ManualDrainJog:
                 "last_message": self._last_message,
             }
 
-    def _run(self) -> None:
+    def _run(self, settings: dict[str, Any]) -> None:
         from gpio_config import ACTIVE_LOW, OUTPUTS
         from hardware.actuator_manager import ActuatorManager
         from services.mqtt_publisher import MqttPublisher
@@ -246,7 +199,3 @@ class ManualDrainJog:
             self._mqtt_publisher.publish_json(payload)
         except Exception:
             pass
-
-    @staticmethod
-    def _result(success: bool, message: str) -> dict[str, Any]:
-        return {"success": success, "message": message}
