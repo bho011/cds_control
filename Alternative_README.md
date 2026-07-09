@@ -1,6 +1,6 @@
 # Central Dosing System – Python Control Layer
 
-Stand: 07.07.2026
+Stand: 09.07.2026
 Projektstatus: Entwicklungs- und Validierungsphase
 Ziel: sichere, nachvollziehbare und modular erweiterbare Steuerungslogik für den wasserbasierten CDS-Prozess.
 
@@ -38,7 +38,10 @@ Die Steuerungslogik wurde von einzelnen Testskripten in eine modulare Struktur �
                                                         │
 gpio_config.py ──► hardware/ ──► process/ ──► statemachine/            │
    (Pin-Mapping)   (DigitalOutput,  (refill/drain/   (FillAndMeasure)  │
-                    ActuatorManager) sensor_circulation)               │
+                    ActuatorManager) sensor_circulation/               │
+                                     auto_circulation/                 │
+                                     manual_drain_jog/                 │
+                                     tank_cleaning)                    │
         │                 │                │                          │
         └─────────────────┴────────────────┴──► MQTT: cds/status/process
                                                         │
@@ -48,7 +51,7 @@ gpio_config.py ──► hardware/ ──► process/ ──► statemachine/   
                                   (bestehende HMI)           (nicegui_dashboard/)
 ```
 
-`main.py` ist der einzige unterstützte Einstiegspunkt für alle produktiven Abläufe (Preflight, Water-Cycle, Dashboard, Kalibrierung, Safe-Drain, Statuschecks).
+`main.py` ist der einzige unterstützte Einstiegspunkt für alle produktiven Abläufe (Preflight, Water-Cycle, Dashboard, Kalibrierung, Safe-Drain, Statuschecks). Manual Drain Jog und Tank Cleaning werden ausschließlich über das NiceGUI-Dashboard gestartet, nicht über `main.py`.
 
 ---
 
@@ -57,14 +60,17 @@ gpio_config.py ──► hardware/ ──► process/ ──► statemachine/   
 Aktuell umgesetzt:
 
 - MQTT-Sensor-Bridge für OPC-UA-Sensordaten (Read-Timeout + QoS-1-Publish mit Bestätigung)
-- NiceGUI-Dashboard zur Visualisierung
+- NiceGUI-Dashboard zur Visualisierung und Prozesssteuerung (überarbeitetes 4-Spalten-Layout, siehe Abschnitt 14)
 - modularer Water-Cycle-Prozess (Refill → Sensorbox-Zirkulation → Drain)
-- zentraler Preflight-Check inkl. GPIO-Konfliktprüfung gegen Node-RED
+- automatische Zirkulationssteuerung (`process/auto_circulation.py`) – füllstandsabhängiges Ein-/Ausschalten der Zirkulationspumpen, wiederverwendet von Water-Cycle **und** Tank Cleaning
+- Manual Drain Jog – dashboardgesteuerte manuelle Entleerung mit Server-seitigem 30-Sekunden-Watchdog
+- Tank Cleaning – automatischer Reinigungszyklus (Fill → Hold → Drain), siehe Abschnitt 13
+- zentraler Preflight-Check inkl. GPIO-Konfliktprüfung gegen Node-RED-GPIO-Helper
 - Recipe-Editor im Dashboard mit drei Favoriten und JSON-Ablage
 - Mixing-Tank-Kalibrierung mit abgesichertem Drain-Timeout
 - zentrale Systemkonfiguration für OPC-UA, MQTT und Mixer-Level-Kalibrierung (`config/system_config.json`)
 
-Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor steht noch aus.
+Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor steht noch aus. Manual Drain Jog und Tank Cleaning sind ebenfalls noch nicht real mit Hardware validiert (siehe Abschnitt 17).
 
 ---
 
@@ -78,10 +84,11 @@ Nur die folgenden Ausgänge wurden real am physischen System getestet und ihre W
 | Supply/Test Valve 6     | `test_supply_valve_6`  | 6          | 31               | validiert            |
 | Drain Valve 0           | `valve_0_drain`        | 21         | 40               | validiert            |
 
-Alle übrigen Einträge in `gpio_config.py` (`contactor_0/2/3/5`, `transfer_pump`, `valve_1`–`valve_9`) sind im Code ansteuerbar, aber **nicht** durch einen realen Hardwaretest bestätigt. Insbesondere:
+Alle übrigen Einträge in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing_circulation_pump`, `sensor_circulation_pump`, `valve_1`–`valve_9`) sind im Code ansteuerbar, aber **nicht** durch einen realen Hardwaretest bestätigt. Insbesondere:
 
-- **Transfer Pump** (`transfer_pump`, GPIO26) wird bereits in `calibration_mixing_tank.py` und `main_safe_drain.py` verwendet, ihre elektrische Anbindung ist aber laut Projektstand noch nicht abschließend geklärt.
+- **Transfer Pump** (`transfer_pump`, GPIO26) wird bereits in `calibration_mixing_tank.py`, `main_safe_drain.py` und jetzt auch in `process/tank_cleaning.py` verwendet, ihre elektrische Anbindung ist aber laut Projektstand noch nicht abschließend geklärt.
 - **Valve 5** ist laut Kommentar in `gpio_config.py` nicht zuverlässig dicht.
+- **Tank Cleaning** steuert zusätzlich `mixing_circulation_pump` und `sensor_circulation_pump` an – ebenfalls noch ohne realen Hardwaretest. Die Settings-Datei (`config/tank_cleaning_settings.json`) ist deshalb bewusst auf ein reduziertes **40-Liter-Testvolumen** statt des späteren 200-Liter-Zielwerts gestellt, um den ersten Hardwaretest ohne größeren Wasserverbrauch/-risiko durchzuführen.
 
 Bevor ein neuer Ausgang produktiv verwendet wird: real am System schalten, Wirkung visuell/physisch bestätigen, erst danach in eine automatisierte Sequenz aufnehmen.
 
@@ -110,6 +117,8 @@ python main.py preflight
 
 Vor jedem Hardwaretest muss der kombinierte Preflight erfolgreich sein.
 
+Manual Drain Jog und Tank Cleaning haben keinen eigenen `main.py`-Befehl – sie werden ausschließlich über die entsprechenden Buttons im NiceGUI-Dashboard gestartet (`python main.py dashboard`).
+
 ---
 
 ## 6. Projektstruktur
@@ -121,13 +130,17 @@ cds_control/
 │   ├── system_config.json
 │   ├── water_cycle_settings.json
 │   ├── calibration_settings.json
-│   └── process_settings.json
+│   ├── process_settings.json
+│   └── tank_cleaning_settings.json
 ├── process/
 │   ├── common.py
 │   ├── refill.py
 │   ├── sensor_circulation.py
 │   ├── drain.py
-│   └── water_cycle.py
+│   ├── water_cycle.py
+│   ├── auto_circulation.py
+│   ├── manual_drain_jog.py
+│   └── tank_cleaning.py
 ├── services/
 │   ├── system_config.py
 │   ├── mqtt_publisher.py
@@ -186,10 +199,14 @@ Zentrale technische Systemwerte liegen in `config/system_config.json`:
 }
 ```
 
-> Hinweis: Aktuell lesen `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py` und `preflight_check.py` aus dieser Datei. Der Dashboard-MQTT-Layer (`services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) und der Kalibrierfaktor-Fallback in `statemachine/fill_and_measure_state_machine.py` nutzen sie noch nicht — siehe Abschnitt 15.
+> Hinweis: Aktuell lesen `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py` und `preflight_check.py` aus dieser Datei. Der Dashboard-MQTT-Layer (`services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) und der Kalibrierfaktor-Fallback in `statemachine/fill_and_measure_state_machine.py` nutzen sie noch nicht — siehe Abschnitt 17.
 
-Prozessbezogene Water-Cycle-Werte: `config/water_cycle_settings.json`
-Kalibrierbezogene Einstellungen: `config/calibration_settings.json`
+Weitere Settings-Dateien, je Prozess eine eigene:
+
+- `config/water_cycle_settings.json` – Water-Cycle
+- `config/calibration_settings.json` – Mixing-Tank-Kalibrierung
+- `config/process_settings.json` – Fill-and-Measure
+- `config/tank_cleaning_settings.json` – Tank Cleaning (Zielvolumen, Haltezeit, Auto-Zirkulations-Schwellen, Drain-Parameter, eigener `hardware_execution_enabled`-Schalter)
 
 ---
 
@@ -197,6 +214,7 @@ Kalibrierbezogene Einstellungen: `config/calibration_settings.json`
 
 - Hardwareausführung ist im Repository standardmäßig deaktiviert (`hardware_execution_enabled: false`).
 - Muss für reale Tests bewusst lokal auf `true` gesetzt werden — nie mit `true` committen.
+- Jede Prozess-Settings-Datei (Water-Cycle, Fill-and-Measure, Kalibrierung, Tank Cleaning) hat ihren **eigenen** `hardware_execution_enabled`-Schalter und Bestätigungstext.
 - Vor jedem Hardwarelauf muss `python main.py preflight` erfolgreich sein.
 - Node-RED darf keine GPIOs blockieren, die Python für den CDS-Prozess benötigt.
 - Chemikaliendosierung und Peristaltikpumpensteuerung sind aktuell nicht aktiv.
@@ -204,6 +222,15 @@ Kalibrierbezogene Einstellungen: `config/calibration_settings.json`
 - Aktoren werden über zentrale Safe-Shutdown-Pfade ausgeschaltet (`ActuatorManager.safe_shutdown_all()`), Fehler dabei werden geloggt statt verschluckt.
 - Manuelle Kalibrier-Drain-Funktionen besitzen ein Safety-Timeout (`calibration_drain_max_seconds`).
 - `KeyboardInterrupt` wird in allen Water-Cycle-Phasen einheitlich behandelt und bricht den Rest des Ablaufs kontrolliert ab.
+- Manual Drain Jog und Tank Cleaning laufen als Hintergrund-Threads, deren Schleifen alle ~0,5s auf ein `threading.Event` prüfen — ein Emergency Stop aus dem Dashboard unterbricht sie dadurch binnen einer knappen Sekunde, statt bis zum Ende der laufenden Phase zu warten.
+
+Standardzustand in den Configs:
+
+```json
+"hardware_execution_enabled": false
+```
+
+Dadurch werden keine GPIO-Ausgänge initialisiert oder geschaltet, solange die Hardwareausführung nicht explizit aktiviert wird.
 
 ---
 
@@ -221,7 +248,7 @@ Kritische CDS-GPIOs für Python:
 ```text
 GPIO20 = mixer_refill_pump
 GPIO21 = valve_0_drain
-GPIO22 = contactor_2 / sensor_circulation_pump
+GPIO22 = sensor_circulation_pump
 GPIO26 = transfer_pump
 ```
 
@@ -258,6 +285,7 @@ process/water_cycle.py         → Orchestrator
 process/refill.py              → Mixing Tank befüllen
 process/sensor_circulation.py  → Sensorbox durchströmen
 process/drain.py               → Mixing Tank entleeren
+process/auto_circulation.py    → füllstandsabhängige Zirkulationspumpen-Steuerung
 process/common.py              → gemeinsame Hilfsfunktionen
 ```
 
@@ -270,9 +298,9 @@ Der Water-Cycle führt automatisch zuerst den Preflight aus; schlägt dieser feh
 ```text
 1. Sicherheitsabfrage
 2. Sensor-Payload prüfen
-3. Refill bis Zielwert
+3. Refill bis Zielwert (Zirkulationspumpen schalten automatisch ab auto_circulation_start_liters zu)
 4. optionale Sensorbox-Zirkulation
-5. optionale Drain-Phase
+5. optionale Drain-Phase (Zirkulationspumpen schalten automatisch unter auto_circulation_stop_liters ab)
 6. Safe-Shutdown
 ```
 
@@ -280,9 +308,77 @@ Der Water-Cycle führt automatisch zuerst den Preflight aus; schlägt dieser feh
 
 ---
 
-## 12. NiceGUI-Dashboard
+## 12. Manual Drain Jog
 
-Visualisiert RO-Tank, Mixing Tank, pH, EC, Temperatur, Dissolved Oxygen, Sensor-Bridge-Status, Prozessstatus, Aktorstatus, Rezept-/Sollwerte, Prozesslog.
+Dashboard-Wartungsfunktion für kontrolliertes manuelles Entleeren, unabhängig vom Water-Cycle.
+
+```text
+process/manual_drain_jog.py → ManualDrainJog
+```
+
+Ablauf:
+
+- "Hold to Drain"-Button im Dashboard: Drain-Ventil öffnet, kurze Ventil-Settle-Zeit, dann Transferpumpe an.
+- Solange der Button gehalten wird, läuft die Pumpe.
+- Loslassen stoppt sofort (dead-man-Prinzip).
+- Server-seitiger Watchdog stoppt zusätzlich spätestens nach 30 Sekunden, auch falls die Verbindung zum Browser/Websocket hängt.
+
+Läuft als eigener Hintergrund-Thread mit `threading.Event`-Steuerung, damit ein Emergency Stop jederzeit zuverlässig durchgreift. Wechselseitig ausgeschlossen mit Fill-and-Measure und Tank Cleaning – es kann immer nur einer der drei Prozesse gleichzeitig aktiv sein.
+
+---
+
+## 13. Tank Cleaning
+
+Automatisierter Reinigungszyklus für den Mixing Tank, z. B. nach einem Mischvorgang.
+
+```text
+process/tank_cleaning.py       → TankCleaningController
+config/tank_cleaning_settings.json → Einstellungen
+```
+
+Ablauf (drei Phasen, alle über MQTT auf `cds/status/process` sichtbar):
+
+```text
+1. FILL    Mixer Refill Pump füllt bis zum Zielvolumen (target_fill_total_liters)
+2. HOLD    feste Haltezeit (cleaning_hold_seconds, Default 300 s)
+3. DRAIN   Transfer Pump + Drain Valve entleeren bis Sensor "leer" bestätigt
+```
+
+Während FILL, HOLD und DRAIN läuft dieselbe `AutoCirculationController`-Logik wie im Water-Cycle mit: Zirkulationspumpen (`mixing_circulation_pump`, `sensor_circulation_pump`) schalten automatisch ein, sobald der Tank `auto_circulation_start_liters` (Default 30 L) überschreitet, und wieder aus unter `auto_circulation_stop_liters` (Default 25 L) – auch während des Drains. Die 300-Sekunden-Haltezeit selbst beginnt erst, sobald das Zielvolumen sensorbestätigt erreicht ist, nicht schon beim Einschalten der Pumpen bei 30 L.
+
+Sicherheit:
+
+- Eigener `hardware_execution_enabled`-Schalter + Bestätigungstext in `config/tank_cleaning_settings.json`, unabhängig von den anderen Prozessen.
+- Jede Phasen-Schleife prüft alle 0,5 s ein `threading.Event` – Stop-Button oder Emergency Stop wirken dadurch nahezu sofort, nicht erst am Ende der laufenden Phase.
+- Fill-Phase mit denselben Sicherheitsprüfungen wie `process/refill.py` (Timeout, Fortschrittskontrolle, max. Tankfüllstand, RO-Mindestmenge).
+- Drain-Phase mit demselben berechneten Timeout wie `process/drain.py`.
+- `safe_shutdown` schaltet auf jedem Ausstiegspfad (Erfolg, Abbruch, Fehler) alle beteiligten Aktoren ab.
+
+**Aktueller Testzustand:** `config/tank_cleaning_settings.json` ist auf ein reduziertes **Testvolumen von 40 L** gestellt (statt der späteren 200 L), damit der erste reale Hardwaretest ohne großen Wasserverbrauch durchgeführt werden kann. `hardware_execution_enabled` steht auf `false` und muss vor einem echten Lauf bewusst und nur nach physischer Prüfung des Wasserwegs auf `true` gesetzt werden.
+
+Dashboard: Button "Start Tank Cleaning" im Bereich "Process Control → Tank Cleaning", nutzt dasselbe Bestätigungsfeld wie "Start Process". Wechselseitig ausgeschlossen mit Fill-and-Measure und Manual Drain Jog.
+
+---
+
+## 14. NiceGUI-Dashboard
+
+Das Dashboard wurde auf ein 4-Spalten-Layout umgebaut, das ohne Scrollen auskommt:
+
+```text
+┌─────────────┬───────────────────┬────────────────────┬──────────────────┐
+│ System      │ Current Process   │ Process Control     │ Sensor Values    │
+│ Status      │ State             │  - Safety            │                   │
+│             │                   │    Confirmation      │ Tanks / Levels    │
+│ Actuators / │ Recipe /          │  - Maintenance        │ (RO + Mixing,     │
+│ Outputs     │ Setpoints         │    (Manual Drain Jog) │  untereinander    │
+│             │                   │  - Tank Cleaning      │  gestapelt)       │
+└─────────────┴───────────────────┴────────────────────┴──────────────────┘
+```
+
+- **System Status / Actuators**: nur noch die tatsächlich genutzten Ausgänge (Mixer Refill Pump, Supply Valve 6, Drain Valve 0, Transfer Pump, Mixing/Sensor Circulation Pump, Valve 1–5). Unbenutzte Pins (`contactor_0/5`, `valve_7/8/9`) sind aus der Anzeige entfernt, um die Karte nicht unnötig zu füllen.
+- **Process Control**: Safety Confirmation (ein gemeinsames Bestätigungsfeld für Start Process **und** Tank Cleaning) → Emergency Stop → Maintenance (Manual Drain Jog) → Tank Cleaning.
+- **Dev Info**: Die früher permanent sichtbaren Status-Badges (RASPI LIVE / PYTHON CORE / Update) und das Prozess-Log sind hinter einem "Dev Info"-Button im Kopfbereich versteckt und öffnen sich als Dialog – für den Endanwender unnötige Diagnoseinfos stören dadurch nicht mehr die Hauptansicht.
+- **Sensor Values / Tanks**: eigene rechte Spalte, RO- und Mixing-Tank-Gauge stehen untereinander (nicht mehr nebeneinander) und haben eine stabile Breite unabhängig von der Anzahl der Nachkommastellen des Füllstands.
 
 ```bash
 sudo systemctl restart cds-nicegui-dashboard.service
@@ -290,11 +386,11 @@ systemctl status cds-nicegui-dashboard.service --no-pager
 python main.py dashboard   # manueller Start
 ```
 
-Die Oberfläche ist HMI/Visualisierung. Hardwarelogik soll weiterhin in Python-Prozessmodulen bleiben.
+Die Oberfläche ist HMI/Visualisierung plus Start/Stop-Steuerung für Fill-and-Measure, Manual Drain Jog und Tank Cleaning. Die eigentliche Prozesslogik bleibt in den Python-Prozessmodulen (`process/`, `statemachine/`), nicht im UI-Code.
 
 ---
 
-## 13. Recipe-Editor
+## 15. Recipe-Editor
 
 Recipe-Editor mit drei Favoriten unter `recipes/dashboard_recipes.json`. Aktueller Zweck: Rezeptwerte anzeigen/bearbeiten, JSON speichern, spätere Prozess-/Dosierlogik vorbereiten.
 
@@ -302,7 +398,7 @@ Noch nicht aktiv: automatische Chemikaliendosierung, Peristaltikpumpensteuerung,
 
 ---
 
-## 14. Kalibrierung
+## 16. Kalibrierung
 
 ```bash
 python main.py calibrate-mixer
@@ -312,23 +408,24 @@ Liest OPC-UA-Rohwerte, speichert Messpunkte als CSV unter `calibration_data/`. D
 
 ---
 
-## 15. Aktuell offene Punkte
+## 17. Aktuell offene Punkte
 
 1. **`requirements.txt` vervollständigen** — `gpiozero` fehlt, obwohl `hardware/digital_output.py` es direkt importiert; aktuell nur `lgpio` (Pin-Factory-Backend) gelistet.
-2. **Getrackte Backup-Datei entfernen**: `process/water_cycle.py.bak_20260706_211431` ist trotz `.gitignore`-Regel weiterhin in Git (`git rm --cached ...`).
-3. **Mixer-Kalibrierfaktor-Fallback in der State Machine zentralisieren** — `statemachine/fill_and_measure_state_machine.py` nutzt den importierten `get_mixer_level_calibration()` noch nicht, Fallback bleibt hart auf `1.0`.
-4. **MQTT-Host/Port im Dashboard-Layer zentralisieren** — `services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py` sollen `services/system_config.get_mqtt_config()` verwenden statt eigener Defaults.
-5. **GPIO-Duplikatsprüfung im Preflight verschärfen** — aktuell nur Warnung, sollte bei echten Duplikaten einen Fail auslösen.
-6. Modularen Water-Cycle real mit Hardware testen.
-7. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
-8. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
-9. Automatisierte Tests für config- und safety-nahe Funktionen ergänzen (aktuell kein `tests/`, kein CI, kein Linting/mypy trotz durchgängiger Typannotationen).
-10. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
-11. Peristaltikpumpensteuerung erst nach weiterer Sicherheitsvalidierung vorbereiten.
+2. **Mixer-Kalibrierfaktor-Fallback in der State Machine zentralisieren** — `statemachine/fill_and_measure_state_machine.py` nutzt den importierten `get_mixer_level_calibration()` noch nicht, Fallback bleibt hart auf `1.0`.
+3. **MQTT-Host/Port im Dashboard-Layer zentralisieren** — `services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py` sollen `services/system_config.get_mqtt_config()` verwenden statt eigener Defaults.
+4. **GPIO-Duplikatsprüfung im Preflight verschärfen** — aktuell nur Warnung, sollte bei echten Duplikaten einen Fail auslösen.
+5. **Tank Cleaning auf Testvolumen** — `config/tank_cleaning_settings.json` ist aktuell auf 40 L (Testlauf) statt der geplanten 200 L gestellt; nach erfolgreichem erstem Hardwaretest zurück auf das Zielvolumen setzen.
+6. **Tank Cleaning und Manual Drain Jog real mit Hardware validieren** — beide Funktionen sind bisher nur softwareseitig getestet, `hardware_execution_enabled` steht in beiden zugehörigen Settings-Dateien auf `false`.
+7. Modularen Water-Cycle real mit Hardware testen.
+8. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
+9. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
+10. Automatisierte Tests für config- und safety-nahe Funktionen ergänzen (aktuell kein `tests/`, kein CI, kein Linting/mypy trotz durchgängiger Typannotationen).
+11. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
+12. Peristaltikpumpensteuerung erst nach weiterer Sicherheitsvalidierung vorbereiten.
 
 ---
 
-## 16. Git- und Repo-Hygiene
+## 18. Git- und Repo-Hygiene
 
 Nicht ins Repository gehören:
 
@@ -358,7 +455,7 @@ python main.py preflight
 
 ---
 
-## 17. Dependencies
+## 19. Dependencies
 
 ```bash
 python -m venv .venv
@@ -366,11 +463,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Siehe Abschnitt 15, Punkt 1 zu einer aktuell fehlenden Dependency.
+Siehe Abschnitt 17, Punkt 1 zu einer aktuell fehlenden Dependency.
 
 ---
 
-## 18. Entwicklungsregel
+## 20. Entwicklungsregel
 
 ```text
 Erst sicher.
