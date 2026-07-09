@@ -442,6 +442,29 @@ def create_dashboard_page(controller: CdsController) -> None:
                             "Press and hold. Release stops immediately. Server-side watchdog stops after 30 seconds."
                         ).classes("confirmation-help")
 
+                        ui.separator().classes("control-separator")
+
+                        ui.label("Tank Cleaning").classes("control-section-title")
+                        tank_cleaning_status_label = ui.label(
+                            "Tank Cleaning: ready"
+                        ).classes("manual-drain-status")
+                        tank_cleaning_progress = ui.linear_progress(value=0.0).classes(
+                            "manual-drain-progress w-full"
+                        )
+                        with ui.row().classes("w-full gap-3"):
+                            tank_cleaning_start_button = ui.button(
+                                "Start Tank Cleaning"
+                            ).classes("flex-1 font-bold").props("color=info")
+                            tank_cleaning_stop_button = ui.button("Stop").classes(
+                                "flex-1 font-bold"
+                            ).props("color=negative outline")
+                        ui.label(
+                            "Fills the Mixing Tank with RO water (target from settings), "
+                            "circulates for a fixed hold time, then drains automatically. "
+                            "Runs unattended - use Stop or Emergency Stop to abort. "
+                            "Uses the confirmation field above."
+                        ).classes("confirmation-help")
+
                         hardware_enabled_label = ui.label(
                             "hardware_execution_enabled: -"
                         ).classes("warn-text mt-3")
@@ -716,9 +739,25 @@ def create_dashboard_page(controller: CdsController) -> None:
         result = controller.stop_manual_drain_jog()
         add_log(f"[MANUAL DRAIN] {result['message']}")
 
+    def handle_tank_cleaning_start() -> None:
+        entered_text = (confirmation_input.value or "").strip()
+        result = controller.start_tank_cleaning(entered_text)
+
+        if result["success"]:
+            add_log(f"[TANK CLEANING] {result['message']}")
+        else:
+            ui.notify(result["message"], color="negative")
+            add_log(f"[BLOCKED] {result['message']}")
+
+    def handle_tank_cleaning_stop() -> None:
+        result = controller.stop_tank_cleaning()
+        add_log(f"[TANK CLEANING] {result['message']}")
+
     start_button.on_click(handle_start)
     reset_button.on_click(handle_reset)
     stop_button.on_click(handle_stop)
+    tank_cleaning_start_button.on_click(handle_tank_cleaning_start)
+    tank_cleaning_stop_button.on_click(handle_tank_cleaning_stop)
 
     manual_drain_button.on("mousedown", lambda _: handle_manual_drain_start())
     manual_drain_button.on("mouseup", lambda _: handle_manual_drain_stop())
@@ -866,25 +905,89 @@ def create_dashboard_page(controller: CdsController) -> None:
                 f"Manual Drain Jog: {manual_drain_status.get('last_message', 'ready')}"
             )
 
-        if control_data["is_running"] or manual_drain_active or not hardware_enabled:
+        tank_cleaning_status = control_data.get("tank_cleaning", {}) or {}
+        tank_cleaning_active = bool(tank_cleaning_status.get("is_active", False))
+        tank_cleaning_phase = tank_cleaning_status.get("phase", "IDLE")
+        tank_cleaning_elapsed = float(tank_cleaning_status.get("phase_elapsed_seconds", 0.0) or 0.0)
+        tank_cleaning_current = tank_cleaning_status.get("current_liters")
+        tank_cleaning_target = (
+            tank_cleaning_status.get("target_liters")
+            or control_data.get("tank_cleaning_target_liters")
+            or 0.0
+        )
+        tank_cleaning_hold = (
+            tank_cleaning_status.get("hold_seconds")
+            or control_data.get("tank_cleaning_hold_seconds")
+            or 0.0
+        )
+        tank_cleaning_hardware_enabled = bool(
+            control_data.get("tank_cleaning_hardware_execution_enabled", False)
+        )
+
+        if tank_cleaning_active:
+            if tank_cleaning_phase == "FILLING" and tank_cleaning_target:
+                progress_value = min(1.0, (tank_cleaning_current or 0.0) / tank_cleaning_target) * 0.4
+            elif tank_cleaning_phase == "HOLDING" and tank_cleaning_hold:
+                progress_value = 0.4 + min(1.0, tank_cleaning_elapsed / tank_cleaning_hold) * 0.3
+            elif tank_cleaning_phase == "DRAINING":
+                progress_value = 0.85
+            else:
+                progress_value = 0.0
+
+            tank_cleaning_progress.set_value(progress_value)
+            tank_cleaning_status_label.set_text(
+                f"Tank Cleaning: {tank_cleaning_phase} | "
+                f"{fmt(tank_cleaning_current, 'L')} | {tank_cleaning_elapsed:.0f}s"
+            )
+        else:
+            tank_cleaning_progress.set_value(
+                1.0 if tank_cleaning_phase == "FINISHED" else 0.0
+            )
+            tank_cleaning_status_label.set_text(
+                f"Tank Cleaning: {tank_cleaning_status.get('last_message', 'ready')}"
+            )
+
+        if (
+            control_data["is_running"]
+            or manual_drain_active
+            or tank_cleaning_active
+            or not hardware_enabled
+        ):
             start_button.disable()
         else:
             start_button.enable()
 
-        if control_data["is_running"] or manual_drain_active:
+        if control_data["is_running"] or manual_drain_active or tank_cleaning_active:
             reset_button.disable()
         else:
             reset_button.enable()
 
-        if control_data["is_running"] or not hardware_enabled:
+        if control_data["is_running"] or tank_cleaning_active or not hardware_enabled:
             manual_drain_button.disable()
         else:
             manual_drain_button.enable()
+
+        if (
+            control_data["is_running"]
+            or manual_drain_active
+            or tank_cleaning_active
+            or not tank_cleaning_hardware_enabled
+        ):
+            tank_cleaning_start_button.disable()
+        else:
+            tank_cleaning_start_button.enable()
+
+        if tank_cleaning_active:
+            tank_cleaning_stop_button.enable()
+        else:
+            tank_cleaning_stop_button.disable()
 
         if control_data["is_running"]:
             add_log(f"[STATE] {fmt(process_state)}")
         elif manual_drain_active:
             add_log(f"[MANUAL DRAIN] running {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s")
+        elif tank_cleaning_active:
+            add_log(f"[TANK CLEANING] {tank_cleaning_phase} {tank_cleaning_elapsed:.0f}s")
         elif not hardware_enabled:
             add_log("[SAFE] Hardware execution disabled. Start and Manual Drain are locked.")
 

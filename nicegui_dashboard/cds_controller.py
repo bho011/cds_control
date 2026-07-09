@@ -108,6 +108,12 @@ class CdsController:
     def stop_manual_drain_jog(self) -> dict[str, Any]:
         return self.process_controller.stop_manual_drain_jog()
 
+    def start_tank_cleaning(self, confirmation_text: str) -> dict[str, Any]:
+        return self.process_controller.start_tank_cleaning(confirmation_text)
+
+    def stop_tank_cleaning(self) -> dict[str, Any]:
+        return self.process_controller.stop_tank_cleaning()
+
     def get_process_control_status(self) -> dict[str, Any]:
         status = self.process_controller.get_status()
         status["controller_errors"] = list(self.controller_errors)

@@ -1,0 +1,28 @@
+{
+  "hardware_execution_enabled": true,
+  "required_confirmation_text": "confirmed",
+
+  "target_fill_total_liters": 40.0,
+  "max_mixer_liters": 200.0,
+  "min_ro_liters_required": 20.0,
+  "max_fill_seconds": 900.0,
+  "min_fill_progress_liters": 0.5,
+  "no_fill_progress_timeout_seconds": 30.0,
+  "max_negative_level_drift_liters": 3.0,
+  "level_filter_samples": 5,
+  "target_reached_confirm_samples": 3,
+
+  "cleaning_hold_seconds": 300.0,
+
+  "auto_circulation_enabled": true,
+  "auto_circulation_start_liters": 30.0,
+  "auto_circulation_stop_liters": 25.0,
+  "auto_circulation_outputs": ["sensor_circulation_pump", "mixing_circulation_pump"],
+
+  "transfer_pump_liters_per_minute": 16.0,
+  "drain_timeout_buffer_seconds": 180.0,
+  "empty_threshold_liters": 0.3,
+  "empty_confirm_samples": 5,
+
+  "valve_settle_seconds": 1.0
+}

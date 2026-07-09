@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from process.manual_drain_jog import ManualDrainJog
+from process.tank_cleaning import TankCleaningController
 
 
 SETTINGS_PATH = Path("config/process_settings.json")
+TANK_CLEANING_SETTINGS_PATH = Path("config/tank_cleaning_settings.json")
 
 
 class ProcessController:
@@ -49,9 +51,16 @@ class ProcessController:
         self.manual_drain_jog = ManualDrainJog(
             get_sensor_snapshot=self.get_sensor_snapshot,
         )
+        self.tank_cleaning = TankCleaningController(
+            get_sensor_snapshot=self.get_sensor_snapshot,
+        )
 
     def load_settings(self) -> dict[str, Any]:
         with SETTINGS_PATH.open("r", encoding="utf-8") as file:
+            return json.load(file)
+
+    def load_tank_cleaning_settings(self) -> dict[str, Any]:
+        with TANK_CLEANING_SETTINGS_PATH.open("r", encoding="utf-8") as file:
             return json.load(file)
 
     def _thread_is_alive_locked(self) -> bool:
@@ -65,6 +74,13 @@ class ProcessController:
             settings_error = str(exc)
         else:
             settings_error = None
+
+        try:
+            tank_cleaning_settings = self.load_tank_cleaning_settings()
+            tank_cleaning_settings_error = None
+        except Exception as exc:
+            tank_cleaning_settings = {}
+            tank_cleaning_settings_error = str(exc)
 
         with self._lock:
             state_name = self.display_state
@@ -108,6 +124,21 @@ class ProcessController:
                 "start_mixer_liters": start_mixer_liters,
                 "added_liters": added_liters,
                 "manual_drain_jog": self.manual_drain_jog.get_status(),
+
+                "tank_cleaning": self.tank_cleaning.get_status(),
+                "tank_cleaning_hardware_execution_enabled": tank_cleaning_settings.get(
+                    "hardware_execution_enabled", False
+                ),
+                "tank_cleaning_required_confirmation_text": tank_cleaning_settings.get(
+                    "required_confirmation_text", ""
+                ),
+                "tank_cleaning_target_liters": tank_cleaning_settings.get(
+                    "target_fill_total_liters"
+                ),
+                "tank_cleaning_hold_seconds": tank_cleaning_settings.get(
+                    "cleaning_hold_seconds"
+                ),
+                "tank_cleaning_settings_error": tank_cleaning_settings_error,
             }
 
     def start_fill_and_measure(self, confirmation_text: str) -> dict[str, Any]:
@@ -117,10 +148,12 @@ class ProcessController:
                 or self._thread_is_alive_locked()
                 or self._teardown_in_progress
                 or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
             ):
                 return self._result(
                     False,
-                    "Start blocked: process, cleanup, background thread, or Manual Drain Jog is still active.",
+                    "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
+                    "or Tank Cleaning is still active.",
                 )
 
             self.last_start_request = datetime.now().isoformat(timespec="seconds")
@@ -163,10 +196,12 @@ class ProcessController:
                 or self._thread_is_alive_locked()
                 or self._teardown_in_progress
                 or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
             ):
                 return self._result(
                     False,
-                    "Start blocked: process, cleanup, background thread, or Manual Drain Jog is still active.",
+                    "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
+                    "or Tank Cleaning is still active.",
                 )
 
             self.is_running = True
@@ -206,6 +241,11 @@ class ProcessController:
                 self.last_error = f"Manual Drain Jog emergency stop failed: {exc}"
 
             try:
+                self.tank_cleaning.stop(reason="emergency_stop")
+            except Exception as exc:
+                self.last_error = f"Tank Cleaning emergency stop failed: {exc}"
+
+            try:
                 if self.actuators is not None:
                     self.actuators.safe_shutdown_all()
             except Exception as exc:
@@ -228,8 +268,16 @@ class ProcessController:
 
     def start_manual_drain_jog(self) -> dict[str, Any]:
         with self._lock:
-            if self.is_running or self._thread_is_alive_locked() or self._teardown_in_progress:
-                return self._result(False, "Manual Drain Jog blocked: main process is running or cleaning up.")
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.tank_cleaning.is_active()
+            ):
+                return self._result(
+                    False,
+                    "Manual Drain Jog blocked: main process, cleanup, or Tank Cleaning is active.",
+                )
 
         try:
             settings = self.load_settings()
@@ -276,6 +324,11 @@ class ProcessController:
                 self.last_error = f"Manual Drain Jog shutdown failed: {exc}"
 
             try:
+                self.tank_cleaning.stop(reason="controller_shutdown")
+            except Exception as exc:
+                self.last_error = f"Tank Cleaning shutdown failed: {exc}"
+
+            try:
                 if self.actuators is not None:
                     self.actuators.safe_shutdown_all()
             except Exception as exc:
@@ -293,14 +346,71 @@ class ProcessController:
 
         return self._result(True, "Controller shutdown abgeschlossen.")
 
+    def start_tank_cleaning(self, confirmation_text: str) -> dict[str, Any]:
+        with self._lock:
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+            ):
+                return self._result(
+                    False,
+                    "Tank Cleaning blocked: another process, cleanup, or Manual Drain Jog is active.",
+                )
+
+        try:
+            settings = self.load_tank_cleaning_settings()
+        except Exception as exc:
+            message = f"Tank Cleaning settings could not be loaded: {exc}"
+            self._set_error(message)
+            return self._result(False, message)
+
+        required_text = settings.get("required_confirmation_text", "confirmed")
+
+        if confirmation_text.strip() != required_text:
+            message = "Tank Cleaning blocked: confirmation text is wrong."
+            self._set_error(message)
+            return self._result(False, message)
+
+        result = self.tank_cleaning.start(settings)
+
+        with self._lock:
+            self.last_message = result.get("message", "Tank Cleaning start requested.")
+            self.display_state = "TANK_CLEANING" if result.get("success") else self.display_state
+            if not result.get("success"):
+                self.last_error = result.get("message")
+
+        return result
+
+    def stop_tank_cleaning(self) -> dict[str, Any]:
+        result = self.tank_cleaning.stop(reason="stopped_by_user")
+
+        with self._lock:
+            self.last_message = result.get("message", "Tank Cleaning stop requested.")
+            if (
+                not self.is_running
+                and not self.manual_drain_jog.is_active()
+                and not self.tank_cleaning.is_active()
+            ):
+                self.display_state = "IDLE"
+
+        return result
+
     def acknowledge_error(self) -> dict[str, Any]:
         with self._lock:
             thread_alive = self._thread_is_alive_locked()
 
-            if self.is_running or thread_alive or self._teardown_in_progress:
+            if (
+                self.is_running
+                or thread_alive
+                or self._teardown_in_progress
+                or self.tank_cleaning.is_active()
+            ):
                 return self._result(
                     False,
-                    "Reset blockiert: Prozess, Hintergrundthread oder Cleanup läuft noch."
+                    "Reset blockiert: Prozess, Hintergrundthread, Cleanup oder Tank Cleaning läuft noch."
                 )
 
             self._stop_requested = False
