@@ -35,13 +35,29 @@ MIXER_RAW_NODE_ID = "ns=4;s=Values.CEL1.PV_WaterLevel"
 # Nur setzen, wenn der Node wirklich bekannt ist.
 MIXER_SYSTEM_LITERS_NODE_ID: Optional[str] = None
 
-TARGET_VOLUME_L = 50.0
+# Bis hierhin wird von Hand mit Eimer/Kanne befüllt - feine Auflösung im
+# unteren, ohnehin bekannt nichtlinearen Bereich. Danach übernimmt die Pumpe.
+MANUAL_FILL_TARGET_L = 30.0
 DEFAULT_FILL_STEP_L = 5.0
-DEFAULT_DRAIN_STEP_L = 5.0
+
+# Ab MANUAL_FILL_TARGET_L füllt die Mixer-Refill-Pumpe automatisch: einmal
+# PUMP_FILL_FIRST_STEP_L (Aufrunden auf die erste Tankmarkierung), danach in
+# PUMP_FILL_STEP_L-Schritten bis PUMP_FILL_TARGET_L.
+PUMP_FILL_FIRST_STEP_L = 20.0
+PUMP_FILL_STEP_L = 25.0
+PUMP_FILL_TARGET_L = 200.0
+
+# Der Drain nach dem Pump-Fill läuft in denselben 25L-Markierungsschritten
+# wieder bis 0 L runter, ebenfalls pumpengesteuert.
+PUMP_DRAIN_STEP_L = 25.0
 
 SAMPLES_PER_MEASUREMENT = 30
 DELAY_BETWEEN_SAMPLES_S = 0.2
 SETTLING_TIME_S = 10
+
+# Wie oft (in Sekunden) während eines laufenden Pump-Segments ein
+# Rohmesswert in die Trace-CSV geloggt wird.
+TRACE_LOG_INTERVAL_S = 1.0
 
 DATA_DIR = Path("calibration_data")
 
@@ -49,12 +65,15 @@ DATA_DIR = Path("calibration_data")
 # Wird für Sicherheitsbestätigung und valve_settle_seconds genutzt.
 SETTINGS_PATH = Path("config/calibration_settings.json")
 
-# Wenn True, kann das Skript die Transferpumpe + Drainventil steuern.
+# Wenn True, kann das Skript Mixer-Refill-Pumpe, Transferpumpe und
+# Drainventil für die pumpengesteuerten Fill-/Drain-Segmente steuern.
 # Es wird trotzdem zusätzlich abgefragt und sicherheitsbestätigt.
-DRAIN_PUMP_CONTROL_ENABLED = True
+PUMP_CONTROL_ENABLED = True
 
-# Safety timeout for manual calibration drain.
-# Enter may stop earlier, but the pump must never run indefinitely.
+# Safety-Timeouts pro Pump-Segment (nicht für den ganzen Fill-/Drain-Vorgang).
+# Enter (sobald die Markierung erreicht ist) stoppt normalerweise früher,
+# aber die Pumpe darf nie unbegrenzt laufen.
+DEFAULT_CALIBRATION_FILL_MAX_SECONDS = 300.0
 DEFAULT_CALIBRATION_DRAIN_MAX_SECONDS = 120.0
 
 # ============================================================
@@ -140,58 +159,23 @@ class LinearFitResult:
 
 
 # ============================================================
-# SETTINGS / SICHERHEIT
+# SETTINGS
 # ============================================================
+#
+# Keine getippten Bestätigungsphrasen/hardware_execution_enabled-Abfrage
+# mehr in diesem Skript - auf ausdrücklichen Wunsch entfernt, da dieses
+# Skript ohnehin nur manuell, mit anwesendem Bediener, gestartet wird.
+# Der Pumpen-Schutz (Auto-Stopp-Timeout pro Segment) bleibt bestehen, siehe
+# calibration_fill_max_seconds / calibration_drain_max_seconds unten.
 
 def load_settings() -> dict[str, Any]:
     if not SETTINGS_PATH.exists():
         print(f"[WARN] Settings-Datei nicht gefunden: {SETTINGS_PATH}")
         print("[WARN] Nutze interne Default-Werte.")
-        return {
-            "hardware_execution_enabled": False,
-            "required_confirmation_text": "confirmed",
-            "required_drain_confirmation_text": "drain_confirmed",
-            "valve_settle_seconds": 1.0,
-        }
+        return {"valve_settle_seconds": 1.0}
 
     with SETTINGS_PATH.open("r", encoding="utf-8") as file:
         return json.load(file)
-
-
-def require_hardware_confirmation(settings: dict[str, Any]) -> bool:
-    if not settings.get("hardware_execution_enabled", False):
-        print("[BLOCKED] Hardware execution ist in den Settings deaktiviert.")
-        print("[INFO] Drain kann dann nur ohne automatische Pumpensteuerung geloggt werden.")
-        return False
-
-    required_text = settings.get("required_confirmation_text", "confirmed")
-
-    print()
-    print("Sicherheitsbestätigung für Hardware erforderlich.")
-    print(f"Zum Start exakt eingeben: {required_text}")
-    confirmation = input("Bestätigung: ").strip()
-
-    if confirmation != required_text:
-        print("[BLOCKED] Sicherheitsbestätigung falsch. Keine Hardwaresteuerung.")
-        return False
-
-    return True
-
-
-def require_drain_confirmation(settings: dict[str, Any]) -> bool:
-    required_text = settings.get("required_drain_confirmation_text", "drain_confirmed")
-
-    print()
-    print("Drain-Sicherheitsbestätigung erforderlich.")
-    print("Es werden Transferpumpe und Drainventil geschaltet.")
-    print(f"Zum Drain exakt eingeben: {required_text}")
-    confirmation = input("Drain-Bestätigung: ").strip()
-
-    if confirmation != required_text:
-        print("[BLOCKED] Drain-Bestätigung falsch. Keine Pumpensteuerung.")
-        return False
-
-    return True
 
 
 # ============================================================
@@ -339,12 +323,22 @@ async def collect_sensor_stats(
 
 
 # ============================================================
-# AKTOREN / DRAIN-PUMPE
+# PUMPENSTEUERUNG (FILL + DRAIN) UND TRACE-LOGGING
 # ============================================================
+#
+# Ab MANUAL_FILL_TARGET_L übernimmt die Hardware das Befüllen/Entleeren in
+# Markierungs-Schritten (siehe build_pump_fill_checkpoints/
+# build_pump_drain_checkpoints). Für jedes Segment gilt dasselbe Muster:
+#   Pumpe an -> jede Sekunde Rohwert in die Trace-CSV loggen, bis Enter
+#   gedrückt wird (Markierung erreicht) oder ein Safety-Timeout greift ->
+#   Pumpe/Ventil aus -> anschließend wie gewohnt ein gemittelter,
+#   settle-Time-basierter Messpunkt (capture_measurement) für die
+#   eigentliche Kalibrierformel.
 
-def create_drain_actuators():
+def create_calibration_pump_actuators():
     """
-    Erstellt nur die Aktoren, die für den Kalibrier-Drain benötigt werden.
+    Erstellt alle Aktoren für die pumpengesteuerten Kalibrier-Segmente:
+    Mixer-Refill-Pumpe (Fill) sowie Transferpumpe + Drainventil (Drain).
 
     Die Imports sind bewusst hier drin, damit das Skript auch ohne Hardware-Umgebung
     zumindest bis zur manuellen Messung importierbar bleibt.
@@ -354,15 +348,9 @@ def create_drain_actuators():
 
     actuators = ActuatorManager(active_low=ACTIVE_LOW)
 
-    actuators.add(
-        name="transfer_pump",
-        gpio_pin=OUTPUTS["transfer_pump"],
-    )
-
-    actuators.add(
-        name="drain_valve_0",
-        gpio_pin=OUTPUTS["valve_0_drain"],
-    )
+    actuators.add(name="mixer_refill_pump", gpio_pin=OUTPUTS["mixer_refill_pump"])
+    actuators.add(name="transfer_pump", gpio_pin=OUTPUTS["transfer_pump"])
+    actuators.add(name="drain_valve_0", gpio_pin=OUTPUTS["valve_0_drain"])
 
     return actuators
 
@@ -382,77 +370,186 @@ def shutdown_actuators(actuators) -> None:
         print(f"[WARN] close_all fehlgeschlagen: {exc}")
 
 
-def run_transfer_drain_until_enter(actuators, settings: dict[str, Any]) -> None:
-    drain_valve = actuators.get("drain_valve_0")
-    transfer_pump = actuators.get("transfer_pump")
+def trace_csv_path(main_csv_path: Path) -> Path:
+    return main_csv_path.with_name(main_csv_path.stem + "_trace.csv")
 
-    max_runtime_seconds = float(
-        settings.get(
-            "calibration_drain_max_seconds",
-            DEFAULT_CALIBRATION_DRAIN_MAX_SECONDS,
-        )
+
+def open_trace_writer(path: Path):
+    """
+    Öffnet die Trace-CSV im Append-Modus und schreibt den Header nur, wenn
+    die Datei neu/leer ist. Bleibt für die gesamte Pump-Fill-/Pump-Drain-
+    Phase geöffnet, jede Zeile wird sofort geflusht (Crash-Sicherheit).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file = path.open("a", newline="", encoding="utf-8")
+    fieldnames = ["timestamp", "phase", "segment_index", "segment_target_liters", "elapsed_seconds", "sensor_raw"]
+    writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=";")
+
+    if file.tell() == 0:
+        writer.writeheader()
+
+    return file, writer
+
+
+def append_trace_row(
+    writer: "csv.DictWriter",
+    file,
+    phase: str,
+    segment_index: int,
+    segment_target_liters: float,
+    elapsed_seconds: float,
+    sensor_raw: float,
+) -> None:
+    writer.writerow(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "phase": phase,
+            "segment_index": segment_index,
+            "segment_target_liters": segment_target_liters,
+            "elapsed_seconds": round(elapsed_seconds, 1),
+            "sensor_raw": sensor_raw,
+        }
     )
+    file.flush()
 
-    if max_runtime_seconds <= 0:
-        raise ValueError("calibration_drain_max_seconds must be greater than 0")
 
+def build_pump_fill_checkpoints(
+    start_l: float, first_step_l: float, step_l: float, target_l: float
+) -> list[float]:
+    """[50, 75, 100, ...] for start=30, first_step=20, step=25, target=200."""
+    if start_l >= target_l:
+        return []
+
+    checkpoints = [min(start_l + first_step_l, target_l)]
+    while checkpoints[-1] < target_l:
+        checkpoints.append(min(checkpoints[-1] + step_l, target_l))
+
+    return checkpoints
+
+
+def build_pump_drain_checkpoints(start_l: float, step_l: float) -> list[float]:
+    """[175, 150, ..., 25, 0] for start=200, step=25."""
+    checkpoints: list[float] = []
+    current = start_l
+
+    while current > 0:
+        current = max(current - step_l, 0.0)
+        checkpoints.append(current)
+
+    return checkpoints
+
+
+async def _pump_segment_loop(
+    client: Client,
+    max_segment_seconds: float,
+    phase: str,
+    segment_index: int,
+    segment_target_liters: float,
+    trace_writer: "csv.DictWriter",
+    trace_file,
+) -> tuple[str, float]:
+    """
+    Sekündliches Trace-Logging plus Enter-/Timeout-Überwachung, gemeinsam
+    genutzt von Pump-Fill- und Pump-Drain-Segmenten. Schaltet selbst keine
+    Aktoren - der Aufrufer schaltet sie vor dem Aufruf ein und in einem
+    finally-Block danach wieder aus.
+    """
+    raw_node = client.get_node(MIXER_RAW_NODE_ID)
+    start_time = time.monotonic()
     stop_reason = "unknown"
+    last_raw = float("nan")
+
+    while True:
+        elapsed = time.monotonic() - start_time
+
+        try:
+            last_raw = await read_node_float(raw_node)
+            append_trace_row(
+                trace_writer, trace_file, phase, segment_index, segment_target_liters, elapsed, last_raw
+            )
+        except Exception as exc:
+            print(f"\n[WARN] Trace-Messwert konnte nicht gelesen werden: {exc}")
+
+        remaining = max(0.0, max_segment_seconds - elapsed)
+        print(
+            f"  [{phase} #{segment_index} -> {segment_target_liters:.1f}L] "
+            f"läuft seit {elapsed:5.1f}s | raw={last_raw:.3f} | "
+            f"Enter=stop | Auto-Stopp in {remaining:5.1f}s",
+            end="\r",
+        )
+
+        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+            sys.stdin.readline()
+            stop_reason = "stopped_by_enter"
+            break
+
+        if elapsed >= max_segment_seconds:
+            stop_reason = "segment_timeout"
+            break
+
+        await asyncio.sleep(TRACE_LOG_INTERVAL_S)
+
+    print(" " * 100, end="\r")
+    total_elapsed = time.monotonic() - start_time
+    print(f"[INFO] Segment beendet: {stop_reason} nach {total_elapsed:.1f}s")
+
+    return stop_reason, total_elapsed
+
+
+async def run_fill_pump_segment(
+    refill_pump,
+    max_segment_seconds: float,
+    segment_index: int,
+    segment_target_liters: float,
+    trace_writer: "csv.DictWriter",
+    trace_file,
+) -> tuple[str, float]:
+    print(f"\n[FILL CONTROL] Starte Mixer-Refill-Pumpe (Ziel ca. {segment_target_liters:.1f} L).")
+    print(f"[SAFETY] Max. Segment-Laufzeit: {max_segment_seconds:.0f} s")
+    print("[INFO] Enter drücken, sobald die Tank-Markierung erreicht ist.")
+
+    refill_pump.on()
+    try:
+        async with Client(url=OPCUA_ENDPOINT) as client:
+            return await _pump_segment_loop(
+                client, max_segment_seconds, "fill", segment_index, segment_target_liters, trace_writer, trace_file
+            )
+    finally:
+        refill_pump.off()
+        print("[SAFE] Mixer-Refill-Pumpe AUS.")
+
+
+async def run_drain_pump_segment(
+    transfer_pump,
+    drain_valve,
+    max_segment_seconds: float,
+    valve_settle_seconds: float,
+    segment_index: int,
+    segment_target_liters: float,
+    trace_writer: "csv.DictWriter",
+    trace_file,
+) -> tuple[str, float]:
+    print(f"\n[DRAIN CONTROL] Öffne Drainventil (Ziel ca. {segment_target_liters:.1f} L)...")
+    print(f"[SAFETY] Max. Segment-Laufzeit: {max_segment_seconds:.0f} s")
+    drain_valve.on()
 
     try:
-        print("[DRAIN CONTROL] Öffne Drainventil...")
-        drain_valve.on()
-
-        valve_settle_seconds = float(settings.get("valve_settle_seconds", 1.0))
-        print(f"[DRAIN CONTROL] Warte {valve_settle_seconds:.1f} s auf Ventil...")
-        time.sleep(valve_settle_seconds)
+        await asyncio.sleep(valve_settle_seconds)
 
         print("[DRAIN CONTROL] Starte Transferpumpe.")
-        print(f"[SAFETY] Max. Laufzeit: {max_runtime_seconds:.1f} s")
-        print("[INFO] Enter drücken zum Stoppen.")
+        print("[INFO] Enter drücken, sobald die Tank-Markierung erreicht ist.")
         transfer_pump.on()
 
-        start_time = time.monotonic()
-        last_print_second = -1
-
-        while True:
-            elapsed = time.monotonic() - start_time
-            remaining = max_runtime_seconds - elapsed
-
-            current_second = int(elapsed)
-            if current_second != last_print_second:
-                print(
-                    f"[DRAIN CONTROL] läuft seit {elapsed:.1f}s | "
-                    f"Auto-Stopp in {max(0.0, remaining):.1f}s",
-                    end="\r",
-                )
-                last_print_second = current_second
-
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                sys.stdin.readline()
-                stop_reason = "stopped_by_enter"
-                break
-
-            if elapsed >= max_runtime_seconds:
-                stop_reason = "calibration_drain_timeout"
-                print()
-                print("[SAFETY] Max. Laufzeit erreicht. Drain wird automatisch gestoppt.")
-                break
-
-            time.sleep(0.1)
-
-    except KeyboardInterrupt:
-        stop_reason = "keyboard_interrupt"
-        print("\n[ABORT] Drain durch Benutzer abgebrochen.")
-
-    finally:
-        print()
-        print(f"[DRAIN CONTROL] Stoppe Transferpumpe und schließe Drainventil. reason={stop_reason}")
         try:
-            transfer_pump.off()
+            async with Client(url=OPCUA_ENDPOINT) as client:
+                return await _pump_segment_loop(
+                    client, max_segment_seconds, "drain", segment_index, segment_target_liters, trace_writer, trace_file
+                )
         finally:
-            drain_valve.off()
-
-        print("[SAFE] Transfer pump OFF, Drain valve OFF")
+            transfer_pump.off()
+    finally:
+        drain_valve.off()
+        print("[SAFE] Transferpumpe AUS, Drainventil AUS.")
 
 
 # ============================================================
@@ -979,12 +1076,17 @@ def analyze_measurements(measurements: list[Measurement]) -> None:
 async def run_calibration() -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = DATA_DIR / f"mixing_tank_calibration_{timestamp}.csv"
+    trace_path = trace_csv_path(csv_path)
 
     settings = load_settings()
     measurements: list[Measurement] = []
     current_reference_volume_l = 0.0
+    fill_step = 0
+    drain_step = 0
     actuators = None
     pump_control_active = False
+    trace_file = None
+    trace_writer = None
 
     print("============================================================")
     print("Mixing-Tank Sensor-Kalibrierung")
@@ -992,9 +1094,14 @@ async def run_calibration() -> None:
     print(f"OPC-UA Endpoint:      {OPCUA_ENDPOINT}")
     print(f"Raw Node:             {MIXER_RAW_NODE_ID}")
     print(f"System Liter Node:    {MIXER_SYSTEM_LITERS_NODE_ID}")
-    print(f"Zielvolumen:          {TARGET_VOLUME_L:.1f} L")
+    print(f"Manuelles Fill bis:   {MANUAL_FILL_TARGET_L:.1f} L")
+    print(
+        f"Pumpen-Fill bis:      {PUMP_FILL_TARGET_L:.1f} L "
+        f"(1x {PUMP_FILL_FIRST_STEP_L:.0f}L, dann {PUMP_FILL_STEP_L:.0f}L-Schritte)"
+    )
     print(f"Samples/Messpunkt:    {SAMPLES_PER_MEASUREMENT}")
     print(f"CSV-Datei:            {csv_path}")
+    print(f"Trace-CSV-Datei:      {trace_path}")
     print()
     print("Bridge-Dokumentation:")
     print(f"  factor:             {BRIDGE_MIXER_SENSOR_LITER_FACTOR}")
@@ -1003,13 +1110,15 @@ async def run_calibration() -> None:
     print("============================================================")
     print()
     print("Ablauf:")
-    print("  1. Tank leer starten.")
-    print("  2. Nullpunkt erfassen.")
-    print("  3. Wasser manuell einfüllen und Menge eingeben.")
-    print("  4. Bis ca. 50 L wiederholen.")
-    print("  5. Drain-Messung: Transferpumpe kann über das Skript gestartet/gestoppt werden.")
-    print("  6. Abgelassene Menge wird im Eimer gemessen und eingegeben.")
-    print("  7. Finalen Nullpunkt nach Drain erfassen.")
+    print("  1. Tank leer starten, Nullpunkt erfassen.")
+    print(f"  2. Manuell Wasser zufügen bis {MANUAL_FILL_TARGET_L:.0f} L (Eimer/Kanne).")
+    print(f"  3. Ab {MANUAL_FILL_TARGET_L:.0f} L füllt die Mixer-Refill-Pumpe automatisch,")
+    print(f"     in Markierungs-Schritten bis {PUMP_FILL_TARGET_L:.0f} L. Enter stoppt die Pumpe,")
+    print("     sobald die Markierung erreicht ist - jedes Segment loggt den Rohwert")
+    print("     sekündlich in die Trace-CSV.")
+    print(f"  4. Danach entleert dieselbe Pumpen-/Ventilkombination in {PUMP_DRAIN_STEP_L:.0f}L-")
+    print("     Schritten wieder bis 0 L, ebenfalls mit sekündlichem Trace-Log.")
+    print("  5. Finalen Nullpunkt nach Drain erfassen.")
     print()
     print("Wichtig:")
     print("  Kalibriereinstellungen NICHT mehr ändern.")
@@ -1021,18 +1130,19 @@ async def run_calibration() -> None:
         return
 
     try:
-        if DRAIN_PUMP_CONTROL_ENABLED and ask_yes_no("Drainpumpe im Skript steuern?", default=True):
-            if require_hardware_confirmation(settings) and require_drain_confirmation(settings):
-                try:
-                    actuators = create_drain_actuators()
-                    pump_control_active = True
-                    print("[OK] Drain-Aktoren initialisiert.")
-                except Exception as exc:
-                    print(f"[ERROR] Drain-Aktoren konnten nicht initialisiert werden: {exc}")
-                    print("[INFO] Weiter ohne automatische Pumpensteuerung.")
-                    pump_control_active = False
-            else:
-                print("[INFO] Weiter ohne automatische Pumpensteuerung.")
+        if PUMP_CONTROL_ENABLED and ask_yes_no(
+            f"Pumpengesteuerte Fill-/Drain-Segmente (ab {MANUAL_FILL_TARGET_L:.0f} L) durchführen?",
+            default=True,
+        ):
+            try:
+                actuators = create_calibration_pump_actuators()
+                trace_file, trace_writer = open_trace_writer(trace_path)
+                pump_control_active = True
+                print("[OK] Fill-/Drain-Aktoren initialisiert.")
+            except Exception as exc:
+                print(f"[ERROR] Aktoren/Trace-Datei konnten nicht initialisiert werden: {exc}")
+                print("[INFO] Pumpengesteuerte Segmente werden übersprungen.")
+                pump_control_active = False
 
         # ----------------------------------------------------
         # 0-Liter-Punkt
@@ -1056,17 +1166,15 @@ async def run_calibration() -> None:
         print(f"CSV aktualisiert: {csv_path}")
 
         # ----------------------------------------------------
-        # FILL-PHASE
+        # MANUELLE FILL-PHASE (0 -> MANUAL_FILL_TARGET_L)
         # ----------------------------------------------------
         print("\n------------------------------------------------------------")
-        print("FILL-PHASE")
+        print(f"MANUELLE FILL-PHASE (bis {MANUAL_FILL_TARGET_L:.0f} L)")
         print("------------------------------------------------------------")
 
-        fill_step = 1
-
-        while current_reference_volume_l < TARGET_VOLUME_L:
+        while current_reference_volume_l < MANUAL_FILL_TARGET_L:
             print(f"\nAktuelles Referenzvolumen: {current_reference_volume_l:.3f} L")
-            print(f"Ziel: {TARGET_VOLUME_L:.3f} L")
+            print(f"Ziel: {MANUAL_FILL_TARGET_L:.3f} L")
 
             if not ask_yes_no("Weiteren Fill-Messpunkt erfassen?", default=True):
                 break
@@ -1080,6 +1188,7 @@ async def run_calibration() -> None:
                 continue
 
             current_reference_volume_l += added_l
+            fill_step += 1
 
             measurement = await capture_measurement(
                 phase="fill",
@@ -1094,79 +1203,121 @@ async def run_calibration() -> None:
             save_csv(csv_path, measurements)
             print(f"CSV aktualisiert: {csv_path}")
 
-            fill_step += 1
-
-            if current_reference_volume_l >= TARGET_VOLUME_L:
-                print(f"\nZielvolumen erreicht oder überschritten: {current_reference_volume_l:.3f} L")
+            if current_reference_volume_l >= MANUAL_FILL_TARGET_L:
+                print(f"\nManuelles Zielvolumen erreicht: {current_reference_volume_l:.3f} L")
                 break
 
         # ----------------------------------------------------
-        # DRAIN-PHASE
+        # PUMPEN-FILL-PHASE (MANUAL_FILL_TARGET_L -> PUMP_FILL_TARGET_L)
         # ----------------------------------------------------
-        print("\n------------------------------------------------------------")
-        print("DRAIN-PHASE")
-        print("------------------------------------------------------------")
-        print(f"Startvolumen für Drain: {current_reference_volume_l:.3f} L")
+        if pump_control_active and current_reference_volume_l < PUMP_FILL_TARGET_L:
+            print("\n------------------------------------------------------------")
+            print(f"PUMPEN-FILL-PHASE (bis {PUMP_FILL_TARGET_L:.0f} L)")
+            print("------------------------------------------------------------")
 
-        if ask_yes_no("Drain-Messreihe erfassen?", default=True):
-            if ask_yes_no("Drain-Startpunkt vor dem ersten Ablassen erfassen?", default=True):
-                drain_start = await capture_measurement(
-                    phase="drain_start",
-                    step=0,
+            fill_checkpoints = build_pump_fill_checkpoints(
+                current_reference_volume_l, PUMP_FILL_FIRST_STEP_L, PUMP_FILL_STEP_L, PUMP_FILL_TARGET_L
+            )
+            max_fill_segment_seconds = float(
+                settings.get("calibration_fill_max_seconds", DEFAULT_CALIBRATION_FILL_MAX_SECONDS)
+            )
+            refill_pump = actuators.get("mixer_refill_pump")
+
+            for checkpoint in fill_checkpoints:
+                print(f"\nAktuelles Referenzvolumen: {current_reference_volume_l:.3f} L")
+                print(f"Nächste Markierung: {checkpoint:.1f} L")
+
+                if not ask_yes_no("Pump-Fill-Segment starten?", default=True):
+                    break
+
+                fill_step += 1
+
+                await run_fill_pump_segment(
+                    refill_pump=refill_pump,
+                    max_segment_seconds=max_fill_segment_seconds,
+                    segment_index=fill_step,
+                    segment_target_liters=checkpoint,
+                    trace_writer=trace_writer,
+                    trace_file=trace_file,
+                )
+
+                confirmed_l = ask_float(
+                    "Welchen Literwert zeigt die Markierung am Tank gerade an?",
+                    default=checkpoint,
+                )
+                current_reference_volume_l = confirmed_l
+
+                measurement = await capture_measurement(
+                    phase="fill",
+                    step=fill_step,
                     manual_added_l=0.0,
                     manual_drained_l=0.0,
                     reference_volume_l=current_reference_volume_l,
-                    note="drain start before pump",
-                )
-
-                measurements.append(drain_start)
-                save_csv(csv_path, measurements)
-                print(f"CSV aktualisiert: {csv_path}")
-
-            drain_step = 1
-
-            while current_reference_volume_l > 0:
-                print(f"\nAktuelles berechnetes Restvolumen: {current_reference_volume_l:.3f} L")
-
-                if not ask_yes_no("Weiteren Drain-Messpunkt erfassen?", default=True):
-                    break
-
-                if pump_control_active:
-                    print()
-                    print("Stelle den Eimer bereit.")
-                    print("Das Skript öffnet Drainventil und startet Transferpumpe.")
-                    run_transfer_drain_until_enter(actuators, settings)
-                else:
-                    print()
-                    print("Bitte Wasser über Drain/Transferpumpe in einen Eimer ablassen.")
-                    input("Danach Enter drücken...")
-
-                drained_l = ask_float("Wie viele Liter wurden abgelassen?", default=DEFAULT_DRAIN_STEP_L)
-
-                if drained_l <= 0:
-                    print("Wert muss größer als 0 sein.")
-                    continue
-
-                current_reference_volume_l -= drained_l
-
-                if current_reference_volume_l < 0:
-                    print("Hinweis: Referenzvolumen würde negativ werden. Es wird auf 0 gesetzt.")
-                    current_reference_volume_l = 0.0
-
-                measurement = await capture_measurement(
-                    phase="drain",
-                    step=drain_step,
-                    manual_added_l=0.0,
-                    manual_drained_l=drained_l,
-                    reference_volume_l=current_reference_volume_l,
-                    note="manual measured drain volume",
+                    note=f"pump fill checkpoint, target={checkpoint:.1f}L",
                 )
 
                 measurements.append(measurement)
                 save_csv(csv_path, measurements)
                 print(f"CSV aktualisiert: {csv_path}")
 
+                if current_reference_volume_l >= PUMP_FILL_TARGET_L:
+                    print(f"\nPumpen-Zielvolumen erreicht: {current_reference_volume_l:.3f} L")
+                    break
+
+        # ----------------------------------------------------
+        # PUMPEN-DRAIN-PHASE (aktuelles Volumen -> 0 L)
+        # ----------------------------------------------------
+        if pump_control_active and current_reference_volume_l > 0:
+            print("\n------------------------------------------------------------")
+            print("PUMPEN-DRAIN-PHASE (bis 0 L)")
+            print("------------------------------------------------------------")
+
+            drain_checkpoints = build_pump_drain_checkpoints(current_reference_volume_l, PUMP_DRAIN_STEP_L)
+            max_drain_segment_seconds = float(
+                settings.get("calibration_drain_max_seconds", DEFAULT_CALIBRATION_DRAIN_MAX_SECONDS)
+            )
+            valve_settle_seconds = float(settings.get("valve_settle_seconds", 1.0))
+            transfer_pump = actuators.get("transfer_pump")
+            drain_valve = actuators.get("drain_valve_0")
+
+            for checkpoint in drain_checkpoints:
+                print(f"\nAktuelles Referenzvolumen: {current_reference_volume_l:.3f} L")
+                print(f"Nächste Markierung: {checkpoint:.1f} L")
+
+                if not ask_yes_no("Pump-Drain-Segment starten?", default=True):
+                    break
+
                 drain_step += 1
+
+                await run_drain_pump_segment(
+                    transfer_pump=transfer_pump,
+                    drain_valve=drain_valve,
+                    max_segment_seconds=max_drain_segment_seconds,
+                    valve_settle_seconds=valve_settle_seconds,
+                    segment_index=drain_step,
+                    segment_target_liters=checkpoint,
+                    trace_writer=trace_writer,
+                    trace_file=trace_file,
+                )
+
+                confirmed_l = ask_float(
+                    "Welchen Literwert zeigt die Markierung am Tank gerade an?",
+                    default=checkpoint,
+                )
+                current_reference_volume_l = confirmed_l
+
+                measurement = await capture_measurement(
+                    phase="drain",
+                    step=drain_step,
+                    manual_added_l=0.0,
+                    manual_drained_l=0.0,
+                    reference_volume_l=current_reference_volume_l,
+                    note=f"pump drain checkpoint, target={checkpoint:.1f}L",
+                )
+
+                measurements.append(measurement)
+                save_csv(csv_path, measurements)
+                print(f"CSV aktualisiert: {csv_path}")
 
                 if current_reference_volume_l <= 0:
                     print("\nTank rechnerisch leer.")
@@ -1200,6 +1351,9 @@ async def run_calibration() -> None:
             print("[SAFE] Shutdown all calibration actuators.")
             shutdown_actuators(actuators)
 
+        if trace_file is not None:
+            trace_file.close()
+
     analyze_measurements(measurements)
 
     print("\n============================================================")
@@ -1207,6 +1361,9 @@ async def run_calibration() -> None:
     print("============================================================")
     print("CSV-Datei gespeichert unter:")
     print(f"  {csv_path}")
+    if trace_writer is not None:
+        print("Trace-CSV (sekündliche Rohwerte während Pump-Segmenten) unter:")
+        print(f"  {trace_path}")
     print()
     print("Diese CSV bitte aufheben. Daraus können wir später")
     print("eine Kalibriertabelle, Interpolation oder finale Sensorformel ableiten.")
