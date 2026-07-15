@@ -13,11 +13,11 @@
   },
   "mixer_level_calibration": {
     "volume_liters": 200.0,
-    "factor": 0.590368,
-    "offset": -23.728149,
-    "status": "fitted_ge10L_20260703_sessions",
-    "fit_r2": 0.963545,
-    "fit_max_abs_error_liters": 4.338,
-    "fit_source": "calibration_mixing_tank.py --analyze calibration_data/mixing_tank_calibration_20260703_122649.csv calibration_data/mixing_tank_calibration_20260703_144043.csv (zero-normalized FILL data, both sessions pooled, reference_volume_l >= 10L only - below 10L the sensor is non-linear/unreliable, not covered by this formula)"
+    "factor": 0.610566,
+    "offset": -26.093067,
+    "status": "fitted_ge10L_20260703_20260709_sessions",
+    "fit_r2": 0.996399,
+    "fit_max_abs_error_liters": 5.698,
+    "fit_source": "calibration_mixing_tank.py --analyze calibration_data/mixing_tank_calibration_20260703_122649.csv calibration_data/mixing_tank_calibration_20260703_144043.csv calibration_data/mixing_tank_calibration_20260709_104040.csv calibration_data/mixing_tank_calibration_20260709_110221.csv (zero-normalized FILL data, all sessions pooled, reference_volume_l >= 10L only - below 10L the sensor is non-linear/unreliable, not covered by this formula; one 50L pump-fill checkpoint from the 20260709_110221 session excluded as an outlier, see its invalid_reason in that CSV. Covers 10-175L; 175-200L still unconfirmed, no reliable tank marking at max fill.)"
   }
 }
