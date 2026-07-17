@@ -268,6 +268,20 @@ Node-RED darf diese Pins nicht blockieren. Falls Node-RED nur unabhängige Funkt
 | GPIO-Konflikt mit Node-RED | Node-RED-Flow nutzt denselben Pin | Node-RED-Flow-Zuordnung prüfen, `scripts/check_gpio_conflicts.py` |
 | Sensor-Payload ungültig | `cds-sensor-bridge.service` läuft nicht/hängt | `journalctl -u cds-sensor-bridge.service -f` |
 
+### Automatisierte Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Deckt Locking (`nicegui_dashboard/process_controller.py`, prozessübergreifende
+Sperre in `hardware/actuator_manager.py`), Watchdog-/Fortschrittsprüfungen
+(`process/watchdog.py`) und Settings-Validierung (`services/settings_validation.py`,
+inklusive aller vier echten `config/*.json`-Dateien) ab — kein GPIO/OPC-UA
+wird dabei angefasst. `requirements-dev.txt` (nur `pytest` zusätzlich zu
+`requirements.txt`) ist bewusst getrennt von der Produktions-`requirements.txt`.
+
 ---
 
 ## 10. Sensor-Bridge
@@ -448,7 +462,7 @@ Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fi
 4. Modularen Water-Cycle real mit Hardware testen.
 5. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
 6. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
-7. Automatisierte Tests für config- und safety-nahe Funktionen ergänzen (aktuell kein `tests/`, kein CI, kein Linting/mypy trotz durchgängiger Typannotationen).
+7. Kein CI, kein Linting/mypy trotz durchgängiger Typannotationen (`tests/` mit `pytest` für Locking/Watchdogs/Config-Validierung existiert inzwischen, siehe Abschnitt 9).
 8. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
 9. Peristaltikpumpensteuerung erst nach weiterer Sicherheitsvalidierung vorbereiten.
 
