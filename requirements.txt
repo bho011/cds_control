@@ -1,4 +1,5 @@
 asyncua
 paho-mqtt
 nicegui
+gpiozero
 lgpio

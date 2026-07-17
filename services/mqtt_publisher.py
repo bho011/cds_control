@@ -4,15 +4,19 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
+from services.system_config import get_mqtt_config
+
+_SYSTEM_MQTT_CONFIG = get_mqtt_config()
+
 
 class MqttPublisher:
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = 1883,
-        topic: str = "cds/status/process",
-        qos: int = 1,
-        publish_timeout_seconds: float = 2.0,
+        host: str = _SYSTEM_MQTT_CONFIG["host"],
+        port: int = _SYSTEM_MQTT_CONFIG["port"],
+        topic: str = _SYSTEM_MQTT_CONFIG["process_topic"],
+        qos: int = _SYSTEM_MQTT_CONFIG["qos"],
+        publish_timeout_seconds: float = _SYSTEM_MQTT_CONFIG["publish_timeout_seconds"],
         fail_soft: bool = True,
     ):
         self.host = host

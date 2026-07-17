@@ -5,6 +5,10 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
+from services.system_config import get_mqtt_config
+
+_SYSTEM_MQTT_CONFIG = get_mqtt_config()
+
 
 class MqttTopicReader:
     """
@@ -17,8 +21,8 @@ class MqttTopicReader:
 
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = 1883,
+        host: str = _SYSTEM_MQTT_CONFIG["host"],
+        port: int = _SYSTEM_MQTT_CONFIG["port"],
         topic: str = "",
         max_age_seconds: float = 10.0,
     ) -> None:

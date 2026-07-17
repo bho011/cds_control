@@ -118,6 +118,25 @@ class PreflightReport:
         else:
             print("RESULT: OK - Preflight erfolgreich.")
 
+    def format_report_lines(self) -> list[str]:
+        """Same content as print_report(), returned as lines instead of printed - used by the dashboard's Preflight button to feed the Process Log."""
+        lines = ["CDS Preflight Check", "==================="]
+
+        for result in self.results:
+            lines.append(f"[{result.status:<4}] {result.name}")
+            if result.detail:
+                lines.append(f"       {result.detail}")
+
+        lines.append("")
+        if self.has_failures:
+            lines.append("RESULT: FAIL - Nicht starten, erst Fehler beheben.")
+        elif self.has_warnings:
+            lines.append("RESULT: WARN - Grundsätzlich lauffähig, Warnungen prüfen.")
+        else:
+            lines.append("RESULT: OK - Preflight erfolgreich.")
+
+        return lines
+
 
 def run_command(command: list[str], timeout: int = 5) -> tuple[int, str, str]:
     try:
@@ -242,7 +261,7 @@ def check_gpio_config(report: PreflightReport):
     }
 
     if duplicates:
-        report.warn("GPIO duplicate pins", str(duplicates))
+        report.fail("GPIO duplicate pins", str(duplicates))
     else:
         report.ok("GPIO duplicate pins", "No duplicate GPIO assignments found")
 
@@ -401,12 +420,14 @@ def check_latest_mqtt_sensor_payload(report: PreflightReport):
             pass
 
 
-def main():
+def run_preflight_report() -> PreflightReport:
+    """
+    Runs the full check sequence and returns the report without printing or
+    exiting the process - used by main() below for the CLI entry point, and
+    by the dashboard's "Run Preflight Check" button (which runs inside the
+    long-lived NiceGUI process and must never call sys.exit()).
+    """
     report = PreflightReport()
-
-    print("Running CDS preflight checks...")
-    print("No GPIO output will be initialized or switched.")
-    print()
 
     check_project_files(report)
     check_python_syntax(report)
@@ -417,6 +438,15 @@ def main():
     check_opcua_endpoint(report)
     check_latest_mqtt_sensor_payload(report)
 
+    return report
+
+
+def main():
+    print("Running CDS preflight checks...")
+    print("No GPIO output will be initialized or switched.")
+    print()
+
+    report = run_preflight_report()
     report.print_report()
 
     if report.has_failures:

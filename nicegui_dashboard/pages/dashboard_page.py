@@ -276,7 +276,12 @@ def create_dashboard_page(controller: CdsController) -> None:
                             "top-badge badge-orange"
                         )
 
-                    ui.label("Process Log").classes("control-section-title mt-4")
+                    with ui.row().classes("w-full items-center justify-between mt-4"):
+                        ui.label("Process Log").classes("control-section-title")
+                        preflight_button = ui.button("Run Preflight Check").props(
+                            "outline color=grey-5 icon=fact_check"
+                        )
+
                     log_box = ui.label("").classes("log-box")
 
                     with ui.row().classes("w-full justify-end gap-3 mt-3"):
@@ -753,11 +758,32 @@ def create_dashboard_page(controller: CdsController) -> None:
         result = controller.stop_tank_cleaning()
         add_log(f"[TANK CLEANING] {result['message']}")
 
+    async def handle_run_preflight() -> None:
+        preflight_button.props("loading")
+        preflight_button.disable()
+        add_log("[PREFLIGHT] Running checks...")
+
+        try:
+            result = await controller.run_preflight_check()
+            add_log("[PREFLIGHT]\n" + "\n".join(result["lines"]))
+
+            notify_color = {
+                "OK": "positive",
+                "WARN": "warning",
+                "FAIL": "negative",
+                "ERROR": "negative",
+            }.get(result["status"], "negative")
+            ui.notify(f"Preflight: {result['status']}", color=notify_color)
+        finally:
+            preflight_button.props(remove="loading")
+            preflight_button.enable()
+
     start_button.on_click(handle_start)
     reset_button.on_click(handle_reset)
     stop_button.on_click(handle_stop)
     tank_cleaning_start_button.on_click(handle_tank_cleaning_start)
     tank_cleaning_stop_button.on_click(handle_tank_cleaning_stop)
+    preflight_button.on_click(handle_run_preflight)
 
     manual_drain_button.on("mousedown", lambda _: handle_manual_drain_start())
     manual_drain_button.on("mouseup", lambda _: handle_manual_drain_stop())

@@ -1,12 +1,17 @@
+import asyncio
 import logging
 from typing import Any
 
 from nicegui_dashboard.mqtt_topic_reader import MqttTopicReader
 from nicegui_dashboard.process_controller import ProcessController
+from preflight_check import run_preflight_report
 from services.sensor_snapshot import SensorSnapshotReader
+from services.system_config import get_mqtt_config
 
 
 logger = logging.getLogger(__name__)
+
+_SYSTEM_MQTT_CONFIG = get_mqtt_config()
 
 
 class CdsController:
@@ -28,9 +33,9 @@ class CdsController:
         self.sensor_error: str | None = None
 
         self.process_reader = MqttTopicReader(
-            host="localhost",
-            port=1883,
-            topic="cds/status/process",
+            host=_SYSTEM_MQTT_CONFIG["host"],
+            port=_SYSTEM_MQTT_CONFIG["port"],
+            topic=_SYSTEM_MQTT_CONFIG["process_topic"],
             max_age_seconds=30.0,
         )
         self.process_reader_started = False
@@ -113,6 +118,27 @@ class CdsController:
 
     def stop_tank_cleaning(self) -> dict[str, Any]:
         return self.process_controller.stop_tank_cleaning()
+
+    async def run_preflight_check(self) -> dict[str, Any]:
+        """
+        Runs preflight_check.py's full check sequence in a worker thread, so
+        the blocking parts (systemctl, socket, MQTT wait) don't stall the
+        NiceGUI event loop for every connected dashboard client.
+        """
+        try:
+            report = await asyncio.to_thread(run_preflight_report)
+        except Exception as exc:
+            self._record_error("Preflight check failed to run", exc)
+            return {"status": "ERROR", "lines": [f"[ERROR] Preflight check failed to run: {exc}"]}
+
+        if report.has_failures:
+            status = "FAIL"
+        elif report.has_warnings:
+            status = "WARN"
+        else:
+            status = "OK"
+
+        return {"status": status, "lines": report.format_report_lines()}
 
     def get_process_control_status(self) -> dict[str, Any]:
         status = self.process_controller.get_status()

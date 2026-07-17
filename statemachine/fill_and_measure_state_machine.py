@@ -4,6 +4,11 @@ from collections import deque
 from enum import Enum, auto
 from typing import Any, Callable
 
+# Same calibration mqtt_sensor_bridge.py already applies to volume_liters_calc.
+# Used below only as the fallback for the rare case where the bridge hasn't
+# published a calibrated value yet.
+_SYSTEM_MIXER_CALIBRATION = get_mixer_level_calibration()
+
 
 class FillAndMeasureState(Enum):
     IDLE = auto()
@@ -402,11 +407,17 @@ class FillAndMeasureStateMachine:
         if value is not None:
             return float(value)
 
-        # Fallback: raw liter value with optional local calibration.
+        # Fallback: raw liter value, calibrated with the same factor/offset
+        # the bridge uses (config/system_config.json), unless a process-
+        # specific override is set in self.settings.
         raw_liters = mixer.get("volume_liters_raw")
         if raw_liters is not None:
-            factor = float(self.settings.get("mixer_sensor_liter_factor", 1.0))
-            offset = float(self.settings.get("mixer_sensor_liter_offset", 0.0))
+            factor = float(
+                self.settings.get("mixer_sensor_liter_factor", _SYSTEM_MIXER_CALIBRATION["factor"])
+            )
+            offset = float(
+                self.settings.get("mixer_sensor_liter_offset", _SYSTEM_MIXER_CALIBRATION["offset"])
+            )
             return max(0.0, (float(raw_liters) * factor) + offset)
 
         # Last fallback: percent.
