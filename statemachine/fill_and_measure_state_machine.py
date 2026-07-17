@@ -4,6 +4,8 @@ from collections import deque
 from enum import Enum, auto
 from typing import Any, Callable
 
+from process.watchdog import FillWatchdog
+
 # Same calibration mqtt_sensor_bridge.py already applies to volume_liters_calc.
 # Used below only as the fallback for the rare case where the bridge hasn't
 # published a calibrated value yet.
@@ -169,6 +171,11 @@ class FillAndMeasureStateMachine:
         ro_liters = self._ro_liters(snapshot)
 
         if mixer_liters is None:
+            # Same reason code refill.py/TankCleaningController use for the
+            # equivalent case, for consistency (this field was previously
+            # left unset here - harmless since nothing reads it externally,
+            # but worth fixing while touching this code).
+            self.stop_reason = "missing_mixer_level_during_fill"
             self.error("Mixer liters lost during filling.")
             return
 
@@ -187,52 +194,34 @@ class FillAndMeasureStateMachine:
         fill_elapsed = time.monotonic() - self.fill_started_at
         process_elapsed = self._process_elapsed_seconds()
 
-        max_fill_seconds = float(self.settings["max_fill_seconds"])
-        if process_elapsed > max_fill_seconds:
-            self.stop_reason = "max_fill_timeout"
-            self.error(f"Max fill time exceeded: {max_fill_seconds:.1f} seconds.")
-            return
-
-        max_mixer_liters = float(self.settings["max_mixer_liters"])
-        if mixer_liters > max_mixer_liters:
-            self.stop_reason = "mixer_over_max_limit"
-            self.error(
-                f"Mixer over max limit: "
-                f"{mixer_liters:.2f} L > {max_mixer_liters:.2f} L."
-            )
+        watchdog = FillWatchdog(
+            start_liters=self.start_mixer_liters,
+            max_liters=float(self.settings["max_mixer_liters"]),
+            max_seconds=float(self.settings["max_fill_seconds"]),
+            no_progress_timeout_seconds=float(
+                self.settings.get("no_fill_progress_timeout_seconds", 15.0)
+            ),
+            min_progress_liters=float(
+                self.settings.get("min_fill_progress_liters", 1.5)
+            ),
+            max_negative_drift_liters=float(
+                self.settings.get("max_negative_level_drift_liters", 2.0)
+            ),
+        )
+        # max_fill_seconds is measured against the whole process's elapsed
+        # time here, not just fill_elapsed since this phase started - the
+        # one real difference found between the three call sites FillWatchdog
+        # was extracted from, hence the separate max_elapsed_seconds arg.
+        watchdog_result = watchdog.check(
+            mixer_liters, fill_elapsed, max_elapsed_seconds=process_elapsed
+        )
+        if watchdog_result is not None:
+            self.stop_reason, message = watchdog_result
+            self.error(message)
             return
 
         added_liters = mixer_liters - self.start_mixer_liters
         self.last_added_liters = added_liters
-
-        max_negative_drift = float(
-            self.settings.get("max_negative_level_drift_liters", 2.0)
-        )
-
-        if added_liters < -max_negative_drift:
-            self.stop_reason = "negative_level_drift"
-            self.error(
-                f"Mixer level drift too negative: "
-                f"added={added_liters:.2f} L, "
-                f"allowed=-{max_negative_drift:.2f} L."
-            )
-            return
-
-        no_progress_timeout = float(
-            self.settings.get("no_fill_progress_timeout_seconds", 15.0)
-        )
-        min_progress = float(
-            self.settings.get("min_fill_progress_liters", 1.5)
-        )
-
-        if fill_elapsed >= no_progress_timeout and added_liters < min_progress:
-            self.stop_reason = "no_fill_progress_timeout"
-            self.error(
-                f"No plausible fill progress. "
-                f"Added={added_liters:.2f} L after {fill_elapsed:.1f}s. "
-                f"Required at least {min_progress:.2f} L."
-            )
-            return
 
         fill_mode = self.settings.get("fill_mode", "delta")
 

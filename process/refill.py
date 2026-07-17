@@ -9,6 +9,7 @@ from .common import (
     publish_process_status,
     log_step,
 )
+from .watchdog import FillWatchdog
 
 
 def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, auto_circulation=None) -> PhaseResult:
@@ -58,6 +59,15 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, a
 
     refill_pump = actuators.get("mixer_refill_pump")
 
+    watchdog = FillWatchdog(
+        start_liters=start_liters,
+        max_liters=float(settings["max_mixer_liters"]),
+        max_seconds=float(settings["max_fill_seconds"]),
+        no_progress_timeout_seconds=float(settings["no_fill_progress_timeout_seconds"]),
+        min_progress_liters=float(settings["min_fill_progress_liters"]),
+        max_negative_drift_liters=float(settings.get("max_negative_level_drift_liters", 3.0)),
+    )
+
     fill_start_time = time.monotonic()
     target_confirm_count = 0
     stop_reason = None
@@ -88,45 +98,13 @@ def run_fill_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, a
             if auto_circulation is not None:
                 auto_circulation.update(metrics.mixer_liters_filtered)
 
-            if metrics.mixer_liters_filtered is None:
-                stop_reason = "missing_mixer_level_during_fill"
-                error = stop_reason
+            watchdog_result = watchdog.check(metrics.mixer_liters_filtered, elapsed)
+            if watchdog_result is not None:
+                stop_reason, error = watchdog_result
                 break
 
             final_liters = metrics.mixer_liters_filtered
             added_liters = final_liters - start_liters
-
-            max_mixer_liters = float(settings["max_mixer_liters"])
-            if final_liters > max_mixer_liters:
-                stop_reason = "mixer_over_max_limit"
-                error = f"Mixer level {final_liters:.2f} L > {max_mixer_liters:.2f} L"
-                break
-
-            max_negative_drift = float(settings.get("max_negative_level_drift_liters", 3.0))
-            if added_liters < -max_negative_drift:
-                stop_reason = "negative_level_drift"
-                error = f"Added liters {added_liters:.2f} below allowed drift"
-                break
-
-            no_progress_timeout = float(settings["no_fill_progress_timeout_seconds"])
-            min_progress = float(settings["min_fill_progress_liters"])
-
-            if elapsed >= no_progress_timeout and added_liters < min_progress:
-                stop_reason = "no_fill_progress_timeout"
-                error = (
-                    f"No plausible fill progress. "
-                    f"Added={added_liters:.2f} L after {elapsed:.1f}s"
-                )
-                break
-
-            max_fill_seconds = float(settings["max_fill_seconds"])
-            if elapsed >= max_fill_seconds:
-                stop_reason = "max_fill_timeout"
-                error = (
-                    f"Max fill timeout reached. "
-                    f"Mixer={final_liters:.2f}/{target_total:.2f} L after {elapsed:.1f}s"
-                )
-                break
 
             if final_liters >= target_total:
                 target_confirm_count += 1

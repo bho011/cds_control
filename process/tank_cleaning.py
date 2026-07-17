@@ -42,6 +42,7 @@ from typing import Any, Callable
 from .auto_circulation import AutoCirculationController, load_auto_circulation_config
 from .background_process import BackgroundHardwareProcess
 from .common import make_level_history, mixer_liters_from_snapshot, ro_liters_from_snapshot
+from .watchdog import EmptyConfirmCounter, FillWatchdog, calculate_drain_timeout_seconds
 
 
 class TankCleaningPhase:
@@ -297,6 +298,15 @@ class TankCleaningController(BackgroundHardwareProcess):
         refill_pump.on()
         self._publish(actuators, TankCleaningPhase.FILLING)
 
+        watchdog = FillWatchdog(
+            start_liters=start_liters,
+            max_liters=max_mixer_liters,
+            max_seconds=max_fill_seconds,
+            no_progress_timeout_seconds=no_progress_timeout,
+            min_progress_liters=min_progress,
+            max_negative_drift_liters=max_negative_drift,
+        )
+
         fill_start = time.monotonic()
         target_confirm_count = 0
 
@@ -309,38 +319,10 @@ class TankCleaningController(BackgroundHardwareProcess):
                 liters = self._read_mixer_liters(settings, level_history)
                 self._auto_circulation.update(liters)
 
-                if liters is None:
-                    self._fail("missing_mixer_level_during_fill", "Mixer level lost during fill.")
-                    return False
-
-                added = liters - start_liters
-
-                if liters > max_mixer_liters:
-                    self._fail(
-                        "mixer_over_max_limit",
-                        f"Mixer level {liters:.2f} L exceeded max {max_mixer_liters:.2f} L.",
-                    )
-                    return False
-
-                if added < -max_negative_drift:
-                    self._fail(
-                        "negative_level_drift",
-                        f"Mixer level dropped implausibly during fill ({added:.2f} L).",
-                    )
-                    return False
-
-                if elapsed >= no_progress_timeout and added < min_progress:
-                    self._fail(
-                        "no_fill_progress_timeout",
-                        f"No plausible fill progress after {elapsed:.1f}s.",
-                    )
-                    return False
-
-                if elapsed >= max_fill_seconds:
-                    self._fail(
-                        "max_fill_timeout",
-                        f"Max fill time of {max_fill_seconds:.0f}s exceeded.",
-                    )
+                watchdog_result = watchdog.check(liters, elapsed)
+                if watchdog_result is not None:
+                    reason, message = watchdog_result
+                    self._fail(reason, message)
                     return False
 
                 target_confirm_count = target_confirm_count + 1 if liters >= target_total else 0
@@ -360,7 +342,19 @@ class TankCleaningController(BackgroundHardwareProcess):
     # ---- phase 2: hold / circulate ---------------------------------------
 
     def _run_hold(self, settings: dict[str, Any], actuators) -> bool:
-        """Returns True if the hold time completed, False if cancelled."""
+        """
+        Returns True if the hold time completed, False if cancelled.
+
+        No explicit sensor-loss abort here by design, not by omission: this
+        phase only runs circulation pumps, and AutoCirculationController.update()
+        already fails safe on a None reading by turning them off
+        (process/auto_circulation.py). Nothing here fills or drains, so a
+        lost sensor can't cause an overflow or dry-run. If the sensor stays
+        lost for the rest of the hold, _run_drain() re-reads and aborts on
+        its own start-of-phase check (missing_mixer_level_before_drain)
+        before any drain pump ever turns on - that is the real safety net
+        for a sensor that never recovers.
+        """
 
         self._change_phase(TankCleaningPhase.HOLDING)
         hold_seconds = float(settings.get("cleaning_hold_seconds", 300.0))
@@ -411,7 +405,7 @@ class TankCleaningController(BackgroundHardwareProcess):
 
         pump_lpm = float(settings.get("transfer_pump_liters_per_minute", 16.0))
         buffer_seconds = float(settings.get("drain_timeout_buffer_seconds", 180.0))
-        max_drain_seconds = (start_liters / pump_lpm) * 60.0 + buffer_seconds
+        max_drain_seconds = calculate_drain_timeout_seconds(start_liters, pump_lpm, buffer_seconds)
         valve_settle_seconds = float(settings.get("valve_settle_seconds", 1.0))
 
         drain_valve.on()
@@ -423,7 +417,7 @@ class TankCleaningController(BackgroundHardwareProcess):
         self._publish(actuators, TankCleaningPhase.DRAINING)
 
         drain_start = time.monotonic()
-        empty_confirm_count = 0
+        empty_confirm = EmptyConfirmCounter(empty_threshold, empty_confirm_samples)
 
         try:
             while True:
@@ -434,10 +428,7 @@ class TankCleaningController(BackgroundHardwareProcess):
                 liters = self._read_mixer_liters(settings, level_history)
                 self._auto_circulation.update(liters)
 
-                if liters is not None:
-                    empty_confirm_count = (
-                        empty_confirm_count + 1 if liters <= empty_threshold else 0
-                    )
+                is_empty_confirmed = empty_confirm.update(liters)
 
                 self._last_message = (
                     f"Draining: {liters if liters is not None else '-'} L "
@@ -445,7 +436,7 @@ class TankCleaningController(BackgroundHardwareProcess):
                 )
                 self._publish(actuators, TankCleaningPhase.DRAINING)
 
-                if empty_confirm_count >= empty_confirm_samples:
+                if is_empty_confirmed:
                     self._last_message = f"Tank emptied ({liters:.2f} L remaining)."
                     return
 

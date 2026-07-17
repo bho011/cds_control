@@ -9,6 +9,7 @@ from .common import (
     publish_process_status,
     log_step,
 )
+from .watchdog import EmptyConfirmCounter, calculate_drain_timeout_seconds
 
 
 def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, auto_circulation=None) -> PhaseResult:
@@ -37,7 +38,7 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, 
     buffer_seconds = float(settings.get("drain_timeout_buffer_seconds", 180.0))
 
     expected_seconds = (start_liters / pump_lpm) * 60.0
-    max_drain_seconds = expected_seconds + buffer_seconds
+    max_drain_seconds = calculate_drain_timeout_seconds(start_liters, pump_lpm, buffer_seconds)
 
     no_progress_warning_seconds = float(settings.get("no_drain_progress_warning_seconds", 60.0))
 
@@ -58,7 +59,7 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, 
     error = None
     final_liters = start_liters
     drained_liters = 0.0
-    empty_confirm_count = 0
+    empty_confirm = EmptyConfirmCounter(empty_threshold, empty_confirm_samples)
     no_progress_warning_printed = False
 
     try:
@@ -92,15 +93,17 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, 
             if metrics.mixer_liters_filtered is not None:
                 final_liters = metrics.mixer_liters_filtered
                 drained_liters = start_liters - final_liters
-
-                if final_liters <= empty_threshold:
-                    empty_confirm_count += 1
-                else:
-                    empty_confirm_count = 0
             else:
                 final_liters = None
-                empty_confirm_count = 0
 
+            is_empty_confirmed = empty_confirm.update(metrics.mixer_liters_filtered)
+
+            # Warning only, deliberately not an abort: the calculated
+            # max_drain_seconds timeout above already bounds worst-case
+            # runtime, so a stalled sensor reading here can't run the pump
+            # unboundedly. An early log line is more useful to an operator
+            # watching the run than aborting an otherwise-healthy drain on a
+            # transient reading.
             if (
                 not no_progress_warning_printed
                 and elapsed >= no_progress_warning_seconds
@@ -116,7 +119,7 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, 
                 f"[DRAIN] elapsed={elapsed:.1f}/{max_drain_seconds:.1f}s | "
                 f"Mixer={final_liters} L | "
                 f"Drained(sensor_calc)={drained_liters:.2f} L | "
-                f"empty_confirm={empty_confirm_count}/{empty_confirm_samples}"
+                f"empty_confirm={empty_confirm.count}/{empty_confirm_samples}"
             )
 
             publish_process_status(
@@ -128,7 +131,7 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, 
                     "max_drain_seconds": round(max_drain_seconds, 1),
                     "mixer_liters_filtered": final_liters,
                     "drained_liters_sensor_calc": drained_liters,
-                    "empty_confirm_count": empty_confirm_count,
+                    "empty_confirm_count": empty_confirm.count,
                     "empty_confirm_samples": empty_confirm_samples,
                 },
             )
@@ -147,7 +150,7 @@ def run_drain_phase(settings, sensor_reader, actuators, mqtt_publisher, logger, 
                 target_delta_liters=None,
             )
 
-            if empty_confirm_count >= empty_confirm_samples:
+            if is_empty_confirmed:
                 stop_reason = "empty_by_sensor"
                 error = None
                 break
