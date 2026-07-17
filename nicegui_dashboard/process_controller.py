@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 import time
@@ -221,7 +222,15 @@ class ProcessController:
 
         return self._result(True, "Fill-and-Measure-Prozess gestartet.")
 
-    def emergency_stop(self) -> dict[str, Any]:
+    async def emergency_stop(self) -> dict[str, Any]:
+        """
+        Signals every hardware process to stop, then waits for them to
+        actually exit. The signalling half runs under self._lock but never
+        blocks; the waiting half can take several seconds (thread joins) and
+        deliberately runs in a worker thread (asyncio.to_thread) without
+        holding self._lock, so get_status()/other dashboard calls are never
+        stalled for the duration of an emergency stop - see Phase 1 plan.
+        """
         thread_to_join: threading.Thread | None = None
 
         with self._lock:
@@ -236,12 +245,12 @@ class ProcessController:
                 self.last_error = f"State machine emergency stop failed: {exc}"
 
             try:
-                self.manual_drain_jog.stop(reason="emergency_stop")
+                self.manual_drain_jog.request_stop(reason="emergency_stop")
             except Exception as exc:
                 self.last_error = f"Manual Drain Jog emergency stop failed: {exc}"
 
             try:
-                self.tank_cleaning.stop(reason="emergency_stop")
+                self.tank_cleaning.request_stop(reason="emergency_stop")
             except Exception as exc:
                 self.last_error = f"Tank Cleaning emergency stop failed: {exc}"
 
@@ -254,11 +263,28 @@ class ProcessController:
             if self._thread_is_alive_locked():
                 thread_to_join = self._thread
 
-        if thread_to_join is not None and thread_to_join is not threading.current_thread():
-            thread_to_join.join(timeout=2.0)
+        def _wait_for_everything() -> None:
+            if thread_to_join is not None and thread_to_join is not threading.current_thread():
+                thread_to_join.join(timeout=2.0)
+
+            try:
+                self.manual_drain_jog.wait_stopped()
+            except Exception as exc:
+                self.last_error = f"Manual Drain Jog emergency stop failed: {exc}"
+
+            try:
+                self.tank_cleaning.wait_stopped()
+            except Exception as exc:
+                self.last_error = f"Tank Cleaning emergency stop failed: {exc}"
+
+        await asyncio.to_thread(_wait_for_everything)
 
         with self._lock:
-            if self._thread_is_alive_locked():
+            if (
+                self._thread_is_alive_locked()
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+            ):
                 return self._result(
                     True,
                     "Emergency Stop wurde ausgelöst. Cleanup läuft noch.",
@@ -286,9 +312,25 @@ class ProcessController:
             self._set_error(message)
             return self._result(False, message)
 
-        result = self.manual_drain_jog.start(settings)
-
+        # Re-check and start atomically under the same lock: the precondition
+        # check above only fails fast, it does not prevent a concurrent
+        # start_tank_cleaning() call from slipping in between it and
+        # manual_drain_jog.start() actually flipping is_active(). This second
+        # check-and-start is the one that actually has to be race-free.
         with self._lock:
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.tank_cleaning.is_active()
+            ):
+                return self._result(
+                    False,
+                    "Manual Drain Jog blocked: main process, cleanup, or Tank Cleaning is active.",
+                )
+
+            result = self.manual_drain_jog.start(settings)
+
             self.last_message = result.get("message", "Manual Drain Jog start requested.")
             self.display_state = "MANUAL_DRAIN_JOG" if result.get("success") else self.display_state
             if not result.get("success"):
@@ -319,12 +361,12 @@ class ProcessController:
             self.display_state = "SHUTDOWN_REQUESTED"
 
             try:
-                self.manual_drain_jog.stop(reason="controller_shutdown")
+                self.manual_drain_jog.request_stop(reason="controller_shutdown")
             except Exception as exc:
                 self.last_error = f"Manual Drain Jog shutdown failed: {exc}"
 
             try:
-                self.tank_cleaning.stop(reason="controller_shutdown")
+                self.tank_cleaning.request_stop(reason="controller_shutdown")
             except Exception as exc:
                 self.last_error = f"Tank Cleaning shutdown failed: {exc}"
 
@@ -340,8 +382,22 @@ class ProcessController:
         if thread_to_join is not None and thread_to_join is not threading.current_thread():
             thread_to_join.join(timeout=timeout_seconds)
 
+        try:
+            self.manual_drain_jog.wait_stopped()
+        except Exception as exc:
+            self.last_error = f"Manual Drain Jog shutdown failed: {exc}"
+
+        try:
+            self.tank_cleaning.wait_stopped()
+        except Exception as exc:
+            self.last_error = f"Tank Cleaning shutdown failed: {exc}"
+
         with self._lock:
-            if self._thread_is_alive_locked():
+            if (
+                self._thread_is_alive_locked()
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+            ):
                 return self._result(False, "Shutdown timeout: Hintergrundthread läuft noch.")
 
         return self._result(True, "Controller shutdown abgeschlossen.")
@@ -374,9 +430,26 @@ class ProcessController:
             self._set_error(message)
             return self._result(False, message)
 
-        result = self.tank_cleaning.start(settings)
-
+        # Re-check and start atomically under the same lock: the precondition
+        # check above only fails fast, it does not prevent a concurrent
+        # start_manual_drain_jog() call from slipping in between it and
+        # tank_cleaning.start() actually flipping is_active(). This second
+        # check-and-start is the one that actually has to be race-free.
         with self._lock:
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+            ):
+                return self._result(
+                    False,
+                    "Tank Cleaning blocked: another process, cleanup, or Manual Drain Jog is active.",
+                )
+
+            result = self.tank_cleaning.start(settings)
+
             self.last_message = result.get("message", "Tank Cleaning start requested.")
             self.display_state = "TANK_CLEANING" if result.get("success") else self.display_state
             if not result.get("success"):
@@ -439,6 +512,9 @@ class ProcessController:
         try:
             actuators = ActuatorManager(active_low=ACTIVE_LOW)
 
+            with self._lock:
+                self.actuators = actuators
+
             mixer_refill_pump = actuators.add(
                 name="mixer_refill_pump",
                 gpio_pin=OUTPUTS["mixer_refill_pump"],
@@ -477,7 +553,6 @@ class ProcessController:
             )
 
             with self._lock:
-                self.actuators = actuators
                 self.mqtt_publisher = mqtt_publisher
                 self.process_logger = process_logger
                 self.state_machine = state_machine

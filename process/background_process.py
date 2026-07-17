@@ -125,23 +125,47 @@ class BackgroundHardwareProcess:
         )
         self._thread.start()
 
-    def stop(self, reason: str = "stopped_by_user") -> dict[str, Any]:
-        thread_to_join: threading.Thread | None = None
-
+    def request_stop(self, reason: str = "stopped_by_user") -> None:
+        """
+        Signal-only half of stop(): sets the stop reason/event and returns
+        immediately, without joining the background thread. Safe to call
+        while holding a caller-side lock (e.g. ProcessController._lock),
+        since it never blocks. Always pair with a later wait_stopped() call -
+        calling wait_stopped() without a prior request_stop() on a thread
+        that never gets signalled will block until stop_join_timeout_seconds.
+        """
         with self._lock:
             self._stop_reason = reason
             self._stop_event.set()
+
+    def wait_stopped(self, timeout: float | None = None) -> dict[str, Any]:
+        """
+        Join-only half of stop(): waits for the background thread (if any)
+        to exit and reports the resulting status. Must be called without
+        holding any lock that the background thread's teardown might need,
+        since this can block for up to `timeout` seconds.
+        """
+        if timeout is None:
+            timeout = self.stop_join_timeout_seconds
+
+        thread_to_join: threading.Thread | None = None
+
+        with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 thread_to_join = self._thread
 
         if thread_to_join is not None and thread_to_join is not threading.current_thread():
-            thread_to_join.join(timeout=self.stop_join_timeout_seconds)
+            thread_to_join.join(timeout=timeout)
 
         with self._lock:
             if self.is_active():
                 return self._result(True, f"{self._stop_label} stop requested; cleanup still running.")
 
         return self._result(True, f"{self._stop_label} stopped.")
+
+    def stop(self, reason: str = "stopped_by_user") -> dict[str, Any]:
+        self.request_stop(reason)
+        return self.wait_stopped(self.stop_join_timeout_seconds)
 
     def shutdown(self) -> None:
         self.stop(reason="shutdown")

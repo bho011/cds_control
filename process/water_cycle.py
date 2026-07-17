@@ -178,6 +178,22 @@ def main():
                 error="KeyboardInterrupt",
             )
 
+    except Exception as exc:
+        # Covers e.g. ActuatorManager() failing to acquire the cross-process
+        # hardware lock because another process is already using it - give a
+        # clear message instead of a raw traceback. Nothing unsafe is left
+        # behind either way: `actuators` stays None if construction itself
+        # failed, so the finally block below has nothing to clean up.
+        print(f"\n[BLOCKED] Water-cycle konnte nicht gestartet werden: {exc}")
+
+        if mqtt_publisher is not None and actuators is not None:
+            publish_process_status(
+                mqtt_publisher,
+                "ERROR",
+                actuators,
+                error=str(exc),
+            )
+
     finally:
         print("[SAFE] Shutdown all actuators.")
 

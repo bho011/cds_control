@@ -104,8 +104,8 @@ class CdsController:
 
         return result
 
-    def emergency_stop(self) -> dict[str, Any]:
-        return self.process_controller.emergency_stop()
+    async def emergency_stop(self) -> dict[str, Any]:
+        return await self.process_controller.emergency_stop()
 
     def start_manual_drain_jog(self) -> dict[str, Any]:
         return self.process_controller.start_manual_drain_jog()

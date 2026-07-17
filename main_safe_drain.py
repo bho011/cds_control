@@ -100,7 +100,14 @@ def main():
         print("[BLOCKED] Sicherheitsbestätigung falsch. Abbruch.")
         return
 
-    actuators = ActuatorManager(active_low=ACTIVE_LOW)
+    try:
+        actuators = ActuatorManager(active_low=ACTIVE_LOW)
+    except Exception as exc:
+        # Covers e.g. failing to acquire the cross-process hardware lock
+        # because another process (dashboard or another script) is already
+        # using it. Nothing was set up yet, so nothing needs cleanup here.
+        print(f"[BLOCKED] Aktoren konnten nicht initialisiert werden: {exc}")
+        return
 
     try:
         transfer_pump = actuators.add(

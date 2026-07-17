@@ -348,9 +348,16 @@ def create_calibration_pump_actuators():
 
     actuators = ActuatorManager(active_low=ACTIVE_LOW)
 
-    actuators.add(name="mixer_refill_pump", gpio_pin=OUTPUTS["mixer_refill_pump"])
-    actuators.add(name="transfer_pump", gpio_pin=OUTPUTS["transfer_pump"])
-    actuators.add(name="drain_valve_0", gpio_pin=OUTPUTS["valve_0_drain"])
+    try:
+        actuators.add(name="mixer_refill_pump", gpio_pin=OUTPUTS["mixer_refill_pump"])
+        actuators.add(name="transfer_pump", gpio_pin=OUTPUTS["transfer_pump"])
+        actuators.add(name="drain_valve_0", gpio_pin=OUTPUTS["valve_0_drain"])
+    except Exception:
+        # A partial failure here must still release the cross-process
+        # hardware lock ActuatorManager.__init__() already acquired -
+        # otherwise it leaks until this object is garbage-collected.
+        actuators.close_all()
+        raise
 
     return actuators
 

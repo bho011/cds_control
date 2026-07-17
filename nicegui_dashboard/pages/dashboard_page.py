@@ -721,15 +721,22 @@ def create_dashboard_page(controller: CdsController) -> None:
             ui.notify(result["message"], color="negative")
             add_log(f"[BLOCKED] {result['message']}")
 
-    def handle_stop() -> None:
-        result = controller.emergency_stop()
+    async def handle_stop() -> None:
+        stop_button.props("loading")
+        stop_button.disable()
 
-        if result["success"]:
-            ui.notify(result["message"], color="warning")
-            add_log(f"[STOP] {result['message']}")
-        else:
-            ui.notify(result["message"], color="negative")
-            add_log(f"[ERROR] {result['message']}")
+        try:
+            result = await controller.emergency_stop()
+
+            if result["success"]:
+                ui.notify(result["message"], color="warning")
+                add_log(f"[STOP] {result['message']}")
+            else:
+                ui.notify(result["message"], color="negative")
+                add_log(f"[ERROR] {result['message']}")
+        finally:
+            stop_button.props(remove="loading")
+            stop_button.enable()
 
     def handle_manual_drain_start() -> None:
         result = controller.start_manual_drain_jog()
