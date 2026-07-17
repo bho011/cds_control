@@ -1,6 +1,6 @@
 # Central Dosing System – Python Control Layer
 
-Stand: 09.07.2026
+Stand: 17.07.2026
 Projektstatus: Entwicklungs- und Validierungsphase
 Ziel: sichere, nachvollziehbare und modular erweiterbare Steuerungslogik für den wasserbasierten CDS-Prozess.
 
@@ -65,10 +65,10 @@ Aktuell umgesetzt:
 - automatische Zirkulationssteuerung (`process/auto_circulation.py`) – füllstandsabhängiges Ein-/Ausschalten der Zirkulationspumpen, wiederverwendet von Water-Cycle **und** Tank Cleaning
 - Manual Drain Jog – dashboardgesteuerte manuelle Entleerung mit Server-seitigem 30-Sekunden-Watchdog
 - Tank Cleaning – automatischer Reinigungszyklus (Fill → Hold → Drain), siehe Abschnitt 13
-- zentraler Preflight-Check inkl. GPIO-Konfliktprüfung gegen Node-RED-GPIO-Helper
+- zentraler Preflight-Check inkl. GPIO-Konfliktprüfung gegen Node-RED-GPIO-Helper, per CLI **und** per "Run Preflight Check"-Button im Dashboard (Dev Info)
 - Recipe-Editor im Dashboard mit drei Favoriten und JSON-Ablage
-- Mixing-Tank-Kalibrierung mit abgesichertem Drain-Timeout
-- zentrale Systemkonfiguration für OPC-UA, MQTT und Mixer-Level-Kalibrierung (`config/system_config.json`)
+- Mixing-Tank-Kalibrierung mit pumpengesteuerten Fill-/Drain-Segmenten, sekündlichem Trace-Log und offline nachrechenbarer Formel (`--analyze`), siehe Abschnitt 16
+- zentrale Systemkonfiguration für OPC-UA, MQTT und Mixer-Level-Kalibrierung (`config/system_config.json`), inzwischen auch vom Dashboard-MQTT-Layer und der State-Machine-Kalibrierung genutzt (siehe Abschnitt 7)
 
 Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor steht noch aus. Manual Drain Jog und Tank Cleaning sind ebenfalls noch nicht real mit Hardware validiert (siehe Abschnitt 17).
 
@@ -192,14 +192,17 @@ Zentrale technische Systemwerte liegen in `config/system_config.json`:
   },
   "mixer_level_calibration": {
     "volume_liters": 200.0,
-    "factor": 0.175,
-    "offset": 0.0,
-    "status": "temporary_factor_0_175"
+    "factor": 0.610566,
+    "offset": -26.093067,
+    "status": "fitted_ge10L_20260703_20260709_sessions",
+    "fit_r2": 0.996399,
+    "fit_max_abs_error_liters": 5.698,
+    "fit_source": "calibration_mixing_tank.py --analyze ... (siehe Abschnitt 16)"
   }
 }
 ```
 
-> Hinweis: Aktuell lesen `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py` und `preflight_check.py` aus dieser Datei. Der Dashboard-MQTT-Layer (`services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) und der Kalibrierfaktor-Fallback in `statemachine/fill_and_measure_state_machine.py` nutzen sie noch nicht — siehe Abschnitt 17.
+> Hinweis: Diese Datei ist inzwischen die alleinige Quelle für OPC-UA-Endpoint, MQTT-Verbindung und Mixer-Kalibrierung — sowohl `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py`, `preflight_check.py` als auch der Dashboard-MQTT-Layer (`services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) und der Kalibrierfaktor-Fallback in `statemachine/fill_and_measure_state_machine.py` lesen jetzt aus `get_mqtt_config()`/`get_mixer_level_calibration()` statt aus eigenen hartcodierten Werten.
 
 Weitere Settings-Dateien, je Prozess eine eigene:
 
@@ -236,12 +239,14 @@ Dadurch werden keine GPIO-Ausgänge initialisiert oder geschaltet, solange die H
 
 ## 9. Preflight und GPIO-Konfliktprüfung
 
-Der kombinierte Preflight prüft: Projektdateien, Python-Syntax, GPIO-Konfiguration, doppelte GPIO-Zuordnungen (aktuell nur als **Warnung**, kein Abbruch), aktive Systemdienste, MQTT-Erreichbarkeit, OPC-UA-Lesbarkeit, aktuelle Sensor-MQTT-Payload-Struktur, Node-RED-GPIO-Konflikte.
+Der kombinierte Preflight prüft: Projektdateien, Python-Syntax, GPIO-Konfiguration, doppelte GPIO-Zuordnungen (**blockiert den Water-Cycle-Start**, kein reines Warnen mehr), aktive Systemdienste, MQTT-Erreichbarkeit, OPC-UA-Lesbarkeit, aktuelle Sensor-MQTT-Payload-Struktur, Node-RED-GPIO-Konflikte.
 
 ```bash
 python main.py preflight
 python main.py gpio-check
 ```
+
+Zusätzlich per Dashboard auslösbar: Button "Run Preflight Check" in Dev Info schreibt das komplette Ergebnis ins Process Log (läuft in einem Worker-Thread, blockiert das Dashboard für andere Nutzer währenddessen nicht).
 
 Kritische CDS-GPIOs für Python:
 
@@ -268,6 +273,8 @@ Node-RED darf diese Pins nicht blockieren. Falls Node-RED nur unabhängige Funkt
 ## 10. Sensor-Bridge
 
 `mqtt_sensor_bridge.py` liest Sensordaten über OPC-UA und veröffentlicht sie per MQTT auf `cds/status/sensors` (RO-/Mixing-Tank-Füllstand, EC, pH, Wassertemperatur, Dissolved Oxygen, Bridge-/Fehlerstatus). OPC-UA-Reads sind mit Timeout abgesichert, MQTT-Publish läuft mit QoS 1 und Bestätigung.
+
+Die Bridge erkennt jetzt auch eine mittendrin gestorbene OPC-UA-Session (mehrere Zyklen in Folge, in denen alle Sensoren gleichzeitig fehlschlagen) und verbindet sich automatisch neu, mit Backoff (5s, verdoppelnd bis 30s). Vorher blieb eine tote Session unbemerkt bestehen — der Prozess lief dann beliebig lange weiter und veröffentlichte nur noch Fehler/`null`-Werte, ohne sich je selbst zu erholen.
 
 ```bash
 systemctl status cds-sensor-bridge.service
@@ -404,24 +411,46 @@ Noch nicht aktiv: automatische Chemikaliendosierung, Peristaltikpumpensteuerung,
 python main.py calibrate-mixer
 ```
 
-Liest OPC-UA-Rohwerte, speichert Messpunkte als CSV unter `calibration_data/`. Die automatische Drain-Unterstützung ist per `calibration_drain_max_seconds` (Default 120s) gegen unbegrenztes Pumpenlaufen abgesichert.
+Liest OPC-UA-Rohwerte, speichert Messpunkte als CSV unter `calibration_data/`.
+
+**Ablauf einer Live-Session:**
+
+1. **0–30 L manuell**: Wasser per Eimer/Kanne zuführen, Menge eingeben, gemittelter Messpunkt (Settle-Zeit + N Samples) wie gehabt.
+2. **30–200 L pumpengesteuert**: Die Mixer-Refill-Pumpe füllt automatisch, einmal 20 L (Rundung auf die erste Tankmarkierung), danach in 25-L-Schritten. Jedes Segment loggt den Rohwert **sekündlich** in eine separate `..._trace.csv`. Enter stoppt die Pumpe, sobald die Markierung erreicht ist; ein Safety-Timeout pro Segment (`calibration_fill_max_seconds`, Default 300s) schützt die Pumpe, falls das mal vergessen wird.
+3. **200–0 L pumpengesteuert**: Transferpumpe + Drainventil, gleiches Prinzip in 25-L-Schritten runter bis 0 L, ebenfalls mit Trace-Log und eigenem Segment-Timeout (`calibration_drain_max_seconds`, Default 180s).
+
+**Sicherheit:** Die früheren getippten Bestätigungsphrasen (`required_confirmation_text` etc.) und die `hardware_execution_enabled`-Abfrage wurden auf ausdrücklichen Wunsch aus diesem Skript entfernt — es wird ohnehin nur manuell, mit anwesendem Bediener am Tank, gestartet. Der reine Pumpenschutz (Segment-Timeout) blieb bewusst bestehen.
+
+**Offline nachrechnen, ohne Hardware:**
+
+```bash
+python calibration_mixing_tank.py --analyze calibration_data/*.csv
+```
+
+Lädt beliebig viele bereits gespeicherte CSVs, poolt sie, normalisiert Nullpunkte pro Session, warnt bei nicht-monotonen Messpunkten, und rechnet mehrere Fit-Varianten (u. a. mit einem `min_reference_volume_l`-Filter, da der Sensor unter ~10 L bekannt unzuverlässig ist). Rührt garantiert kein GPIO/OPC-UA an — reine CSV-Auswertung.
+
+**Aktuelle Formel** (`config/system_config.json` → `mixer_level_calibration`):
+
+```text
+Liter_real = 0.610566 * sensor_raw + -26.093067
+R² = 0.996, max. Fehler ≈ 5.7 L, Bereich 10-175 L
+```
+
+Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fill-Phase, ≥10 L). Ein einzelner Ausreißer-Messpunkt (erster Pump-Checkpoint der letzten Session, vermutlich ungenau abgelesene Markierung) wurde dabei bewusst als `valid_for_fit=False` markiert, siehe `invalid_reason` in der jeweiligen CSV. **175–200 L bleibt unbestätigt** — dort gibt es keine verlässliche Tankmarkierung zum Gegenchecken.
 
 ---
 
 ## 17. Aktuell offene Punkte
 
-1. **`requirements.txt` vervollständigen** — `gpiozero` fehlt, obwohl `hardware/digital_output.py` es direkt importiert; aktuell nur `lgpio` (Pin-Factory-Backend) gelistet.
-2. **Mixer-Kalibrierfaktor-Fallback in der State Machine zentralisieren** — `statemachine/fill_and_measure_state_machine.py` nutzt den importierten `get_mixer_level_calibration()` noch nicht, Fallback bleibt hart auf `1.0`.
-3. **MQTT-Host/Port im Dashboard-Layer zentralisieren** — `services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py` sollen `services/system_config.get_mqtt_config()` verwenden statt eigener Defaults.
-4. **GPIO-Duplikatsprüfung im Preflight verschärfen** — aktuell nur Warnung, sollte bei echten Duplikaten einen Fail auslösen.
-5. **Tank Cleaning auf Testvolumen** — `config/tank_cleaning_settings.json` ist aktuell auf 40 L (Testlauf) statt der geplanten 200 L gestellt; nach erfolgreichem erstem Hardwaretest zurück auf das Zielvolumen setzen.
-6. **Tank Cleaning und Manual Drain Jog real mit Hardware validieren** — beide Funktionen sind bisher nur softwareseitig getestet, `hardware_execution_enabled` steht in beiden zugehörigen Settings-Dateien auf `false`.
-7. Modularen Water-Cycle real mit Hardware testen.
-8. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
-9. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
-10. Automatisierte Tests für config- und safety-nahe Funktionen ergänzen (aktuell kein `tests/`, kein CI, kein Linting/mypy trotz durchgängiger Typannotationen).
-11. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
-12. Peristaltikpumpensteuerung erst nach weiterer Sicherheitsvalidierung vorbereiten.
+1. **Tank Cleaning auf Testvolumen** — `config/tank_cleaning_settings.json` ist aktuell auf 40 L (Testlauf) statt der geplanten 200 L gestellt; nach erfolgreichem erstem Hardwaretest zurück auf das Zielvolumen setzen.
+2. **Tank Cleaning und Manual Drain Jog real mit Hardware validieren** — beide Funktionen sind bisher nur softwareseitig getestet, `hardware_execution_enabled` steht in beiden zugehörigen Settings-Dateien auf `false`.
+3. **Kalibrierbereich 175–200 L absichern** — bisher keine verlässliche Tankmarkierung am oberen Ende zum Gegenchecken; die produktive Formel extrapoliert dort leicht über den bestätigten Bereich hinaus.
+4. Modularen Water-Cycle real mit Hardware testen.
+5. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
+6. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
+7. Automatisierte Tests für config- und safety-nahe Funktionen ergänzen (aktuell kein `tests/`, kein CI, kein Linting/mypy trotz durchgängiger Typannotationen).
+8. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
+9. Peristaltikpumpensteuerung erst nach weiterer Sicherheitsvalidierung vorbereiten.
 
 ---
 
@@ -462,8 +491,6 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
-Siehe Abschnitt 17, Punkt 1 zu einer aktuell fehlenden Dependency.
 
 ---
 
