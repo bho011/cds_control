@@ -456,7 +456,7 @@ Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fi
 
 ## 18. Git- und Repo-Hygiene
 
-Nicht ins Repository gehören:
+Nicht ins Repository sind:
 
 ```text
 __pycache__/
