@@ -36,7 +36,12 @@ def main():
     print("- Keine Chemie, kein Routing zu Solution Tanks.")
     print()
 
-    settings = load_settings()
+    try:
+        settings = load_settings()
+    except Exception as exc:
+        print(f"[BLOCKED] Settings konnten nicht geladen werden: {exc}")
+        return
+
     auto_circulation_config = load_auto_circulation_config(settings)
 
     print("Settings:")

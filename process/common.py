@@ -7,10 +7,41 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from services.settings_validation import SettingField, validate_settings
 from services.system_config import get_mixer_level_calibration
 
 
 SETTINGS_PATH = Path("config/water_cycle_settings.json")
+
+# Required (no default listed) matches the hard settings["key"] reads in
+# process/refill.py/drain.py - see PROCESS_SETTINGS_SCHEMA in
+# nicegui_dashboard/process_controller.py for the equivalent for
+# config/process_settings.json and why this exists (Architecture-Hardening-
+# Roadmap plan, Phase 3).
+WATER_CYCLE_SETTINGS_SCHEMA = [
+    SettingField("target_fill_total_liters", float, min_value=0.0),
+    SettingField("max_mixer_liters", float, min_value=0.0),
+    SettingField("min_ro_liters_required", float, min_value=0.0),
+    SettingField("max_fill_seconds", float, min_value=0.0),
+    SettingField("min_fill_progress_liters", float, min_value=0.0),
+    SettingField("no_fill_progress_timeout_seconds", float, min_value=0.0),
+    SettingField("max_negative_level_drift_liters", float, required=False, default=3.0, min_value=0.0),
+    SettingField("transfer_pump_liters_per_minute", float, required=False, default=16.0, min_value=0.1),
+    SettingField("drain_timeout_buffer_seconds", float, required=False, default=180.0, min_value=0.0),
+    SettingField("empty_threshold_liters", float, required=False, default=0.3, min_value=0.0),
+    SettingField("empty_confirm_samples", int, required=False, default=5, min_value=1),
+    SettingField("no_drain_progress_warning_seconds", float, required=False, default=60.0, min_value=0.0),
+    SettingField("level_filter_samples", int, required=False, default=5, min_value=1),
+    SettingField("target_reached_confirm_samples", int, required=False, default=3, min_value=1),
+    SettingField("valve_settle_seconds", float, required=False, default=1.0, min_value=0.0),
+    SettingField("hardware_execution_enabled", bool, required=False, default=False),
+    SettingField("required_confirmation_text", str, required=False, default="confirmed"),
+    SettingField("required_drain_confirmation_text", str, required=False, default="drain_confirmed"),
+    SettingField("auto_circulation_enabled", bool, required=False, default=False),
+    SettingField("auto_circulation_start_liters", float, required=False, default=30.0, min_value=0.0),
+    SettingField("auto_circulation_stop_liters", float, required=False, default=25.0, min_value=0.0),
+    SettingField("auto_circulation_outputs", list, required=False, default=[]),
+]
 
 
 @dataclass
@@ -31,7 +62,9 @@ class PhaseResult:
 
 def load_settings() -> dict:
     with SETTINGS_PATH.open("r", encoding="utf-8") as file:
-        return json.load(file)
+        settings = json.load(file)
+
+    return validate_settings(settings, WATER_CYCLE_SETTINGS_SCHEMA, str(SETTINGS_PATH))
 
 
 def require_hardware_confirmation(settings: dict) -> bool:

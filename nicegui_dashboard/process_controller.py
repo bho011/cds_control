@@ -8,10 +8,67 @@ from typing import Any, Callable
 
 from process.manual_drain_jog import ManualDrainJog
 from process.tank_cleaning import TankCleaningController
+from services.settings_validation import SettingField, validate_settings
 
 
 SETTINGS_PATH = Path("config/process_settings.json")
 TANK_CLEANING_SETTINGS_PATH = Path("config/tank_cleaning_settings.json")
+
+# Required (no default listed) matches the hard settings["key"] reads in
+# statemachine/fill_and_measure_state_machine.py - a missing key here means
+# the process cannot run safely, so it must fail loudly at load time instead
+# of falling back to a possibly-wrong code default (the bug this schema
+# closes: no_fill_progress_timeout_seconds/min_fill_progress_liters/
+# max_negative_level_drift_liters used to have their own, diverging,
+# hardcoded fallback values in fill_and_measure_state_machine.py).
+PROCESS_SETTINGS_SCHEMA = [
+    SettingField("fill_mode", str, required=False, default="delta", allowed_values={"delta", "absolute"}),
+    SettingField("target_add_liters", float, min_value=0.0),
+    SettingField("target_total_liters", float, min_value=0.0),
+    SettingField("max_mixer_liters", float, min_value=0.0),
+    SettingField("min_ro_liters_required", float, min_value=0.0),
+    SettingField("max_fill_seconds", float, min_value=0.0),
+    SettingField("min_fill_progress_liters", float, min_value=0.0),
+    SettingField("no_fill_progress_timeout_seconds", float, min_value=0.0),
+    SettingField("max_negative_level_drift_liters", float, min_value=0.0),
+    SettingField("level_filter_samples", int, required=False, default=5, min_value=1),
+    SettingField("target_reached_confirm_samples", int, required=False, default=3, min_value=1),
+    SettingField("level_settle_seconds", float, min_value=0.0),
+    SettingField("sensor_stabilize_seconds", float, min_value=0.0),
+    SettingField("enable_mixing_circulation", bool, required=False, default=False),
+    SettingField("enable_sensor_circulation", bool, required=False, default=False),
+    SettingField("hardware_execution_enabled", bool, required=False, default=False),
+    SettingField("required_confirmation_text", str, required=False, default="confirmed"),
+]
+
+# Every key here is already read via settings.get(key, default) in
+# process/tank_cleaning.py, consistently (unlike process_settings.json,
+# nothing here is a hard KeyError today) - the schema mirrors those same
+# defaults rather than tightening them, so this only adds an early, clear
+# error for genuinely wrong types/ranges without changing today's behavior.
+TANK_CLEANING_SETTINGS_SCHEMA = [
+    SettingField("hardware_execution_enabled", bool, required=False, default=False),
+    SettingField("required_confirmation_text", str, required=False, default="confirmed"),
+    SettingField("target_fill_total_liters", float, required=False, default=200.0, min_value=0.0),
+    SettingField("max_mixer_liters", float, required=False, default=200.0, min_value=0.0),
+    SettingField("min_ro_liters_required", float, required=False, default=20.0, min_value=0.0),
+    SettingField("max_fill_seconds", float, required=False, default=900.0, min_value=0.0),
+    SettingField("min_fill_progress_liters", float, required=False, default=0.5, min_value=0.0),
+    SettingField("no_fill_progress_timeout_seconds", float, required=False, default=30.0, min_value=0.0),
+    SettingField("max_negative_level_drift_liters", float, required=False, default=3.0, min_value=0.0),
+    SettingField("level_filter_samples", int, required=False, default=5, min_value=1),
+    SettingField("target_reached_confirm_samples", int, required=False, default=3, min_value=1),
+    SettingField("cleaning_hold_seconds", float, required=False, default=300.0, min_value=0.0),
+    SettingField("auto_circulation_enabled", bool, required=False, default=False),
+    SettingField("auto_circulation_start_liters", float, required=False, default=30.0, min_value=0.0),
+    SettingField("auto_circulation_stop_liters", float, required=False, default=25.0, min_value=0.0),
+    SettingField("auto_circulation_outputs", list, required=False, default=[]),
+    SettingField("transfer_pump_liters_per_minute", float, required=False, default=16.0, min_value=0.1),
+    SettingField("drain_timeout_buffer_seconds", float, required=False, default=180.0, min_value=0.0),
+    SettingField("empty_threshold_liters", float, required=False, default=0.3, min_value=0.0),
+    SettingField("empty_confirm_samples", int, required=False, default=5, min_value=1),
+    SettingField("valve_settle_seconds", float, required=False, default=1.0, min_value=0.0),
+]
 
 
 class ProcessController:
@@ -58,11 +115,17 @@ class ProcessController:
 
     def load_settings(self) -> dict[str, Any]:
         with SETTINGS_PATH.open("r", encoding="utf-8") as file:
-            return json.load(file)
+            settings = json.load(file)
+
+        return validate_settings(settings, PROCESS_SETTINGS_SCHEMA, str(SETTINGS_PATH))
 
     def load_tank_cleaning_settings(self) -> dict[str, Any]:
         with TANK_CLEANING_SETTINGS_PATH.open("r", encoding="utf-8") as file:
-            return json.load(file)
+            settings = json.load(file)
+
+        return validate_settings(
+            settings, TANK_CLEANING_SETTINGS_SCHEMA, str(TANK_CLEANING_SETTINGS_PATH)
+        )
 
     def _thread_is_alive_locked(self) -> bool:
         return self._thread is not None and self._thread.is_alive()

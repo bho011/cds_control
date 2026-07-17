@@ -194,19 +194,20 @@ class FillAndMeasureStateMachine:
         fill_elapsed = time.monotonic() - self.fill_started_at
         process_elapsed = self._process_elapsed_seconds()
 
+        # No .get(key, default) fallbacks here: process_controller.py's
+        # load_settings() now validates all of these keys are present
+        # (services/settings_validation.py, PROCESS_SETTINGS_SCHEMA) before
+        # this state machine ever runs, so a direct subscript is both
+        # correct and safer than a hardcoded fallback - this used to carry
+        # its own defaults (15.0/1.5/2.0) that silently diverged from what
+        # config/process_settings.json actually specified (8.0/0.2/2.0).
         watchdog = FillWatchdog(
             start_liters=self.start_mixer_liters,
             max_liters=float(self.settings["max_mixer_liters"]),
             max_seconds=float(self.settings["max_fill_seconds"]),
-            no_progress_timeout_seconds=float(
-                self.settings.get("no_fill_progress_timeout_seconds", 15.0)
-            ),
-            min_progress_liters=float(
-                self.settings.get("min_fill_progress_liters", 1.5)
-            ),
-            max_negative_drift_liters=float(
-                self.settings.get("max_negative_level_drift_liters", 2.0)
-            ),
+            no_progress_timeout_seconds=float(self.settings["no_fill_progress_timeout_seconds"]),
+            min_progress_liters=float(self.settings["min_fill_progress_liters"]),
+            max_negative_drift_liters=float(self.settings["max_negative_level_drift_liters"]),
         )
         # max_fill_seconds is measured against the whole process's elapsed
         # time here, not just fill_elapsed since this phase started - the

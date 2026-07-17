@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, asdict, replace
 from datetime import datetime
 from pathlib import Path
+from services.settings_validation import SettingField, validate_settings
 from services.system_config import get_mqtt_config, get_mixer_level_calibration, get_opcua_config
 from typing import Any, Optional, Sequence
 
@@ -168,14 +169,23 @@ class LinearFitResult:
 # Der Pumpen-Schutz (Auto-Stopp-Timeout pro Segment) bleibt bestehen, siehe
 # calibration_fill_max_seconds / calibration_drain_max_seconds unten.
 
+CALIBRATION_SETTINGS_SCHEMA = [
+    SettingField("valve_settle_seconds", float, required=False, default=1.0, min_value=0.0),
+    SettingField("calibration_fill_max_seconds", float, required=False, default=300.0, min_value=0.0),
+    SettingField("calibration_drain_max_seconds", float, required=False, default=120.0, min_value=0.0),
+]
+
+
 def load_settings() -> dict[str, Any]:
     if not SETTINGS_PATH.exists():
         print(f"[WARN] Settings-Datei nicht gefunden: {SETTINGS_PATH}")
         print("[WARN] Nutze interne Default-Werte.")
-        return {"valve_settle_seconds": 1.0}
+        settings = {"valve_settle_seconds": 1.0}
+    else:
+        with SETTINGS_PATH.open("r", encoding="utf-8") as file:
+            settings = json.load(file)
 
-    with SETTINGS_PATH.open("r", encoding="utf-8") as file:
-        return json.load(file)
+    return validate_settings(settings, CALIBRATION_SETTINGS_SCHEMA, str(SETTINGS_PATH))
 
 
 # ============================================================
