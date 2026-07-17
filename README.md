@@ -16,7 +16,7 @@ Dieses Repository enthält die Python-Implementierung für die Steuerungs- und V
 RO-Wasser → Mixing Tank → Sensorbox-Zirkulation → Drain
 ```
 
-Chemikaliendosierung, Peristaltikpumpensteuerung und produktive Rezeptausführung sind noch nicht aktiv. Diese Funktionen werden erst nach weiterer Hardware-, Sensor- und Sicherheitsvalidierung ergänzt.
+Chemikaliendosierung und Peristaltikpumpensteuerung sind noch nicht aktiv. Diese Funktionen werden erst nach weiterer Hardware-, Sensor- und Sicherheitsvalidierung ergänzt. Die Rezeptausführung ist bisher nur für den reinen Wasser-Zielwert (Füllvolumen, Sensorzirkulation) wirksam mit dem tatsächlichen Prozessstart verbunden (siehe Abschnitt 15) — die EC-/pH-/Dosierwerte im Rezept sind weiterhin rein deskriptiv, ohne Konsument im Code.
 
 Die Steuerungslogik wurde von einzelnen Testskripten in eine modulare Struktur überführt. `main.py` ist der zentrale Einstiegspunkt für Preflight, Water-Cycle, Dashboard, Kalibrierung und Statusprüfungen.
 
@@ -71,6 +71,7 @@ Aktuell umgesetzt:
 - zentrale Systemkonfiguration für OPC-UA, MQTT und Mixer-Level-Kalibrierung (`config/system_config.json`), inzwischen auch vom Dashboard-MQTT-Layer und der State-Machine-Kalibrierung genutzt (siehe Abschnitt 7)
 - zentrale, race-freie Prozessverriegelung für Start/Stop von Fill-and-Measure, Manual Drain Jog und Tank Cleaning, plus prozessübergreifende Hardware-Sperre (`fcntl.flock`, `hardware/actuator_manager.py`) und nicht-blockierender, asynchroner Emergency Stop (siehe Abschnitt 8)
 - einheitliche Watchdog-/Fortschrittsprüfung für alle Fill-/Drain-Phasen (`process/watchdog.py`) und Settings-Schema-Validierung mit gesammelten Fehlern statt Abbruch beim ersten Treffer (`services/settings_validation.py`), beide mit `pytest`-Testabdeckung (siehe Abschnitt 9)
+- Recipe-Editor tatsächlich mit dem Prozessstart verbunden: Zielvolumen und Sensorzirkulation aus dem aktiven Rezept bestimmen jetzt real den nächsten Fill-and-Measure-Lauf statt nur die Anzeige (siehe Abschnitt 15)
 
 Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor steht noch aus. Manual Drain Jog und Tank Cleaning sind ebenfalls noch nicht real mit Hardware validiert (siehe Abschnitt 17).
 
@@ -426,7 +427,9 @@ Die Oberfläche ist HMI/Visualisierung plus Start/Stop-Steuerung für Fill-and-M
 
 Recipe-Editor mit drei Favoriten unter `recipes/dashboard_recipes.json`. Aktueller Zweck: Rezeptwerte anzeigen/bearbeiten, JSON speichern, spätere Prozess-/Dosierlogik vorbereiten.
 
-Noch nicht aktiv: automatische Chemikaliendosierung, Peristaltikpumpensteuerung, automatische pH-/EC-Regelung.
+**Tatsächlich wirksam** (`nicegui_dashboard/recipe_store.py::build_run_config()`, aufgerufen von `ProcessController.start_fill_and_measure()`): `target_fill_total_liters` bestimmt das reale Füll-Zielvolumen (erzwingt `fill_mode="absolute"`), `sensor_circulation_enabled` bestimmt, ob die Sensorbox-Zirkulationspumpe beim Lauf mit angesteuert wird. Beide Werte werden zusätzlich gegen `max_mixer_liters` und das `process_settings.json`-Schema geprüft — ein Rezept-Zielvolumen über der Mixer-Kapazität blockiert den Start mit klarer Meldung, statt den Prozess zu starten und erst per Watchdog mittendrin abzubrechen.
+
+Noch nicht aktiv (kein Konsument im Code): die übrigen 17 Rezeptfelder — automatische Chemikaliendosierung, Peristaltikpumpensteuerung, automatische pH-/EC-Regelung.
 
 ---
 
@@ -474,7 +477,7 @@ Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fi
 5. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
 6. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
 7. Kein CI, kein Linting/mypy trotz durchgängiger Typannotationen (`tests/` mit `pytest` für Locking/Watchdogs/Config-Validierung existiert inzwischen, siehe Abschnitt 9).
-8. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
+8. ~~Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.~~ Erledigt: `nicegui_dashboard/recipe_store.py::build_run_config()` verbindet die zwei Rezeptfelder mit einem echten Konsumenten (`target_fill_total_liters` → `fill_mode="absolute"`/`target_total_liters`, `sensor_circulation_enabled` → `enable_sensor_circulation`) beim Start von Fill-and-Measure, inklusive `max_mixer_liters`-Grenzprüfung. Die übrigen 17 Rezeptfelder (EC/pH/Dosierung) bleiben ohne Konsument, solange Chemikaliendosierung nicht implementiert ist.
 9. **Peristaltikpumpensteuerung** — Firmware-seitige Härtung ist im separaten Repository `central_dosing_sys_peristaltic` (Branch `harden-serial-protocol`) abgeschlossen und auf beiden Arduino-MCUs real verifiziert: Treiber standardmäßig deaktiviert, Dosis-/Laufzeitlimits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), maschinenlesbares `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL`-Protokoll (siehe dortige `docs/SERIAL_PROTOCOL.md`). In `cds_control` selbst existiert noch **kein** Python-Serial-Client dafür — die Anbindung an Rezeptlogik und NiceGUI-Dashboard ist bewusst ein separater, noch nicht begonnener Schritt und setzt weitere Sicherheitsvalidierung (reale Kalibrierung, verifizierte Pumpen-Zuordnung) voraus.
 
 ---

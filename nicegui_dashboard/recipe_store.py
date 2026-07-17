@@ -168,6 +168,26 @@ def save_recipe_to_slot(slot: int, recipe: dict[str, Any], make_active: bool = T
     return recipe_book
 
 
+def build_run_config(base_settings: dict[str, Any], recipe: dict[str, Any]) -> dict[str, Any]:
+    """Projects the active recipe onto a process_settings.json snapshot to build
+    the RunConfig actually used for a Fill-and-Measure run. Only fields with a
+    real execution-side consumer are connected today (target_fill_total_liters,
+    sensor_circulation_enabled) - the recipe's EC/pH/dosing fields have no
+    consumer yet, since chemical dosing is not implemented."""
+    run_config = dict(base_settings)
+    run_config["fill_mode"] = "absolute"
+    run_config["target_total_liters"] = float(recipe["target_fill_total_liters"])
+    run_config["enable_sensor_circulation"] = bool(recipe.get("sensor_circulation_enabled", True))
+
+    if run_config["target_total_liters"] > float(run_config["max_mixer_liters"]):
+        raise ValueError(
+            f"Rezept-Zielvolumen {run_config['target_total_liters']} L überschreitet "
+            f"max_mixer_liters ({run_config['max_mixer_liters']} L)."
+        )
+
+    return run_config
+
+
 def set_active_slot(slot: int) -> dict[str, Any]:
     slot = int(slot)
     if slot not in FAVORITE_SLOTS:

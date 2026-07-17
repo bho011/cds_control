@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from nicegui_dashboard.recipe_store import build_run_config, get_active_recipe, load_recipe_book
 from process.manual_drain_jog import ManualDrainJog
 from process.tank_cleaning import TankCleaningController
 from services.settings_validation import SettingField, validate_settings
@@ -139,6 +140,15 @@ class ProcessController:
         else:
             settings_error = None
 
+            # Best-effort recipe preview: if the active recipe is missing or
+            # invalid, fall back to the raw file settings rather than
+            # breaking the whole status endpoint over a display value.
+            try:
+                recipe = get_active_recipe(load_recipe_book())
+                settings = build_run_config(settings, recipe)
+            except Exception:
+                pass
+
         try:
             tank_cleaning_settings = self.load_tank_cleaning_settings()
             tank_cleaning_settings_error = None
@@ -227,6 +237,15 @@ class ProcessController:
             settings = self.load_settings()
         except Exception as exc:
             message = f"Settings konnten nicht geladen werden: {exc}"
+            self._set_error(message)
+            return self._result(False, message)
+
+        try:
+            recipe = get_active_recipe(load_recipe_book())
+            settings = build_run_config(settings, recipe)
+            settings = validate_settings(settings, PROCESS_SETTINGS_SCHEMA, "RunConfig (Rezept + process_settings.json)")
+        except Exception as exc:
+            message = f"Rezept konnte nicht angewendet werden: {exc}"
             self._set_error(message)
             return self._result(False, message)
 
