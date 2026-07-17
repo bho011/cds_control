@@ -69,6 +69,8 @@ Aktuell umgesetzt:
 - Recipe-Editor im Dashboard mit drei Favoriten und JSON-Ablage
 - Mixing-Tank-Kalibrierung mit pumpengesteuerten Fill-/Drain-Segmenten, sekündlichem Trace-Log und offline nachrechenbarer Formel (`--analyze`), siehe Abschnitt 16
 - zentrale Systemkonfiguration für OPC-UA, MQTT und Mixer-Level-Kalibrierung (`config/system_config.json`), inzwischen auch vom Dashboard-MQTT-Layer und der State-Machine-Kalibrierung genutzt (siehe Abschnitt 7)
+- zentrale, race-freie Prozessverriegelung für Start/Stop von Fill-and-Measure, Manual Drain Jog und Tank Cleaning, plus prozessübergreifende Hardware-Sperre (`fcntl.flock`, `hardware/actuator_manager.py`) und nicht-blockierender, asynchroner Emergency Stop (siehe Abschnitt 8)
+- einheitliche Watchdog-/Fortschrittsprüfung für alle Fill-/Drain-Phasen (`process/watchdog.py`) und Settings-Schema-Validierung mit gesammelten Fehlern statt Abbruch beim ersten Treffer (`services/settings_validation.py`), beide mit `pytest`-Testabdeckung (siehe Abschnitt 9)
 
 Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor steht noch aus. Manual Drain Jog und Tank Cleaning sind ebenfalls noch nicht real mit Hardware validiert (siehe Abschnitt 17).
 
@@ -140,12 +142,15 @@ cds_control/
 │   ├── water_cycle.py
 │   ├── auto_circulation.py
 │   ├── manual_drain_jog.py
-│   └── tank_cleaning.py
+│   ├── tank_cleaning.py
+│   ├── watchdog.py
+│   └── background_process.py
 ├── services/
 │   ├── system_config.py
 │   ├── mqtt_publisher.py
 │   ├── process_run_logger.py
-│   └── sensor_snapshot.py
+│   ├── sensor_snapshot.py
+│   └── settings_validation.py
 ├── hardware/
 │   ├── digital_output.py
 │   └── actuator_manager.py
@@ -161,13 +166,16 @@ cds_control/
 │   └── check_gpio_conflicts.py
 ├── recipes/
 │   └── dashboard_recipes.json
+├── tests/
 ├── logs/
 ├── calibration_data/
 ├── mqtt_sensor_bridge.py
 ├── calibration_mixing_tank.py
 ├── main_safe_drain.py
 ├── preflight_check.py
-└── requirements.txt
+├── requirements.txt
+├── requirements-dev.txt
+└── pytest.ini
 ```
 
 ---
@@ -226,6 +234,9 @@ Weitere Settings-Dateien, je Prozess eine eigene:
 - Manuelle Kalibrier-Drain-Funktionen besitzen ein Safety-Timeout (`calibration_drain_max_seconds`).
 - `KeyboardInterrupt` wird in allen Water-Cycle-Phasen einheitlich behandelt und bricht den Rest des Ablaufs kontrolliert ab.
 - Manual Drain Jog und Tank Cleaning laufen als Hintergrund-Threads, deren Schleifen alle ~0,5s auf ein `threading.Event` prüfen — ein Emergency Stop aus dem Dashboard unterbricht sie dadurch binnen einer knappen Sekunde, statt bis zum Ende der laufenden Phase zu warten.
+- Start/Stop von Fill-and-Measure, Manual Drain Jog und Tank Cleaning sind atomar gegen den internen `ProcessController`-Lock abgesichert: zwei gleichzeitige Start-Aufrufe (Dashboard-Klick + parallel gestartetes Skript) können nicht mehr beide durchkommen — vormals ein TOCTOU-Race zwischen Zustandsprüfung und tatsächlichem Start.
+- Zusätzlich verhindert eine prozessübergreifende Datei-Sperre (`fcntl.flock`, `hardware/actuator_manager.py`, `logs/.hardware.lock`) parallele Hardware-Ansteuerung durch zwei unabhängige Python-*Prozesse* (nicht nur Threads im selben Prozess) — z. B. Dashboard plus ein direkt gestartetes Kalibrier- oder Safe-Drain-Skript.
+- Emergency Stop ist asynchron implementiert (`ProcessController.emergency_stop()`): das Signalisieren (State-Machine-Abbruch, `request_stop()`, Aktor-Shutdown) passiert sofort unter Lock, das Warten auf den Thread-Join läuft danach außerhalb des Locks in einem Worker-Thread — das Dashboard bleibt für andere verbundene Clients währenddessen reaktionsfähig, statt bis zu ~7s einzufrieren.
 
 Standardzustand in den Configs:
 
@@ -464,7 +475,7 @@ Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fi
 6. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
 7. Kein CI, kein Linting/mypy trotz durchgängiger Typannotationen (`tests/` mit `pytest` für Locking/Watchdogs/Config-Validierung existiert inzwischen, siehe Abschnitt 9).
 8. Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.
-9. Peristaltikpumpensteuerung erst nach weiterer Sicherheitsvalidierung vorbereiten.
+9. **Peristaltikpumpensteuerung** — Firmware-seitige Härtung ist im separaten Repository `central_dosing_sys_peristaltic` (Branch `harden-serial-protocol`) abgeschlossen und auf beiden Arduino-MCUs real verifiziert: Treiber standardmäßig deaktiviert, Dosis-/Laufzeitlimits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), maschinenlesbares `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL`-Protokoll (siehe dortige `docs/SERIAL_PROTOCOL.md`). In `cds_control` selbst existiert noch **kein** Python-Serial-Client dafür — die Anbindung an Rezeptlogik und NiceGUI-Dashboard ist bewusst ein separater, noch nicht begonnener Schritt und setzt weitere Sicherheitsvalidierung (reale Kalibrierung, verifizierte Pumpen-Zuordnung) voraus.
 
 ---
 
