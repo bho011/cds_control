@@ -119,190 +119,234 @@ async def main():
                     f"{MQTT_PUBLISH_TIMEOUT_SECONDS:.1f}s"
                 )
 
+    # Wenn die OPC-UA-Session mittendrin stirbt (Server-Neustart, Netzwerk-
+    # Hänger, ...), schlagen einzelne Reads fehl, aber das "async with
+    # Client(...)" bleibt offen und tot. Ohne diesen äußeren Reconnect-Loop
+    # würde der Prozess für immer nur noch "client is disconnected" für
+    # jeden Sensor publishen, ohne sich je neu zu verbinden - genau das
+    # Verhalten, das live beobachtet wurde (Verbindung riss, Prozess lief
+    # danach tagelang weiter und hat nur noch Fehler/None-Werte gesendet).
+    reconnect_delay_seconds = 5.0
+    max_reconnect_delay_seconds = 30.0
+    # Erst nach mehreren aufeinanderfolgenden Zyklen, in denen ALLE Sensoren
+    # fehlschlagen, gilt die Session als tot. Ein einzelner fehlgeschlagener
+    # Zyklus kann auch nur ein kurzer Hänger eines einzelnen Tags sein.
+    full_failure_reconnect_threshold = 3
+
     try:
-        async with Client(url=OPCUA_ENDPOINT) as opcua_client:
-            print("[OK] OPC-UA verbunden.")
-            print("[OK] MQTT verbunden.")
-            print("Abbruch mit STRG + C")
-            print()
+        while True:
+            try:
+                async with Client(url=OPCUA_ENDPOINT) as opcua_client:
+                    print("[OK] OPC-UA verbunden.")
+                    print("[OK] MQTT verbunden.")
+                    print("Abbruch mit STRG + C")
+                    print()
 
-            async def safe_read(node_key: str, label: str):
-                try:
-                    node = opcua_client.get_node(NODE_IDS[node_key])
-                    return await asyncio.wait_for(
-                        node.read_value(),
-                        timeout=OPCUA_READ_TIMEOUT_SECONDS,
-                    )
-                except asyncio.TimeoutError as exc:
-                    raise RuntimeError(
-                        f"{label} read timeout after "
-                        f"{OPCUA_READ_TIMEOUT_SECONDS:.1f}s"
-                    ) from exc
-                except Exception as exc:
-                    raise RuntimeError(f"{label} read error: {exc}") from exc
+                    reconnect_delay_seconds = 5.0
+                    consecutive_full_failures = 0
 
-            while True:
-                timestamp = datetime.now().isoformat(timespec="seconds")
+                    async def safe_read(node_key: str, label: str):
+                        try:
+                            node = opcua_client.get_node(NODE_IDS[node_key])
+                            return await asyncio.wait_for(
+                                node.read_value(),
+                                timeout=OPCUA_READ_TIMEOUT_SECONDS,
+                            )
+                        except asyncio.TimeoutError as exc:
+                            raise RuntimeError(
+                                f"{label} read timeout after "
+                                f"{OPCUA_READ_TIMEOUT_SECONDS:.1f}s"
+                            ) from exc
+                        except Exception as exc:
+                            raise RuntimeError(f"{label} read error: {exc}") from exc
 
-                mixer_raw = None
-                mixer_liters_raw = None
-                mixer_liters = None
+                    while True:
+                        timestamp = datetime.now().isoformat(timespec="seconds")
 
-                ro_raw = None
-                ro_liters = None
+                        mixer_raw = None
+                        mixer_liters_raw = None
+                        mixer_liters = None
 
-                ec_value = None
-                ec_ms_cm = None
-                ph_value = None
-                water_temperature_value = None
-                dissolved_oxygen_value = None
+                        ro_raw = None
+                        ro_liters = None
 
-                errors: list[str] = []
+                        ec_value = None
+                        ec_ms_cm = None
+                        ph_value = None
+                        water_temperature_value = None
+                        dissolved_oxygen_value = None
 
-                try:
-                    mixer_raw = await safe_read(
-                        "mixer_level_raw_cel1",
-                        "Mixer-Level"
-                    )
+                        errors: list[str] = []
 
-                    if mixer_raw is not None:
-                        mixer_liters_raw = calculate_liters_from_percent(
-                            mixer_raw,
-                            MIXER_VOLUME_LITERS
-                        )
+                        try:
+                            mixer_raw = await safe_read(
+                                "mixer_level_raw_cel1",
+                                "Mixer-Level"
+                            )
 
-                        mixer_liters = apply_mixer_liter_calibration(
-                            mixer_liters_raw
-                        )
+                            if mixer_raw is not None:
+                                mixer_liters_raw = calculate_liters_from_percent(
+                                    mixer_raw,
+                                    MIXER_VOLUME_LITERS
+                                )
 
-                except Exception as exc:
-                    errors.append(str(exc))
+                                mixer_liters = apply_mixer_liter_calibration(
+                                    mixer_liters_raw
+                                )
 
-                try:
-                    ro_raw = await safe_read(
-                        "ro_level_raw_ibc1",
-                        "RO-Level"
-                    )
+                        except Exception as exc:
+                            errors.append(str(exc))
 
-                    if ro_raw is not None:
-                        ro_liters = calculate_liters_from_percent(
-                            ro_raw,
-                            RO_VOLUME_LITERS
-                        )
+                        try:
+                            ro_raw = await safe_read(
+                                "ro_level_raw_ibc1",
+                                "RO-Level"
+                            )
 
-                except Exception as exc:
-                    errors.append(str(exc))
+                            if ro_raw is not None:
+                                ro_liters = calculate_liters_from_percent(
+                                    ro_raw,
+                                    RO_VOLUME_LITERS
+                                )
 
-                try:
-                    ec_value = await safe_read("ec", "EC")
-                    if ec_value is not None:
-                        ec_ms_cm = float(ec_value) / 1000.0
-                except Exception as exc:
-                    errors.append(str(exc))
+                        except Exception as exc:
+                            errors.append(str(exc))
 
-                try:
-                    ph_value = await safe_read("ph", "pH")
-                except Exception as exc:
-                    errors.append(str(exc))
+                        try:
+                            ec_value = await safe_read("ec", "EC")
+                            if ec_value is not None:
+                                ec_ms_cm = float(ec_value) / 1000.0
+                        except Exception as exc:
+                            errors.append(str(exc))
 
-                try:
-                    water_temperature_value = await safe_read(
-                        "water_temperature",
-                        "Water temperature"
-                    )
-                except Exception as exc:
-                    errors.append(str(exc))
+                        try:
+                            ph_value = await safe_read("ph", "pH")
+                        except Exception as exc:
+                            errors.append(str(exc))
 
-                try:
-                    dissolved_oxygen_value = await safe_read(
-                        "dissolved_oxygen",
-                        "Dissolved oxygen"
-                    )
-                except Exception as exc:
-                    errors.append(str(exc))
+                        try:
+                            water_temperature_value = await safe_read(
+                                "water_temperature",
+                                "Water temperature"
+                            )
+                        except Exception as exc:
+                            errors.append(str(exc))
 
-                error = " | ".join(errors) if errors else None
+                        try:
+                            dissolved_oxygen_value = await safe_read(
+                                "dissolved_oxygen",
+                                "Dissolved oxygen"
+                            )
+                        except Exception as exc:
+                            errors.append(str(exc))
+
+                        error = " | ".join(errors) if errors else None
+
+                        if len(errors) >= len(NODE_IDS):
+                            consecutive_full_failures += 1
+                        else:
+                            consecutive_full_failures = 0
 
 
-                mixer_percent_calibrated = None
+                        mixer_percent_calibrated = None
 
-                if mixer_liters is not None:
-                    mixer_percent_calibrated = (mixer_liters / MIXER_VOLUME_LITERS) * 100.0
+                        if mixer_liters is not None:
+                            mixer_percent_calibrated = (mixer_liters / MIXER_VOLUME_LITERS) * 100.0
                     
-                payload = {
-                    "timestamp": timestamp,
-                    "source": "python",
-                    "state": "SENSOR_BRIDGE_RUNNING",
+                        payload = {
+                            "timestamp": timestamp,
+                            "source": "python",
+                            "state": "SENSOR_BRIDGE_RUNNING",
 
-                    "mixer": {
-                        "node_id": NODE_IDS["mixer_level_raw_cel1"],
-                        "level_percent_raw": round_or_none(mixer_raw, 3),
-                        "level_percent": round_or_none(mixer_percent_calibrated, 3),
-                        "volume_liters_raw": round_or_none(mixer_liters_raw, 2),
-                        "volume_liters_calc": round_or_none(mixer_liters, 2),
-                        "configured_max_liters": MIXER_VOLUME_LITERS,
-                        "calibration_factor": MIXER_SENSOR_LITER_FACTOR,
-                        "calibration_offset": MIXER_SENSOR_LITER_OFFSET,
-                        "calibration_status": MIXER_SENSOR_CALIBRATION_STATUS,
-                    },
+                            "mixer": {
+                                "node_id": NODE_IDS["mixer_level_raw_cel1"],
+                                "level_percent_raw": round_or_none(mixer_raw, 3),
+                                "level_percent": round_or_none(mixer_percent_calibrated, 3),
+                                "volume_liters_raw": round_or_none(mixer_liters_raw, 2),
+                                "volume_liters_calc": round_or_none(mixer_liters, 2),
+                                "configured_max_liters": MIXER_VOLUME_LITERS,
+                                "calibration_factor": MIXER_SENSOR_LITER_FACTOR,
+                                "calibration_offset": MIXER_SENSOR_LITER_OFFSET,
+                                "calibration_status": MIXER_SENSOR_CALIBRATION_STATUS,
+                            },
 
-                    "ro": {
-                        "node_id": NODE_IDS["ro_level_raw_ibc1"],
-                        "level_percent": round_or_none(ro_raw, 3),
-                        "volume_liters_calc": round_or_none(ro_liters, 2),
-                        "configured_max_liters": RO_VOLUME_LITERS,
-                        "calibration_status": "plausible_validated",
-                    },
+                            "ro": {
+                                "node_id": NODE_IDS["ro_level_raw_ibc1"],
+                                "level_percent": round_or_none(ro_raw, 3),
+                                "volume_liters_calc": round_or_none(ro_liters, 2),
+                                "configured_max_liters": RO_VOLUME_LITERS,
+                                "calibration_status": "plausible_validated",
+                            },
 
-                    "water_values": {
-                        "ec_raw": round_or_none(ec_value, 3),
-                        "ec_ms_cm": round_or_none(ec_ms_cm, 3),
-                        "ph": round_or_none(ph_value, 3),
-                        "water_temperature": round_or_none(
-                            water_temperature_value,
-                            3
-                        ),
-                        "dissolved_oxygen": round_or_none(
-                            dissolved_oxygen_value,
-                            3
-                        ),
-                        "calibration_status": "not_final_validated",
-                    },
+                            "water_values": {
+                                "ec_raw": round_or_none(ec_value, 3),
+                                "ec_ms_cm": round_or_none(ec_ms_cm, 3),
+                                "ph": round_or_none(ph_value, 3),
+                                "water_temperature": round_or_none(
+                                    water_temperature_value,
+                                    3
+                                ),
+                                "dissolved_oxygen": round_or_none(
+                                    dissolved_oxygen_value,
+                                    3
+                                ),
+                                "calibration_status": "not_final_validated",
+                            },
 
-                    "actuators": {
-                        "mixer_refill_pump": None,
-                        "drain_valve": None,
-                        "supply_valve_6": None,
-                        "transfer_pump": None,
-                    },
+                            "actuators": {
+                                "mixer_refill_pump": None,
+                                "drain_valve": None,
+                                "supply_valve_6": None,
+                                "transfer_pump": None,
+                            },
 
-                    "error": error,
-                }
+                            "error": error,
+                        }
 
-                try:
-                    await publish_payload(payload)
+                        try:
+                            await publish_payload(payload)
 
-                    if last_publish_error:
-                        print(f"{timestamp} | [OK] MQTT publish recovered.")
-                        last_publish_error = None
+                            if last_publish_error:
+                                print(f"{timestamp} | [OK] MQTT publish recovered.")
+                                last_publish_error = None
 
-                except Exception as exc:
-                    publish_error = f"MQTT publish error: {exc}"
+                        except Exception as exc:
+                            publish_error = f"MQTT publish error: {exc}"
 
-                    if publish_error != last_publish_error:
-                        print(f"{timestamp} | [ERROR] {publish_error}")
-                        last_publish_error = publish_error
+                            if publish_error != last_publish_error:
+                                print(f"{timestamp} | [ERROR] {publish_error}")
+                                last_publish_error = publish_error
 
-                # Nur loggen, wenn sich der Fehlerstatus ändert.
-                if error != last_error:
-                    if error:
-                        print(f"{timestamp} | [ERROR] {error}")
-                    elif last_error:
-                        print(f"{timestamp} | [OK] sensor_bridge error cleared.")
+                        # Nur loggen, wenn sich der Fehlerstatus ändert.
+                        if error != last_error:
+                            if error:
+                                print(f"{timestamp} | [ERROR] {error}")
+                            elif last_error:
+                                print(f"{timestamp} | [OK] sensor_bridge error cleared.")
 
-                    last_error = error
+                            last_error = error
 
-                await asyncio.sleep(READ_INTERVAL_SECONDS)
+                        if consecutive_full_failures >= full_failure_reconnect_threshold:
+                            print(
+                                f"{timestamp} | [ERROR] OPC-UA Session wirkt tot "
+                                f"({consecutive_full_failures}x alle Sensoren fehlgeschlagen) - "
+                                "erzwinge Reconnect."
+                            )
+                            break
+
+                        await asyncio.sleep(READ_INTERVAL_SECONDS)
+
+            except Exception as exc:
+                print(
+                    f"{datetime.now().isoformat(timespec='seconds')} | "
+                    f"[ERROR] OPC-UA Verbindung verloren/fehlgeschlagen: {exc}"
+                )
+
+            print(f"[INFO] Reconnect-Versuch in {reconnect_delay_seconds:.0f}s ...")
+            await asyncio.sleep(reconnect_delay_seconds)
+            reconnect_delay_seconds = min(
+                reconnect_delay_seconds * 2, max_reconnect_delay_seconds
+            )
 
     finally:
         mqtt_client.loop_stop()
