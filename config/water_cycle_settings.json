@@ -18,7 +18,7 @@
   "level_filter_samples": 5,
   "target_reached_confirm_samples": 3,
   "valve_settle_seconds": 1.0,
-  "hardware_execution_enabled": true,
+  "hardware_execution_enabled": false,
   "required_confirmation_text": "confirmed",
   "required_drain_confirmation_text": "drain_confirmed",
 

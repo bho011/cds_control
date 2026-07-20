@@ -1,5 +1,5 @@
 {
-  "hardware_execution_enabled": true,
+  "hardware_execution_enabled": false,
   "required_confirmation_text": "confirmed",
 
   "target_fill_total_liters": 40.0,
