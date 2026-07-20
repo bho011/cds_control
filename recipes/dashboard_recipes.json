@@ -65,7 +65,7 @@
       "target_ec_ms_cm": 2.4,
       "ec_mixing_time_seconds": 300,
       "nutrients_ml_per_100_l": 0.0,
-      "nutrient_a_percent": 45.0,
+      "nutrient_a_percent": 40.0,
       "ec_adjustment_factor": 1.0,
       "nutrient_dosing_enabled": false,
       "target_ph": 6.0,
@@ -75,7 +75,7 @@
       "ph_mixing_time_seconds": 20,
       "ph_adjustment_factor": 0.2,
       "notes": "Visual recipe draft. No peristaltic pump control yet.",
-      "updated_at": "2026-07-21T01:05:52",
+      "updated_at": "2026-07-21T01:09:33",
       "legacy_volume_stock_1_ml": 101.0,
       "legacy_volume_stock_2_ml": 19.0,
       "legacy_dosing_needs_review": true,
@@ -86,5 +86,5 @@
       }
     }
   ],
-  "updated_at": "2026-07-21T01:05:52"
+  "updated_at": "2026-07-21T01:09:33"
 }
