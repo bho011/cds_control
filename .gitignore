@@ -27,3 +27,7 @@ archive/old_dashboard_versions/
 
 # Local archive only
 archive/
+
+recipes/*.json.bak
+
+.claude/

@@ -2,7 +2,7 @@
   "fill_mode": "delta",
   "target_add_liters": 1.0,
   "target_total_liters": 1.0,
-  "max_mixer_liters": 200.0,
+  "max_mixer_liters": 185.0,
   "min_ro_liters_required": 20.0,
   "max_fill_seconds": 20.0,
   "min_fill_progress_liters": 0.2,

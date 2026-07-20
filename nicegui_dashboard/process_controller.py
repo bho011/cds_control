@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from domain.recipe_limits import MAX_PROCESS_VOLUME_L
+from domain.recipe_model import RunOptions
 from nicegui_dashboard.recipe_store import build_run_config, get_active_recipe, load_recipe_book
 from process.manual_drain_jog import ManualDrainJog
 from process.tank_cleaning import TankCleaningController
@@ -25,8 +27,13 @@ TANK_CLEANING_SETTINGS_PATH = Path("config/tank_cleaning_settings.json")
 PROCESS_SETTINGS_SCHEMA = [
     SettingField("fill_mode", str, required=False, default="delta", allowed_values={"delta", "absolute"}),
     SettingField("target_add_liters", float, min_value=0.0),
-    SettingField("target_total_liters", float, min_value=0.0),
-    SettingField("max_mixer_liters", float, min_value=0.0),
+    # max_value=MAX_PROCESS_VOLUME_L (185.0), not the 200.0 physical tank rim
+    # capacity - every operational fill target is capped at the same limit.
+    SettingField("target_total_liters", float, min_value=0.0, max_value=MAX_PROCESS_VOLUME_L),
+    # max_value=MAX_PROCESS_VOLUME_L (185.0), not the 200.0 physical tank rim
+    # capacity - an operational safety cap, single source of truth in
+    # domain/recipe_limits.py (see docs/RECIPE_AND_DOSING_RULES.md).
+    SettingField("max_mixer_liters", float, min_value=0.0, max_value=MAX_PROCESS_VOLUME_L),
     SettingField("min_ro_liters_required", float, min_value=0.0),
     SettingField("max_fill_seconds", float, min_value=0.0),
     SettingField("min_fill_progress_liters", float, min_value=0.0),
@@ -50,8 +57,25 @@ PROCESS_SETTINGS_SCHEMA = [
 TANK_CLEANING_SETTINGS_SCHEMA = [
     SettingField("hardware_execution_enabled", bool, required=False, default=False),
     SettingField("required_confirmation_text", str, required=False, default="confirmed"),
-    SettingField("target_fill_total_liters", float, required=False, default=200.0, min_value=0.0),
-    SettingField("max_mixer_liters", float, required=False, default=200.0, min_value=0.0),
+    # default/max_value=MAX_PROCESS_VOLUME_L (185.0), not the former 200.0 -
+    # every operational fill target is capped at the same limit, the
+    # physical 200 l rim capacity is never a usable operational value.
+    SettingField(
+        "target_fill_total_liters",
+        float,
+        required=False,
+        default=MAX_PROCESS_VOLUME_L,
+        min_value=0.0,
+        max_value=MAX_PROCESS_VOLUME_L,
+    ),
+    SettingField(
+        "max_mixer_liters",
+        float,
+        required=False,
+        default=MAX_PROCESS_VOLUME_L,
+        min_value=0.0,
+        max_value=MAX_PROCESS_VOLUME_L,
+    ),
     SettingField("min_ro_liters_required", float, required=False, default=20.0, min_value=0.0),
     SettingField("max_fill_seconds", float, required=False, default=900.0, min_value=0.0),
     SettingField("min_fill_progress_liters", float, required=False, default=0.5, min_value=0.0),
@@ -107,6 +131,14 @@ class ProcessController:
         self.last_start_request: str | None = None
         self.display_state: str | None = "IDLE"
 
+        # The full RunConfig (recipe + process_settings.json merge) actually
+        # used by the run currently in progress, set once at start time and
+        # never re-derived - see get_status() below. None whenever no run
+        # has ever been started, or after a run has fully finished (teardown
+        # complete) - get_status() then falls back to a fresh live preview
+        # of the currently active recipe again.
+        self._last_run_settings: dict[str, Any] | None = None
+
         self.manual_drain_jog = ManualDrainJog(
             get_sensor_snapshot=self.get_sensor_snapshot,
         )
@@ -132,22 +164,36 @@ class ProcessController:
         return self._thread is not None and self._thread.is_alive()
 
     def get_status(self) -> dict[str, Any]:
-        try:
-            settings = self.load_settings()
-        except Exception as exc:
-            settings = {}
-            settings_error = str(exc)
-        else:
-            settings_error = None
+        with self._lock:
+            run_in_progress = self.is_running or self._teardown_in_progress
+            last_run_settings = self._last_run_settings
 
-            # Best-effort recipe preview: if the active recipe is missing or
-            # invalid, fall back to the raw file settings rather than
-            # breaking the whole status endpoint over a display value.
+        if run_in_progress and last_run_settings is not None:
+            # A process is actually running (or tearing down): show the
+            # RunConfigSnapshot it was actually started with, never a fresh
+            # live recomputation - the active recipe may have changed since
+            # the run started (e.g. a different favorite was activated), but
+            # that must not retroactively change what a running process
+            # reports about itself.
+            settings = dict(last_run_settings)
+            settings_error = None
+        else:
             try:
-                recipe = get_active_recipe(load_recipe_book())
-                settings = build_run_config(settings, recipe)
-            except Exception:
-                pass
+                settings = self.load_settings()
+            except Exception as exc:
+                settings = {}
+                settings_error = str(exc)
+            else:
+                settings_error = None
+
+                # Best-effort recipe preview: if the active recipe is missing or
+                # invalid, fall back to the raw file settings rather than
+                # breaking the whole status endpoint over a display value.
+                try:
+                    recipe = get_active_recipe(load_recipe_book())
+                    settings = build_run_config(settings, recipe)
+                except Exception:
+                    pass
 
         try:
             tank_cleaning_settings = self.load_tank_cleaning_settings()
@@ -194,6 +240,7 @@ class ProcessController:
                 "enable_sensor_circulation": settings.get(
                     "enable_sensor_circulation", False
                 ),
+                "recipe_run_config_snapshot": settings.get("recipe_run_config_snapshot"),
 
                 "start_mixer_liters": start_mixer_liters,
                 "added_liters": added_liters,
@@ -215,7 +262,16 @@ class ProcessController:
                 "tank_cleaning_settings_error": tank_cleaning_settings_error,
             }
 
-    def start_fill_and_measure(self, confirmation_text: str) -> dict[str, Any]:
+    def start_fill_and_measure(
+        self, confirmation_text: str, run_options: RunOptions | None = None
+    ) -> dict[str, Any]:
+        """
+        run_options: per-run-only choices (sensor circulation, drain after
+        process) - never sourced from the recipe. Defaults to RunOptions()
+        (everything off) if omitted, matching the fail-closed contract of
+        RunConfigSnapshot.build(): selecting/loading a recipe must never by
+        itself turn anything on.
+        """
         with self._lock:
             if (
                 self.is_running
@@ -242,7 +298,7 @@ class ProcessController:
 
         try:
             recipe = get_active_recipe(load_recipe_book())
-            settings = build_run_config(settings, recipe)
+            settings = build_run_config(settings, recipe, run_options)
             settings = validate_settings(settings, PROCESS_SETTINGS_SCHEMA, "RunConfig (Rezept + process_settings.json)")
         except Exception as exc:
             message = f"Rezept konnte nicht angewendet werden: {exc}"
@@ -293,6 +349,11 @@ class ProcessController:
             self.last_error = None
             self.last_message = "Fill-and-Measure-Prozess wird gestartet."
             self.display_state = "START_REQUESTED"
+            # Set atomically with is_running=True, under the same lock: this
+            # is the RunConfig actually used to start this run - see
+            # get_status() above, which prefers this over a fresh live
+            # preview for as long as a run is in progress.
+            self._last_run_settings = settings
 
             self._thread = threading.Thread(
                 target=self._run_fill_and_measure,

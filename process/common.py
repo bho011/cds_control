@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from domain.recipe_limits import MAX_PROCESS_VOLUME_L
 from services.settings_validation import SettingField, validate_settings
 from services.system_config import get_mixer_level_calibration
 
@@ -19,8 +20,13 @@ SETTINGS_PATH = Path("config/water_cycle_settings.json")
 # config/process_settings.json and why this exists (Architecture-Hardening-
 # Roadmap plan, Phase 3).
 WATER_CYCLE_SETTINGS_SCHEMA = [
-    SettingField("target_fill_total_liters", float, min_value=0.0),
-    SettingField("max_mixer_liters", float, min_value=0.0),
+    # max_value=MAX_PROCESS_VOLUME_L (185.0), not the 200.0 physical tank rim
+    # capacity - every operational fill target is capped at the same limit.
+    SettingField("target_fill_total_liters", float, min_value=0.0, max_value=MAX_PROCESS_VOLUME_L),
+    # max_value=MAX_PROCESS_VOLUME_L (185.0), not the 200.0 physical tank rim
+    # capacity - see PROCESS_SETTINGS_SCHEMA in
+    # nicegui_dashboard/process_controller.py for the equivalent rationale.
+    SettingField("max_mixer_liters", float, min_value=0.0, max_value=MAX_PROCESS_VOLUME_L),
     SettingField("min_ro_liters_required", float, min_value=0.0),
     SettingField("max_fill_seconds", float, min_value=0.0),
     SettingField("min_fill_progress_liters", float, min_value=0.0),
