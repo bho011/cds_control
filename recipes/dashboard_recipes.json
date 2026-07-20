@@ -3,15 +3,17 @@
   "active_slot": 3,
   "favorites": [
     {
+      "schema_version": 4,
+      "slot": 1,
       "recipe_name": "RO Water Test 50L",
       "target_tank": "Ch 1 - T1",
       "target_ro_water_l": 150.0,
       "target_ec_ms_cm": 2.36,
       "ec_mixing_time_seconds": 600,
-      "nutrient_dosing_enabled": true,
       "nutrients_ml_per_100_l": 1000.0,
       "nutrient_a_percent": 45.0,
       "ec_adjustment_factor": 1.0,
+      "nutrient_dosing_enabled": true,
       "target_ph": 6.0,
       "volume_acid_1_ml": 21.0,
       "volume_acid_2_ml": 15.0,
@@ -19,12 +21,12 @@
       "ph_mixing_time_seconds": 20,
       "ph_adjustment_factor": 0.2,
       "notes": "Visual recipe draft. No peristaltic pump control yet.",
+      "updated_at": "2026-07-21T01:05:09",
       "legacy_volume_stock_1_ml": 101.0,
       "legacy_volume_stock_2_ml": 19.0,
       "legacy_dosing_needs_review": false,
-      "slot": 1,
-      "schema_version": 4,
-      "updated_at": "2026-07-21T00:22:40"
+      "legacy_process_values": null,
+      "legacy_recipe_values": null
     },
     {
       "recipe_name": "Flowering",
@@ -55,15 +57,17 @@
       }
     },
     {
+      "schema_version": 4,
+      "slot": 3,
       "recipe_name": "Grow",
       "target_tank": "Ch 1 - T1",
-      "target_ro_water_l": 50.0,
+      "target_ro_water_l": 150.0,
       "target_ec_ms_cm": 2.4,
       "ec_mixing_time_seconds": 300,
-      "nutrient_dosing_enabled": false,
       "nutrients_ml_per_100_l": 0.0,
-      "nutrient_a_percent": 50.0,
+      "nutrient_a_percent": 45.0,
       "ec_adjustment_factor": 1.0,
+      "nutrient_dosing_enabled": false,
       "target_ph": 6.0,
       "volume_acid_1_ml": 21.0,
       "volume_acid_2_ml": 15.0,
@@ -71,17 +75,16 @@
       "ph_mixing_time_seconds": 20,
       "ph_adjustment_factor": 0.2,
       "notes": "Visual recipe draft. No peristaltic pump control yet.",
+      "updated_at": "2026-07-21T01:05:52",
       "legacy_volume_stock_1_ml": 101.0,
       "legacy_volume_stock_2_ml": 19.0,
       "legacy_dosing_needs_review": true,
-      "slot": 3,
-      "schema_version": 4,
-      "updated_at": "2026-07-20T21:20:02",
+      "legacy_process_values": null,
       "legacy_recipe_values": {
         "addon_1_ml": 50.0,
         "addon_2_ml": 50.0
       }
     }
   ],
-  "updated_at": "2026-07-21T00:34:56"
+  "updated_at": "2026-07-21T01:05:52"
 }
