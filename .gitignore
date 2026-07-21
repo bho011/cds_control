@@ -29,5 +29,6 @@ archive/old_dashboard_versions/
 archive/
 
 recipes/*.json.bak
+recipes/dashboard_recipes.json
 
 .claude/
