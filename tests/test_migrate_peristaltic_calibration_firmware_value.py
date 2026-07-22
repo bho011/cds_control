@@ -298,20 +298,44 @@ def test_dry_run_after_apply_reports_no_further_changes(migrate, tmp_path, capsy
     assert "Keine passenden Trials gefunden" in output
 
 
-# --- Regressionstest gegen die reale, ausgelieferte Kalibrierdatei --------------
+# --- Regressionstest A: isolierte Fixture mit den 7 historischen Trials --------
+#
+# Bewusst NICHT gegen die echte calibration_data/peristaltic_calibration.json
+# getestet: diese Datei wurde inzwischen bereits erfolgreich migriert (siehe
+# Test B unten) - ein Test, der "vor Migration" gegen ihren Rohzustand
+# pruefen wuerde, waere zustandsabhaengig und wuerde nach jeder erfolgten
+# Migration (berechtigterweise) 0 statt 7 Treffer finden. Diese Fixture
+# rekonstruiert stattdessen die urspruenglichen 7 MCU_B/P1-Trials
+# (Zeitstempel/requested_ml/measured_ml identisch zur damaligen,
+# fehlerhaften Aufzeichnung mit dem alten Firmwarewert) unabhaengig vom
+# aktuellen Dateizustand.
 
 
-def test_real_repo_calibration_file_migration_yields_the_expected_candidate(migrate, tmp_path):
-    """Kopiert die tatsaechliche calibration_data/peristaltic_calibration.json
-    in ein tmp_path (das Original bleibt unangetastet) und prueft den vom
-    Auftraggeber vorgegebenen Erwartungswert 0.000192624768 fuer den
-    Pumpenkopf MCU_B/P1 nach der Migration."""
-    real_data = load_calibration_data(_REPO_CALIBRATION_DATA_PATH)
+def _historical_seven_trials() -> list[dict]:
+    return [
+        _trial("2026-07-22T09:10:02+00:00", 5.0, 5.04, OLD_VALUE),
+        _trial("2026-07-22T09:10:55+00:00", 5.0, 5.05, OLD_VALUE),
+        _trial("2026-07-22T09:11:37+00:00", 5.0, 5.04, OLD_VALUE),
+        _trial("2026-07-22T09:12:20+00:00", 5.0, 5.05, OLD_VALUE),
+        _trial("2026-07-22T09:13:39+00:00", 10.0, 10.08, OLD_VALUE),
+        _trial("2026-07-22T09:14:54+00:00", 10.0, 10.09, OLD_VALUE),
+        _trial("2026-07-22T09:16:02+00:00", 10.0, 10.08, OLD_VALUE),
+    ]
+
+
+def test_historical_seven_trial_fixture_migration_yields_the_expected_candidate(migrate, tmp_path):
+    historical_trials = _historical_seven_trials()
+    data = default_calibration_data()
+    data["controllers"]["MCU_B"]["P1"]["trials"] = historical_trials
+    # add_trial() setzt status beim ersten Trial auf "candidate" - die
+    # Migration selbst aendert status NICHT, sie muss also schon vor der
+    # Migration wie im historischen Datenbestand gesetzt sein.
+    data["controllers"]["MCU_B"]["P1"]["status"] = "candidate"
     path = tmp_path / "peristaltic_calibration.json"
-    _write(path, real_data)
+    _write(path, data)
 
-    plan = migrate.find_migration_plan(real_data)
-    assert len(plan) == 7  # alle 7 vorhandenen MCU_B/P1-Trials liegen im Zeitfenster
+    plan = migrate.find_migration_plan(data)
+    assert len(plan) == 7  # alle 7 historischen MCU_B/P1-Trials liegen im Zeitfenster
 
     exit_code = migrate.run(path, apply=True)
     assert exit_code == 0
@@ -322,5 +346,41 @@ def test_real_repo_calibration_file_migration_yields_the_expected_candidate(migr
     assert pump_entry["status"] == "candidate"
     assert pump_entry["verified_ml_per_step"] is None
 
-    for trial in pump_entry["trials"]:
+    assert len(pump_entry["trials"]) == len(historical_trials)
+    for original, trial in zip(historical_trials, pump_entry["trials"]):
         assert trial["firmware_ml_per_step_used"] == NEW_VALUE
+        # Unveraendert gegenueber der historischen Aufzeichnung:
+        assert trial["timestamp_utc"] == original["timestamp_utc"]
+        assert trial["requested_ml"] == original["requested_ml"]
+        assert trial["measured_ml"] == original["measured_ml"]
+        assert trial["measurement_method"] == original["measurement_method"]
+        assert trial["water_temperature_c"] == original["water_temperature_c"]
+        # Neu berechnet mit dem neuen Firmwarewert:
+        expected_candidate = NEW_VALUE * trial["measured_ml"] / trial["requested_ml"]
+        assert trial["candidate_ml_per_step"] == pytest.approx(expected_candidate)
+
+
+# --- Regressionstest B: aktueller (bereits migrierter) Zustand der echten Datei -
+#
+# Nur lesend - ruft migrate.run()/apply_migration_plan() nicht auf, schreibt
+# nichts, fuehrt die Migration NICHT erneut aus. Prueft ausschliesslich,
+# dass der heutige Stand von calibration_data/peristaltic_calibration.json
+# bereits korrekt migriert ist.
+
+
+def test_current_real_repo_file_is_already_correctly_migrated(migrate):
+    data = load_calibration_data(_REPO_CALIBRATION_DATA_PATH)
+    pump_entry = data["controllers"]["MCU_B"]["P1"]
+
+    assert len(pump_entry["trials"]) == 7
+
+    old_value_trials = [t for t in pump_entry["trials"] if t["firmware_ml_per_step_used"] == OLD_VALUE]
+    new_value_trials = [t for t in pump_entry["trials"] if t["firmware_ml_per_step_used"] == NEW_VALUE]
+    assert len(old_value_trials) == 0
+    assert len(new_value_trials) == 7
+
+    assert migrate.find_migration_plan(data) == []  # nichts mehr zu migrieren
+
+    assert pump_entry["status"] == "candidate"
+    assert pump_entry["candidate_ml_per_step"] == pytest.approx(0.000192624768, rel=1e-9)
+    assert pump_entry["verified_ml_per_step"] is None
