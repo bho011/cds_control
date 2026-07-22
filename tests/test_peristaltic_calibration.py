@@ -15,18 +15,22 @@ import pytest
 
 from services.peristaltic.calibration import (
     ALLOWED_PARALLEL_PUMP_GROUPS,
+    DEFAULT_PRIMING_CHUNK_ML,
     FIRMWARE_DEFAULT_ML_PER_STEP,
     MAX_INITIAL_TEST_DOSE_ML,
+    MAX_PRIMING_TOTAL_ML,
     CalibrationTrial,
     CalibrationValidationError,
     add_trial,
     candidate_ml_per_step,
     compute_pump_stats,
+    compute_priming_chunks,
     default_calibration_data,
     load_calibration_data,
     save_calibration_data,
     validate_dose_ml,
     validate_parallel_pump_selection,
+    validate_priming_request,
 )
 
 
@@ -90,6 +94,101 @@ def test_validate_dose_ml_rejects_bool():
 def test_validate_dose_ml_rejects_non_numeric():
     assert validate_dose_ml("5.0") != []
     assert validate_dose_ml(None) != []
+
+
+# --- Priming (Entlüften): validate_priming_request / compute_priming_chunks --
+
+
+def test_validate_priming_request_accepts_the_task_example():
+    assert validate_priming_request(180.0, 10.0) == []
+
+
+def test_validate_priming_request_accepts_default_chunk_ml():
+    assert validate_priming_request(150.0, DEFAULT_PRIMING_CHUNK_ML) == []
+
+
+def test_validate_priming_request_rejects_max_ml_above_200():
+    errors = validate_priming_request(200.1, 10.0)
+    assert errors != []
+    assert str(MAX_PRIMING_TOTAL_ML) in errors[0]
+
+
+def test_validate_priming_request_accepts_max_ml_at_exactly_200():
+    assert validate_priming_request(200.0, 10.0) == []
+
+
+def test_validate_priming_request_rejects_chunk_ml_above_max_initial_test_dose():
+    errors = validate_priming_request(150.0, 10.1)
+    assert errors != []
+    assert str(MAX_INITIAL_TEST_DOSE_ML) in errors[0]
+
+
+def test_validate_priming_request_accepts_chunk_ml_at_exactly_the_test_limit():
+    assert validate_priming_request(150.0, MAX_INITIAL_TEST_DOSE_ML) == []
+
+
+def test_validate_priming_request_does_not_raise_max_initial_test_dose_ml_itself():
+    """MAX_INITIAL_TEST_DOSE_ML (für test/calibrate) bleibt exakt bei 10.0 -
+    validate_priming_request() erweitert nur eine eigene, separate Grenze
+    (MAX_PRIMING_TOTAL_ML), verändert diese Konstante nicht."""
+    assert MAX_INITIAL_TEST_DOSE_ML == 10.0
+
+
+@pytest.mark.parametrize("value", [0, 0.0, -1.0])
+def test_validate_priming_request_rejects_zero_and_negative_max_ml(value):
+    assert validate_priming_request(value, 10.0) != []
+
+
+@pytest.mark.parametrize("value", [0, 0.0, -1.0])
+def test_validate_priming_request_rejects_zero_and_negative_chunk_ml(value):
+    assert validate_priming_request(150.0, value) != []
+
+
+def test_validate_priming_request_rejects_nan_and_infinity():
+    assert validate_priming_request(float("nan"), 10.0) != []
+    assert validate_priming_request(float("inf"), 10.0) != []
+    assert validate_priming_request(150.0, float("nan")) != []
+    assert validate_priming_request(150.0, float("inf")) != []
+
+
+def test_validate_priming_request_rejects_bool():
+    assert validate_priming_request(True, 10.0) != []
+    assert validate_priming_request(150.0, True) != []
+
+
+def test_validate_priming_request_rejects_non_numeric():
+    assert validate_priming_request("150", 10.0) != []
+    assert validate_priming_request(150.0, "10") != []
+
+
+def test_validate_priming_request_collects_both_errors_at_once():
+    errors = validate_priming_request(500.0, 50.0)
+    assert len(errors) == 2
+
+
+def test_compute_priming_chunks_150_ml_splits_into_15_chunks_of_10():
+    chunks = compute_priming_chunks(150.0, 10.0)
+    assert chunks == [10.0] * 15
+    assert sum(chunks) == pytest.approx(150.0)
+
+
+def test_compute_priming_chunks_155_ml_splits_into_15_of_10_plus_1_of_5():
+    chunks = compute_priming_chunks(155.0, 10.0)
+    assert chunks == [10.0] * 15 + [5.0]
+    assert sum(chunks) == pytest.approx(155.0)
+
+
+def test_compute_priming_chunks_last_chunk_is_never_larger_than_chunk_ml():
+    for max_ml in (1.0, 9.9, 10.0, 10.1, 33.0, 180.0, 200.0):
+        chunks = compute_priming_chunks(max_ml, 10.0)
+        assert all(chunk <= 10.0 for chunk in chunks)
+        assert sum(chunks) == pytest.approx(max_ml)
+
+
+def test_compute_priming_chunks_exact_multiple_has_no_extra_small_chunk():
+    chunks = compute_priming_chunks(180.0, 10.0)
+    assert chunks == [10.0] * 18
+    assert len(chunks) == 18
 
 
 # --- Statistik / Trennung nach requested_ml UND firmware_ml_per_step_used ----

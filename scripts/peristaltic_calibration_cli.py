@@ -8,8 +8,8 @@ automatische Chemikaliendosierung - dieses Programm wird ausschließlich mit
 Wasser verwendet. Siehe docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md für den
 vollständigen Ablauf und die Sicherheitsregeln.
 
-Unterbefehle: discover, map, check, stop-all, test, calibrate, pair-test,
-all-four-test.
+Unterbefehle: discover, map, check, stop-all, test, calibrate, prime,
+pair-test, all-four-test.
 """
 
 from __future__ import annotations
@@ -29,14 +29,18 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.peristaltic.calibration import (
+    DEFAULT_PRIMING_CHUNK_ML,
     MAX_INITIAL_TEST_DOSE_ML,
+    MAX_PRIMING_TOTAL_ML,
     CalibrationValidationError,
     add_trial,
+    compute_priming_chunks,
     default_calibration_data,
     load_calibration_data,
     save_calibration_data,
     validate_dose_ml,
     validate_parallel_pump_selection,
+    validate_priming_request,
 )
 from services.peristaltic.firmware_profiles import (
     FirmwareProfileError,
@@ -588,6 +592,176 @@ def cmd_calibrate(args: argparse.Namespace, input_func: Callable[[str], str] = i
         session_logger.close({"command": "calibrate", "controller": args.controller, "pump": args.pump})
 
 
+# --- prime (Entlüften) ----------------------------------------------------------
+#
+# Bewusst KEINE Kalibrierung: kein Eintrag in calibration_data/
+# peristaltic_calibration.json, kein firmware_ml_per_step_used, kein
+# candidate_ml_per_step. Das Firmwareprofil wird trotzdem geprüft (fail-
+# closed, wie bei calibrate) - nur als Gate vor jeder Pumpenbewegung, der
+# aufgelöste Wert wird für Priming selbst nicht gebraucht/verwendet.
+
+
+def _format_ml_for_confirmation(value: float) -> str:
+    """180.0 -> "180", 155.5 -> "155.5" - die Bestätigungsphrase soll genau
+    der Aufgaben-Beispielschreibweise entsprechen (PRIME MCU_B P2 180),
+    nicht der Python-Float-Darstellung mit ".0"."""
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _required_prime_confirmation(controller_id: str, pump: str, max_ml: float) -> str:
+    return f"PRIME {controller_id} {pump} {_format_ml_for_confirmation(max_ml)}"
+
+
+def print_pre_prime_summary_and_confirm(
+    controller_id: str, port: str, pump: str, role: str, max_ml: float, chunk_ml: float,
+    input_func: Callable[[str], str] = input,
+) -> bool:
+    """Wie print_pre_dose_summary_and_confirm(), aber mit einer eigenen,
+    dynamischen Bestätigungsphrase (enthält Controller/Pumpe/Maximalmenge)
+    statt der festen WASSER-TEST-Phrase - ein einfaches 'conf' reicht für
+    Priming NICHT."""
+    print()
+    print("=== WASSER-TEST: Priming (Entlüften) angefordert ===")
+    print(f"  Controller: {controller_id}   Port: {port}")
+    print(f"  Pumpe:      {pump}   Fachliche Rolle: {role}")
+    print(f"  Maximale Priming-Menge: {max_ml} ml")
+    print(f"  Teilmenge pro Auftrag:  {chunk_ml} ml")
+    print("  Hinweis:    ausschließlich WASSER - keine Chemikalien")
+    print("  Hinweis:    Ctrl+C stoppt den Vorgang (best-effort STOPALL)")
+    print()
+    required = _required_prime_confirmation(controller_id, pump, max_ml)
+    print(f"Zum Fortfahren exakt eingeben: {required}")
+    answer = input_func("> ")
+    return answer.strip() == required
+
+
+def cmd_prime(args: argparse.Namespace, input_func: Callable[[str], str] = input) -> int:
+    priming_errors = validate_priming_request(args.max_ml, args.chunk_ml)
+    if priming_errors:
+        for message in priming_errors:
+            print(f"[FEHLER] {message}")
+        return 1
+
+    _resolve_firmware_value_or_exit(args.controller, args.pump)  # nur Gate, Wert wird nicht gebraucht
+
+    mapping = _load_mapping_or_exit()
+    entry = _resolve_controller(mapping, args.controller)
+    role = entry.pumps[args.pump]
+
+    chunks = compute_priming_chunks(args.max_ml, args.chunk_ml)
+
+    if not print_pre_prime_summary_and_confirm(
+        args.controller, entry.port, args.pump, role, args.max_ml, args.chunk_ml, input_func
+    ):
+        print("Abgebrochen - Bestätigung nicht exakt eingegeben.")
+        return 1
+
+    session_logger = PeristalticSessionLogger("prime")
+    client = _make_client(entry, session_logger)
+    completed_ml = 0.0
+    completion_reason = "error"
+
+    def _log_prime_row(
+        *,
+        requested_ml: float | None,
+        started_at: str | None,
+        finished_at: str | None,
+        elapsed_seconds: float | None,
+        result: str,
+        firmware_reported_ml: float | None = None,
+        error_code: str | None = None,
+        notes: str | None = None,
+        final_reason: str | None = None,
+    ) -> None:
+        session_logger.log_row(
+            controller=args.controller, controller_role=entry.role, serial_port=entry.port,
+            pump=args.pump, pump_role=role, command="prime",
+            operation="prime", requested_max_ml=args.max_ml, chunk_ml=args.chunk_ml,
+            requested_ml=requested_ml, started_at=started_at, finished_at=finished_at,
+            elapsed_seconds=elapsed_seconds, result=result, firmware_reported_ml=firmware_reported_ml,
+            error_code=error_code, notes=notes,
+            completed_ml=completed_ml, completion_reason=final_reason,
+        )
+
+    try:
+        client.open()
+        ensure_all_idle_before_dose(client)  # STATUS -> STOPALL -> STATUS -> alle Pumpen IDLE
+
+        print(f"Bereit - alle Pumpen IDLE. Starte Priming über {len(chunks)} Teilauftrag(e) (max. {args.max_ml} ml).")
+
+        for index, chunk_ml in enumerate(chunks, start=1):
+            chunk_started_at = _iso_now()
+            chunk_started_monotonic = time.monotonic()
+
+            result = client.dose(args.pump, chunk_ml)  # wartet intern auf DONE
+
+            finished_at = _iso_now()
+            elapsed_seconds = time.monotonic() - chunk_started_monotonic
+
+            status = client.status()
+            if status.get(args.pump) != "IDLE":
+                raise SafetyCheckFailed(
+                    f"{args.pump} ist nach Teilauftrag {index}/{len(chunks)} nicht IDLE (STATUS: {status})."
+                )
+
+            completed_ml += chunk_ml
+            is_last_chunk = index == len(chunks)
+            print(f"Priming-Fortschritt: {completed_ml} / {args.max_ml} ml")
+
+            _log_prime_row(
+                requested_ml=chunk_ml, started_at=chunk_started_at, finished_at=finished_at,
+                elapsed_seconds=elapsed_seconds, result="DONE", firmware_reported_ml=result.ml,
+                final_reason="completed" if is_last_chunk else None,
+            )
+
+        completion_reason = "completed"
+        print()
+        print(f"Priming abgeschlossen: {completed_ml} / {args.max_ml} ml.")
+        return 0
+
+    except KeyboardInterrupt:
+        completion_reason = "user_abort"
+        print(f"\n[ABBRUCH] prime: durch Nutzer unterbrochen (Ctrl+C) nach {completed_ml} ml.")
+        _best_effort_stop_all(client)
+        try:
+            final_status = client.status()
+            print(f"STATUS nach Abbruch: {final_status}")
+        except PeristalticError:
+            pass
+        _log_prime_row(
+            requested_ml=None, started_at=None, finished_at=_iso_now(), elapsed_seconds=None,
+            result="ABORTED_KEYBOARD_INTERRUPT", final_reason="user_abort",
+        )
+        return 130
+    except _GUARDED_EXCEPTIONS as exc:
+        completion_reason = "error"
+        print(f"[FEHLER] prime: {exc}")
+        _best_effort_stop_all(client)
+        _log_prime_row(
+            requested_ml=None, started_at=None, finished_at=_iso_now(), elapsed_seconds=None,
+            result="FAILED", error_code=type(exc).__name__, notes=str(exc), final_reason="error",
+        )
+        return 1
+    except Exception as exc:
+        completion_reason = "error"
+        print(f"[FEHLER] prime: unerwarteter Fehler: {exc}")
+        _best_effort_stop_all(client)
+        _log_prime_row(
+            requested_ml=None, started_at=None, finished_at=_iso_now(), elapsed_seconds=None,
+            result="FAILED", error_code=type(exc).__name__, notes=str(exc), final_reason="error",
+        )
+        raise
+    finally:
+        client.close()
+        session_logger.close({
+            "command": "prime", "controller": args.controller, "pump": args.pump,
+            "operation": "prime", "requested_max_ml": args.max_ml, "chunk_ml": args.chunk_ml,
+            "completed_ml": completed_ml, "completion_reason": completion_reason,
+        })
+
+
 # --- pair-test / all-four-test -------------------------------------------------
 
 
@@ -737,6 +911,19 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate_parser.add_argument("--pump", choices=VALID_PUMPS, required=True)
     calibrate_parser.add_argument("--requested-ml", type=float, required=True)
 
+    prime_parser = subparsers.add_parser(
+        "prime",
+        help=(
+            f"Schlauch mit Wasser entlüften (bis zu {MAX_PRIMING_TOTAL_ML} ml gesamt, in Teilaufträgen "
+            f"von höchstens {MAX_INITIAL_TEST_DOSE_ML} ml) - KEINE Kalibrierung, kein Eintrag in "
+            "peristaltic_calibration.json, immer nur eine Pumpe."
+        ),
+    )
+    prime_parser.add_argument("--controller", choices=VALID_CONTROLLERS, required=True)
+    prime_parser.add_argument("--pump", choices=VALID_PUMPS, required=True)
+    prime_parser.add_argument("--max-ml", type=float, required=True)
+    prime_parser.add_argument("--chunk-ml", type=float, default=DEFAULT_PRIMING_CHUNK_ML)
+
     pair_parser = subparsers.add_parser(
         "pair-test",
         help=(
@@ -772,6 +959,7 @@ def main(argv: list[str] | None = None) -> int:
         "stop-all": cmd_stop_all,
         "test": cmd_test,
         "calibrate": cmd_calibrate,
+        "prime": cmd_prime,
         "pair-test": cmd_pair_test,
         "all-four-test": cmd_all_four_test,
     }

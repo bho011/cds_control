@@ -40,6 +40,15 @@ CSV_FIELDNAMES: tuple[str, ...] = (
     "firmware_reported_ml",
     "firmware_ml_per_step_used",   # umbenannt von "current_ml_per_step" - siehe Kalibrierdatenmodell
     "candidate_ml_per_step",
+    # Nur für 'prime' (Entlüften) belegt - bleiben für alle anderen Kommandos
+    # leer (dict.fromkeys()-Default None). Priming ist keine Kalibrierung:
+    # es erzeugt bewusst keinen firmware_ml_per_step_used/candidate_ml_per_step-
+    # Eintrag und keinen calibration_data/peristaltic_calibration.json-Eintrag.
+    "operation",
+    "requested_max_ml",
+    "chunk_ml",
+    "completed_ml",
+    "completion_reason",   # completed | user_abort | error
     "error_code",
     "notes",
     "raw_log_file",
