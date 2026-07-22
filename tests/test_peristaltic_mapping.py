@@ -7,6 +7,7 @@ atomare JSON-Persistenz (load_mapping/save_mapping).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -44,7 +45,7 @@ def test_default_mapping_matches_target_chemical_roles():
     }
     assert mapping.controllers["MCU_B"].role == "EC"
     assert mapping.controllers["MCU_B"].pumps == {
-        "P1": "nutrient_a_1", "P2": "nutrient_a_2", "P3": "nutrient_b_1", "P4": "nutrient_b_2"
+        "P1": "nutrient_a_1", "P2": "nutrient_b_1", "P3": "nutrient_a_2", "P4": "nutrient_b_2"
     }
 
 
@@ -200,3 +201,16 @@ def test_load_invalid_mapping_fails_closed(tmp_path):
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(MappingValidationError):
         load_mapping(path)
+
+
+# --- Regressionstest gegen die echte, ausgelieferte Mapping-Datei --------------
+
+
+def test_real_repo_mapping_file_reflects_the_new_mcu_b_pump_pairing():
+    """Physische Hardwareanordnung (nicht die frühere Zuordnung): Naehrstoff
+    A = P1+P3, Naehrstoff B = P2+P4."""
+    path = Path(__file__).resolve().parent.parent / "config" / "peristaltic_mapping.json"
+    mapping = load_mapping(path)
+    assert mapping.controllers["MCU_B"].pumps == {
+        "P1": "nutrient_a_1", "P2": "nutrient_b_1", "P3": "nutrient_a_2", "P4": "nutrient_b_2"
+    }

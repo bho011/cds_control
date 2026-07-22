@@ -96,7 +96,7 @@ def default_mapping() -> PeristalticMapping:
                 role="EC",
                 port=None,
                 baudrate=REQUIRED_BAUDRATE,
-                pumps={"P1": "nutrient_a_1", "P2": "nutrient_a_2", "P3": "nutrient_b_1", "P4": "nutrient_b_2"},
+                pumps={"P1": "nutrient_a_1", "P2": "nutrient_b_1", "P3": "nutrient_a_2", "P4": "nutrient_b_2"},
             ),
         },
     )

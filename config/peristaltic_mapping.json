@@ -18,8 +18,8 @@
       "baudrate": 115200,
       "pumps": {
         "P1": "nutrient_a_1",
-        "P2": "nutrient_a_2",
-        "P3": "nutrient_b_1",
+        "P2": "nutrient_b_1",
+        "P3": "nutrient_a_2",
         "P4": "nutrient_b_2"
       }
     }

@@ -34,13 +34,15 @@ Vorläufige Zuordnung:
 
 #### MCU-B – EC-Nährstoffdosierung
 
-MCU-B nutzt zwei Pumpen je Nährstofflösung:
+MCU-B nutzt zwei Pumpen je Nährstofflösung. Die Kanalzuordnung folgt der
+physischen Hardwareanordnung, nicht der fortlaufenden Kanalnummerierung
+(siehe `config/peristaltic_mapping.json`):
 
 | Kanal | Aufgabe |
 |---|---|
 | P1 | Nährstofflösung A – Pumpe A1 |
-| P2 | Nährstofflösung A – Pumpe A2 |
-| P3 | Nährstofflösung B – Pumpe B1 |
+| P2 | Nährstofflösung B – Pumpe B1 |
+| P3 | Nährstofflösung A – Pumpe A2 |
 | P4 | Nährstofflösung B – Pumpe B2 |
 
 Alle Saug- und Druckleitungen bleiben physisch getrennt. Nährstofflösung A und B werden nicht vor dem Mixing Tank in einer gemeinsamen Leitung zusammengeführt.

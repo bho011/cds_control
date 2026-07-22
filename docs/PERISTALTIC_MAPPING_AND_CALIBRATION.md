@@ -25,7 +25,7 @@ firmware-side design discussion):
 | Controller | Role | P1 | P2 | P3 | P4 |
 |---|---|---|---|---|---|
 | `MCU_A` | pH | `ph_acid` | `ph_base` | `unassigned` | `unassigned` |
-| `MCU_B` | EC | `nutrient_a_1` | `nutrient_a_2` | `nutrient_b_1` | `nutrient_b_2` |
+| `MCU_B` | EC | `nutrient_a_1` | `nutrient_b_1` | `nutrient_a_2` | `nutrient_b_2` |
 
 Stored in `config/peristaltic_mapping.json` (schema version 1, validated by
 `services/peristaltic/models.py::validate_mapping_dict`): exactly the
@@ -37,13 +37,21 @@ and are **never invented** - both ports start as `null` and are filled in
 only through the `map` subcommand, after the operator has physically
 verified which cable goes where.
 
+`MCU_B`'s pump-to-chemical assignment follows the physical hardware
+arrangement, not sequential pump numbering - it was corrected once
+(`P2`/`P3` swapped) after the real wiring was checked. `P1`/`P4` were
+already correct and unaffected by that correction.
+
 ### Why MCU-B uses pump pairs
 
 MCU-B doses the two EC nutrient stock solutions (Nutrient Solution A and
-B), each split across two physical pumps (`nutrient_a_1`/`nutrient_a_2` and
-`nutrient_b_1`/`nutrient_b_2`). Testing and eventually dosing both pumps of
+B), each split across two physical pumps. Per the physical hardware
+arrangement, Nutrient Solution A is `nutrient_a_1`/`nutrient_a_2` (`P1`+`P3`)
+and Nutrient Solution B is `nutrient_b_1`/`nutrient_b_2` (`P2`+`P4`) -
+**not** adjacent pump numbers. Testing and eventually dosing both pumps of
 one nutrient solution simultaneously is a real, expected operating mode -
-that is exactly what `pair-test` exists for.
+that is exactly what `pair-test` exists for (see Section 5 for the
+enforced `{P1,P3}`/`{P2,P4}` restriction).
 
 ### Why MCU-A never gets a double assignment
 
@@ -181,9 +189,11 @@ attempt is logged as failed, and there is no automatic retry.
 
 `pair-test` and `all-four-test` never touch `MCU_A` (see Section 1). On
 `MCU_B`, only three pump selections are accepted:
-`{P1,P2}`, `{P3,P4}` (both `pair-test`), or all four (`all-four-test`) -
-enforced by `services/peristaltic/calibration.py::validate_parallel_pump_selection`.
-Any other combination (e.g. `{P1,P3}`) is rejected. Single-pump `test`/
+`{P1,P3}`, `{P2,P4}` (both `pair-test`, one pair per nutrient solution per
+the physical hardware arrangement - see Section 1), or all four
+(`all-four-test`) - enforced by
+`services/peristaltic/calibration.py::validate_parallel_pump_selection`.
+Any other combination (e.g. `{P1,P2}`) is rejected. Single-pump `test`/
 `calibrate` remain available for every pump on both controllers regardless
 of this restriction. Cross-MCU pair tests (one pump per controller) are out
 of scope - each CLI invocation only ever talks to one controller/one serial
@@ -204,7 +214,7 @@ python scripts/peristaltic_calibration_cli.py check --controller MCU_B
 python scripts/peristaltic_calibration_cli.py stop-all --controller MCU_B
 python scripts/peristaltic_calibration_cli.py test --controller MCU_B --pump P1 --ml 5
 python scripts/peristaltic_calibration_cli.py calibrate --controller MCU_B --pump P1 --requested-ml 5
-python scripts/peristaltic_calibration_cli.py pair-test --controller MCU_B --pumps P1 P2 --ml-each 5
+python scripts/peristaltic_calibration_cli.py pair-test --controller MCU_B --pumps P1 P3 --ml-each 5
 python scripts/peristaltic_calibration_cli.py all-four-test --controller MCU_B --ml-each 2
 ```
 

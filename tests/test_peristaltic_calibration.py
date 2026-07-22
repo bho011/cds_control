@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -259,7 +260,7 @@ def test_default_calibration_data_matches_target_mapping_roles():
     data = default_calibration_data()
     assert data["schema_version"] == 1
     assert data["controllers"]["MCU_A"]["P1"]["role"] == "ph_acid"
-    assert data["controllers"]["MCU_B"]["P3"]["role"] == "nutrient_b_1"
+    assert data["controllers"]["MCU_B"]["P3"]["role"] == "nutrient_a_2"
     for controller in ("MCU_A", "MCU_B"):
         for pump in ("P1", "P2", "P3", "P4"):
             entry = data["controllers"][controller][pump]
@@ -385,12 +386,14 @@ def test_mcu_a_never_allows_parallel_tests():
 
 
 def test_mcu_b_allows_only_the_two_fixed_pairs_and_all_four():
-    assert validate_parallel_pump_selection("MCU_B", ["P1", "P2"]) == []
-    assert validate_parallel_pump_selection("MCU_B", ["P3", "P4"]) == []
+    """Physische Hardwareanordnung: Naehrstoff A = P1+P3, Naehrstoff B =
+    P2+P4 (siehe config/peristaltic_mapping.json)."""
+    assert validate_parallel_pump_selection("MCU_B", ["P1", "P3"]) == []
+    assert validate_parallel_pump_selection("MCU_B", ["P2", "P4"]) == []
     assert validate_parallel_pump_selection("MCU_B", ["P1", "P2", "P3", "P4"]) == []
 
 
-@pytest.mark.parametrize("pumps", [["P1", "P3"], ["P2", "P4"], ["P1", "P4"], ["P2", "P3"]])
+@pytest.mark.parametrize("pumps", [["P1", "P2"], ["P3", "P4"], ["P1", "P4"], ["P2", "P3"]])
 def test_mcu_b_rejects_cross_pair_combinations(pumps):
     assert validate_parallel_pump_selection("MCU_B", pumps) != []
 
@@ -401,3 +404,29 @@ def test_all_four_test_on_mcu_a_is_rejected():
 
 def test_all_four_test_on_mcu_b_is_allowed():
     assert validate_parallel_pump_selection("MCU_B", ["P1", "P2", "P3", "P4"]) == []
+
+
+# --- Regressionstest gegen die echte, ausgelieferte Kalibrierdatei --------------
+
+
+def test_real_repo_calibration_file_roles_reflect_the_new_pairing_without_touching_trial_data():
+    """Nur die role-Felder von MCU_B duerfen sich durch das Umpaaren
+    geaendert haben - die vorhandenen P1-Messwerte/Kandidaten/Status/
+    Zeitstempel muessen exakt erhalten geblieben sein."""
+    path = Path(__file__).resolve().parent.parent / "calibration_data" / "peristaltic_calibration.json"
+    data = load_calibration_data(path)
+    mcu_b = data["controllers"]["MCU_B"]
+
+    assert mcu_b["P1"]["role"] == "nutrient_a_1"
+    assert mcu_b["P2"]["role"] == "nutrient_b_1"
+    assert mcu_b["P3"]["role"] == "nutrient_a_2"
+    assert mcu_b["P4"]["role"] == "nutrient_b_2"
+
+    p1 = mcu_b["P1"]
+    assert p1["status"] == "candidate"
+    assert p1["verified_ml_per_step"] is None
+    assert p1["last_updated"] == "2026-07-22T09:16:02+00:00"
+    assert p1["candidate_ml_per_step"] == pytest.approx(0.000192624768, rel=1e-9)
+    assert len(p1["trials"]) == 7
+    for trial in p1["trials"]:
+        assert trial["firmware_ml_per_step_used"] == 0.000191096

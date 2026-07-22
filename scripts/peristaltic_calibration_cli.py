@@ -927,7 +927,7 @@ def build_parser() -> argparse.ArgumentParser:
     pair_parser = subparsers.add_parser(
         "pair-test",
         help=(
-            "Zwei Pumpen gleichzeitig testen - NUR MCU_B, NUR die Paare P1+P2 oder P3+P4. "
+            "Zwei Pumpen gleichzeitig testen - NUR MCU_B, NUR die Paare P1+P3 oder P2+P4. "
             "Nur nach erfolgreicher Einzelkalibrierung der beteiligten Pumpen empfohlen."
         ),
     )

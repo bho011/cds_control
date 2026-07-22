@@ -264,8 +264,8 @@ def default_calibration_data() -> dict[str, Any]:
             },
             "MCU_B": {
                 "P1": _pump_entry("nutrient_a_1"),
-                "P2": _pump_entry("nutrient_a_2"),
-                "P3": _pump_entry("nutrient_b_1"),
+                "P2": _pump_entry("nutrient_b_1"),
+                "P3": _pump_entry("nutrient_a_2"),
                 "P4": _pump_entry("nutrient_b_2"),
             },
         },
@@ -376,8 +376,11 @@ ALLOWED_PARALLEL_PUMP_GROUPS: dict[str, list[frozenset[str]]] = {
     # dosieren (siehe docs/CDS_EC_MIXING_PROCESS_CONCEPT.md).
     "MCU_A": [],
     "MCU_B": [
-        frozenset({"P1", "P2"}),
-        frozenset({"P3", "P4"}),
+        # Physische Hardwareanordnung: Nährstoff A = P1+P3, Nährstoff B =
+        # P2+P4 (siehe config/peristaltic_mapping.json - P1=nutrient_a_1,
+        # P2=nutrient_b_1, P3=nutrient_a_2, P4=nutrient_b_2).
+        frozenset({"P1", "P3"}),
+        frozenset({"P2", "P4"}),
         frozenset({"P1", "P2", "P3", "P4"}),
     ],
 }
@@ -386,9 +389,9 @@ ALLOWED_PARALLEL_PUMP_GROUPS: dict[str, list[frozenset[str]]] = {
 def validate_parallel_pump_selection(controller: str, pumps: list[str]) -> list[str]:
     """Sammelt Fehler: die übergebene Pumpenmenge muss exakt einer der für
     diesen Controller erlaubten Gruppen entsprechen. MCU_A erlaubt gar
-    keine Paralleltests. MCU_B erlaubt nur {P1,P2} und {P3,P4} (pair-test)
-    oder alle vier (all-four-test) - explizit NICHT {P1,P3}, {P2,P4} oder
-    sonstige Kombinationen."""
+    keine Paralleltests. MCU_B erlaubt nur {P1,P3} und {P2,P4} (pair-test,
+    je ein Pumpenpaar pro Nährstofflösung) oder alle vier (all-four-test) -
+    explizit NICHT {P1,P2}, {P3,P4} oder sonstige Kombinationen."""
     allowed_groups = ALLOWED_PARALLEL_PUMP_GROUPS.get(controller)
     if allowed_groups is None:
         return [f"Unbekannter Controller für Paralleltest: {controller!r}."]
