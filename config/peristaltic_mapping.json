@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "controllers": {
+    "MCU_A": {
+      "role": "PH",
+      "port": "/dev/serial/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0:1.4:1.0-port0",
+      "baudrate": 115200,
+      "pumps": {
+        "P1": "ph_acid",
+        "P2": "ph_base",
+        "P3": "unassigned",
+        "P4": "unassigned"
+      }
+    },
+    "MCU_B": {
+      "role": "EC",
+      "port": "/dev/serial/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0:1.2:1.0-port0",
+      "baudrate": 115200,
+      "pumps": {
+        "P1": "nutrient_a_1",
+        "P2": "nutrient_a_2",
+        "P3": "nutrient_b_1",
+        "P4": "nutrient_b_2"
+      }
+    }
+  }
+}
