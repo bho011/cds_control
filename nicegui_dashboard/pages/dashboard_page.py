@@ -405,7 +405,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                                     "control-input"
                                 )
                                 target_ro_water_input = ui.number(
-                                    "RO Water Volume", suffix="L", min=0, max=180
+                                    "RO Water Volume", suffix="L", min=0, max=180, step=1
                                 ).classes("control-input")
 
                             recipe_legacy_warning_label = ui.label("").classes("error-text")
@@ -417,25 +417,25 @@ def create_dashboard_page(controller: CdsController) -> None:
                                 with ui.column().classes("recipe-form-section"):
                                     ui.label("EC").classes("recipe-section-title")
                                     target_ec_input = ui.number(
-                                        "EC Setpoint", suffix="mS/cm", min=0.5, max=2.5, step=0.1
+                                        "EC Setpoint", suffix="mS/cm", min=0.5, max=2.5, step=0.05
                                     )
                                     ec_mixing_time_input = ui.number(
-                                        "Mixing time", suffix="s (seconds)", min=300, max=1200
+                                        "Mixing time", suffix="s (seconds)", min=300, max=1200, step=10
                                     )
                                     nutrient_dosing_enabled_switch = ui.switch(
                                         "Enable nutrient dosing"
                                     )
                                     nutrients_dose_input = ui.number(
-                                        "Nutrient total dose", suffix="ml / 100 L RO water", min=0
+                                        "Nutrient total dose", suffix="ml / 100 L RO water", min=0, step=1
                                     )
                                     nutrient_a_percent_input = ui.number(
-                                        "Nutrient solution A share", suffix="%", min=0, max=100
+                                        "Nutrient solution A share", suffix="%", min=0, max=100, step=1
                                     )
                                     nutrient_b_percent_display = ui.number(
                                         "Nutrient solution B share (auto)", suffix="%"
                                     ).props("readonly")
                                     ec_adjustment_factor_input = ui.number(
-                                        "EC adjustment factor", min=0.01, max=1
+                                        "EC adjustment factor", min=0.01, max=1, step=0.01
                                     )
 
                                     ui.label("Calculated for this run").classes(
@@ -447,12 +447,22 @@ def create_dashboard_page(controller: CdsController) -> None:
 
                                 with ui.column().classes("recipe-form-section"):
                                     ui.label("pH").classes("recipe-section-title")
-                                    target_ph_input = ui.number("pH Setpoint", min=0, max=14)
-                                    volume_acid_1_input = ui.number("Volume acid 1", suffix="ml", min=0)
-                                    volume_acid_2_input = ui.number("Volume acid 2", suffix="ml", min=0)
-                                    volume_base_input = ui.number("Volume base", suffix="ml", min=0)
-                                    ph_mixing_time_input = ui.number("Mixing time", suffix="s", min=0)
-                                    ph_adjustment_factor_input = ui.number("Adjustment factor", min=0)
+                                    target_ph_input = ui.number("pH Setpoint", min=0, max=14, step=0.1)
+                                    volume_acid_1_input = ui.number(
+                                        "Volume acid 1", suffix="ml", min=0, step=1
+                                    )
+                                    volume_acid_2_input = ui.number(
+                                        "Volume acid 2", suffix="ml", min=0, step=1
+                                    )
+                                    volume_base_input = ui.number(
+                                        "Volume base", suffix="ml", min=0, step=1
+                                    )
+                                    ph_mixing_time_input = ui.number(
+                                        "Mixing time", suffix="s", min=0, step=10
+                                    )
+                                    ph_adjustment_factor_input = ui.number(
+                                        "Adjustment factor", min=0, step=0.01
+                                    )
                                     ui.label(
                                         "pH correction is not yet included in the process-volume "
                                         "estimate - the exact amount is not known at recipe time."
