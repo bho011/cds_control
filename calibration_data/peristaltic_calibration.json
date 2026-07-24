@@ -1,0 +1,346 @@
+{
+  "schema_version": 1,
+  "controllers": {
+    "MCU_A": {
+      "P1": {
+        "role": "ph_acid",
+        "status": "not_calibrated",
+        "candidate_ml_per_step": null,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": null,
+        "trials": []
+      },
+      "P2": {
+        "role": "ph_base",
+        "status": "not_calibrated",
+        "candidate_ml_per_step": null,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": null,
+        "trials": []
+      },
+      "P3": {
+        "role": "unassigned",
+        "status": "not_calibrated",
+        "candidate_ml_per_step": null,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": null,
+        "trials": []
+      },
+      "P4": {
+        "role": "unassigned",
+        "status": "not_calibrated",
+        "candidate_ml_per_step": null,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": null,
+        "trials": []
+      }
+    },
+    "MCU_B": {
+      "P1": {
+        "role": "nutrient_a_1",
+        "status": "candidate",
+        "candidate_ml_per_step": 0.00019262476799999998,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": "2026-07-22T09:16:02+00:00",
+        "trials": [
+          {
+            "timestamp_utc": "2026-07-22T09:10:02+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 5.04,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019262476799999998
+          },
+          {
+            "timestamp_utc": "2026-07-22T09:10:55+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 5.05,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019300696
+          },
+          {
+            "timestamp_utc": "2026-07-22T09:11:37+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 5.04,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019262476799999998
+          },
+          {
+            "timestamp_utc": "2026-07-22T09:12:20+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 5.05,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019300696
+          },
+          {
+            "timestamp_utc": "2026-07-22T09:13:39+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.08,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019262476799999998
+          },
+          {
+            "timestamp_utc": "2026-07-22T09:14:54+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.09,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000192815864
+          },
+          {
+            "timestamp_utc": "2026-07-22T09:16:02+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.08,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019262476799999998
+          }
+        ]
+      },
+      "P2": {
+        "role": "nutrient_b_1",
+        "status": "candidate",
+        "candidate_ml_per_step": 0.000188611752,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": "2026-07-22T14:37:13+00:00",
+        "trials": [
+          {
+            "timestamp_utc": "2026-07-22T14:30:12+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.92,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000188038464
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:31:05+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.88,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000186509696
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:31:50+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.86,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00018574531200000002
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:32:38+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.87,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000186127504
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:33:50+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 9.81,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00018746517600000002
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:34:36+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 9.83,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00018784736799999999
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:35:21+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 9.87,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000188611752
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:36:21+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.01,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000191287096
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:37:13+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.49,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000200459704
+          }
+        ]
+      },
+      "P3": {
+        "role": "nutrient_a_2",
+        "status": "candidate",
+        "candidate_ml_per_step": 0.000175235032,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": "2026-07-22T14:44:42+00:00",
+        "trials": [
+          {
+            "timestamp_utc": "2026-07-22T14:40:34+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.56,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00017427955199999997
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:41:09+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.54,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000173515168
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:41:44+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.55,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00017389736
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:42:19+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 4.56,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00017427955199999997
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:43:18+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 9.17,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000175235032
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:43:58+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 9.15,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00017485284
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:44:42+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 9.18,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000175426128
+          }
+        ]
+      },
+      "P4": {
+        "role": "nutrient_b_2",
+        "status": "candidate",
+        "candidate_ml_per_step": 0.000197402168,
+        "verified_ml_per_step": null,
+        "verified_at_ml": [],
+        "last_updated": "2026-07-22T14:49:53+00:00",
+        "trials": [
+          {
+            "timestamp_utc": "2026-07-22T14:46:33+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 5.2,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019873984000000003
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:47:09+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 5.18,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019797545599999997
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:47:43+00:00",
+            "requested_ml": 5.0,
+            "measured_ml": 5.19,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000198357648
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:48:29+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.36,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019797545599999997
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:49:10+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.33,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.000197402168
+          },
+          {
+            "timestamp_utc": "2026-07-22T14:49:53+00:00",
+            "requested_ml": 10.0,
+            "measured_ml": 10.31,
+            "measurement_method": "mass_approx",
+            "water_temperature_c": null,
+            "firmware_ml_per_step_used": 0.000191096,
+            "candidate_ml_per_step": 0.00019701997600000002
+          }
+        ]
+      }
+    }
+  }
+}

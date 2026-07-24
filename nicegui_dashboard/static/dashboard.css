@@ -938,6 +938,19 @@ body {
     height: 220px;
 }
 
+.prime-dialog-card {
+    width: min(720px, 92vw) !important;
+    max-width: none !important;
+}
+
+.prime-pump-row-disabled {
+    opacity: 0.5;
+}
+
+.prime-pump-row-disabled .prime-pump-reason {
+    font-size: 12px;
+}
+
 /* =========================================================
    Left sidebar density (System Status / Actuators)
    ========================================================= */

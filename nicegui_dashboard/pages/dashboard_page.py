@@ -15,6 +15,22 @@ from nicegui_dashboard.recipe_store import (
     save_recipe_to_slot,
     set_active_slot,
 )
+from process.pump_prime import describe_pump_options
+from services.peristaltic.models import VALID_CONTROLLERS, VALID_PUMPS
+
+_PUMP_ROLE_DISPLAY_NAMES = {
+    "nutrient_a_1": "Nährstoff A – Leitung 1",
+    "nutrient_a_2": "Nährstoff A – Leitung 2",
+    "nutrient_b_1": "Nährstoff B – Leitung 1",
+    "nutrient_b_2": "Nährstoff B – Leitung 2",
+    "ph_acid": "pH-Minus",
+    "ph_base": "pH-Plus",
+}
+
+
+def pump_display_label(controller_id: str, pump: str, role: str | None) -> str:
+    role_label = _PUMP_ROLE_DISPLAY_NAMES.get(role, role or "-")
+    return f"{role_label} ({controller_id} / {pump})"
 
 
 def fmt(value: Any, unit: str = "", decimals: int = 2) -> str:
@@ -249,7 +265,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                     ).classes("subtitle")
 
             with ui.row().classes("gap-2 items-center"):
-                dev_info_button = ui.button("Dev Info").classes(
+                dev_info_button = ui.button("Wartung").classes(
                     "dev-info-button"
                 ).props("outline color=grey-5 icon=terminal")
 
@@ -300,7 +316,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                 with ui.dialog() as dev_info_dialog, ui.card().classes(
                     "recipe-dialog-card dev-info-dialog-card"
                 ):
-                    ui.label("Developer Info").classes("panel-title")
+                    ui.label("Wartung").classes("panel-title")
                     ui.label(
                         "Live status badges and dashboard event log. For development and troubleshooting only."
                     ).classes("panel-subtitle")
@@ -311,6 +327,12 @@ def create_dashboard_page(controller: CdsController) -> None:
                         last_update_badge = ui.label("Update: -").classes(
                             "top-badge badge-orange"
                         )
+
+                    ui.separator().classes("control-separator")
+                    ui.label("Peristaltikpumpen").classes("control-section-title")
+                    prime_button = ui.button("Prime").props(
+                        "outline color=grey-5 icon=water_drop"
+                    )
 
                     with ui.row().classes("w-full items-center justify-between mt-4"):
                         ui.label("Process Log").classes("control-section-title")
@@ -324,6 +346,70 @@ def create_dashboard_page(controller: CdsController) -> None:
                         ui.button("Close", on_click=dev_info_dialog.close).props(
                             "color=grey outline"
                         )
+
+                with ui.dialog() as prime_dialog, ui.card().classes(
+                    "recipe-dialog-card prime-dialog-card"
+                ):
+                    ui.label("Peristaltikpumpen primen").classes("panel-title")
+                    ui.label(
+                        "Entlüftet die ausgewählten Pumpen mit Wasser. Kein regulärer "
+                        "Prozessschritt, sondern ein Wartungsvorgang."
+                    ).classes("panel-subtitle")
+
+                    ui.label(
+                        "Vor dem Start sicherstellen, dass die Schlauchenden korrekt "
+                        "positioniert sind und die austretende Flüssigkeit sicher "
+                        "aufgefangen oder in den vorgesehenen Behälter geführt wird."
+                    ).classes("confirmation-help")
+
+                    ui.label("MCU_A – pH-Dosierung").classes("recipe-section-title mt-3")
+                    mcu_a_info_label = ui.label("").classes("confirmation-help")
+                    prime_pump_rows: dict[tuple[str, str], dict[str, Any]] = {}
+                    for _pump in VALID_PUMPS:
+                        with ui.row().classes("items-center gap-2") as _row:
+                            _checkbox = ui.checkbox("")
+                            _label = ui.label("")
+                            _reason_label = ui.label("").classes("error-text prime-pump-reason")
+                        prime_pump_rows[("MCU_A", _pump)] = {
+                            "row": _row, "checkbox": _checkbox,
+                            "label": _label, "reason_label": _reason_label,
+                        }
+
+                    ui.label("MCU_B – Nährstoffpumpen").classes("recipe-section-title mt-3")
+                    mcu_b_info_label = ui.label("").classes("confirmation-help")
+                    for _pump in VALID_PUMPS:
+                        with ui.row().classes("items-center gap-2") as _row:
+                            _checkbox = ui.checkbox("")
+                            _label = ui.label("")
+                            _reason_label = ui.label("").classes("error-text prime-pump-reason")
+                        prime_pump_rows[("MCU_B", _pump)] = {
+                            "row": _row, "checkbox": _checkbox,
+                            "label": _label, "reason_label": _reason_label,
+                        }
+
+                    ui.label("Prime-Menge: 150 ml je ausgewählter Pumpe").classes(
+                        "recipe-section-title mt-3"
+                    )
+                    ui.label("Jede ausgewählte Pumpe fördert 150 ml.").classes(
+                        "confirmation-help"
+                    )
+
+                    prime_status_label = ui.label("Bereit").classes("manual-drain-status")
+                    prime_progress = ui.linear_progress(value=0.0).classes(
+                        "manual-drain-progress w-full"
+                    )
+                    prime_error_label = ui.label("").classes("error-text")
+
+                    with ui.row().classes("w-full justify-end gap-3 mt-3"):
+                        prime_close_button = ui.button("Schließen").props(
+                            "color=grey outline"
+                        )
+                        prime_stop_button = ui.button("Stopp").props("color=negative")
+                        prime_start_button = ui.button("Start Priming").props(
+                            "color=positive"
+                        )
+
+                prime_dialog.props("persistent")
 
             with ui.element("div").classes("content-grid w-full"):
                 with ui.column().classes("gap-5 w-full area-main"):
@@ -989,6 +1075,136 @@ def create_dashboard_page(controller: CdsController) -> None:
         result = controller.stop_tank_cleaning()
         add_log(f"[TANK CLEANING] {result['message']}")
 
+    def update_prime_pump_checklist() -> None:
+        options = describe_pump_options()
+
+        for (controller_id, pump), option in options.items():
+            row_refs = prime_pump_rows[(controller_id, pump)]
+            checkbox = row_refs["checkbox"]
+            label = row_refs["label"]
+            reason_label = row_refs["reason_label"]
+            row = row_refs["row"]
+
+            if option["hidden"]:
+                row.set_visibility(False)
+                continue
+
+            row.set_visibility(True)
+            label.set_text(pump_display_label(controller_id, pump, option["role"]))
+
+            if option["blocked"]:
+                checkbox.set_value(False)
+                checkbox.disable()
+                reason_label.set_text("; ".join(option["blocked_reasons"]) or "Nicht verfügbar.")
+                row.classes(add="prime-pump-row-disabled")
+            else:
+                checkbox.enable()
+                reason_label.set_text("")
+                row.classes(remove="prime-pump-row-disabled")
+
+        for controller_id, info_label in (("MCU_A", mcu_a_info_label), ("MCU_B", mcu_b_info_label)):
+            unassigned = [
+                pump for pump in VALID_PUMPS if options[(controller_id, pump)]["hidden"]
+            ]
+            if unassigned:
+                info_label.set_text(
+                    f"{controller_id} ist noch nicht vollständig gemappt "
+                    f"({', '.join(unassigned)} nicht zugeordnet)."
+                )
+            else:
+                info_label.set_text("")
+
+    def open_prime_dialog() -> None:
+        update_prime_pump_checklist()
+        prime_dialog.open()
+
+    def _collect_selected_prime_pumps() -> dict[str, list[str]]:
+        selected: dict[str, list[str]] = {}
+        for controller_id in VALID_CONTROLLERS:
+            pumps = [
+                pump
+                for pump in VALID_PUMPS
+                if prime_pump_rows[(controller_id, pump)]["checkbox"].value
+            ]
+            if pumps:
+                selected[controller_id] = pumps
+        return selected
+
+    def handle_prime_start() -> None:
+        pumps = _collect_selected_prime_pumps()
+        if not pumps:
+            ui.notify("Bitte mindestens eine Pumpe auswählen.", color="negative")
+            add_log("[PRIME] Bitte mindestens eine Pumpe auswählen.")
+            return
+
+        result = controller.start_prime(pumps)
+
+        if result["success"]:
+            ui.notify(result["message"], color="positive")
+            add_log(f"[PRIME] {result['message']}")
+        else:
+            ui.notify(result["message"], color="negative")
+            add_log(f"[BLOCKED] {result['message']}")
+
+    async def handle_prime_stop() -> None:
+        # Sofort, synchron, VOR dem await: der Nutzer soll augenblicklich
+        # sehen, dass der Stopp angenommen wurde - nicht erst, wenn
+        # stop_prime() (kann bis zu ~40s dauern) zurückkehrt. refresh()
+        # übernimmt danach "Stopp wird ausgeführt", solange phase==STOPPING.
+        prime_status_label.set_text(
+            "Stopp angefordert – der aktuell laufende Dosierschritt wird beendet."
+        )
+        prime_stop_button.props("loading")
+        prime_stop_button.disable()
+        try:
+            result = await controller.stop_prime()
+            add_log(f"[PRIME] {result['message']}")
+        finally:
+            prime_stop_button.props(remove="loading")
+        # Der Dialog bleibt beim normalen Stopp-Klick grundsätzlich offen
+        # und zeigt anschließend das Ergebnis - kein prime_dialog.close() hier.
+
+    async def handle_prime_close() -> None:
+        """
+        5-Schritt-Sequenz: (1) is_active prüfen, (2) falls aktiv: UI auf
+        "Stopp angefordert"/"wird ausgeführt" setzen, (3) stop_prime()
+        abwarten (request_stop()+wait_stopped() intern), (4) Status ERNEUT
+        lesen (nicht nur das Ergebnis von stop_prime() selbst vertrauen),
+        (5) nur schließen, wenn dieser erneute Check is_active==False
+        bestätigt - sonst Dialog offen (persistent) lassen und einen
+        verständlichen Hinweis zeigen.
+        """
+        prime_status = controller.get_process_control_status().get("prime", {})
+        if not prime_status.get("is_active"):
+            prime_dialog.close()
+            return
+
+        prime_status_label.set_text(
+            "Stopp angefordert – der aktuell laufende Dosierschritt wird beendet."
+        )
+        prime_close_button.props("loading")
+        prime_close_button.disable()
+        try:
+            result = await controller.stop_prime()
+        finally:
+            prime_close_button.props(remove="loading")
+            prime_close_button.enable()
+
+        final_status = controller.get_process_control_status().get("prime", {})
+        if final_status.get("is_active"):
+            prime_error_label.set_text(
+                "Der Prime-Vorgang konnte noch nicht als beendet bestätigt werden. "
+                "Der Dialog bleibt aus Sicherheitsgründen geöffnet."
+            )
+            add_log(f"[PRIME] Schließen abgelehnt - Stopp noch nicht bestätigt: {result.get('message')}")
+            return  # Dialog bleibt offen (bereits persistent)
+
+        add_log(
+            "[PRIME] Dialog wurde während des Primings geschlossen - "
+            f"gestoppt: {result.get('message')}"
+        )
+        prime_dialog.close()
+
     async def handle_run_preflight() -> None:
         preflight_button.props("loading")
         preflight_button.disable()
@@ -1015,6 +1231,11 @@ def create_dashboard_page(controller: CdsController) -> None:
     tank_cleaning_start_button.on_click(handle_tank_cleaning_start)
     tank_cleaning_stop_button.on_click(handle_tank_cleaning_stop)
     preflight_button.on_click(handle_run_preflight)
+
+    prime_button.on_click(open_prime_dialog)
+    prime_start_button.on_click(handle_prime_start)
+    prime_stop_button.on_click(handle_prime_stop)
+    prime_close_button.on_click(handle_prime_close)
 
     manual_drain_button.on("mousedown", lambda _: handle_manual_drain_start())
     manual_drain_button.on("mouseup", lambda _: handle_manual_drain_stop())
@@ -1204,22 +1425,59 @@ def create_dashboard_page(controller: CdsController) -> None:
                 f"Tank Cleaning: {tank_cleaning_status.get('last_message', 'ready')}"
             )
 
+        prime_status = control_data.get("prime", {}) or {}
+        prime_active = bool(prime_status.get("is_active", False))
+        prime_phase = prime_status.get("phase", "IDLE")
+        prime_results = prime_status.get("pump_results", []) or []
+        prime_plan_total = sum(len(pumps) for pumps in (prime_status.get("pumps_plan", {}) or {}).values())
+
+        if prime_active:
+            progress_value = (len(prime_results) / prime_plan_total) if prime_plan_total else 0.0
+            prime_progress.set_value(progress_value)
+            if prime_phase == "STOPPING":
+                # Keine Formulierung, die einen sofortigen Pumpenstopp
+                # verspricht - der aktuell laufende Chunk kann intern noch
+                # bis zu ~35s weiterlaufen, bevor der nächste Checkpoint
+                # den Stopp tatsächlich wirksam werden lässt.
+                prime_status_label.set_text(
+                    "Stopp wird ausgeführt – der aktuell laufende Dosierschritt wird beendet."
+                )
+            else:
+                current_controller = prime_status.get("current_controller") or "-"
+                current_pump = prime_status.get("current_pump") or "-"
+                current_role = prime_status.get("current_pump_role") or "-"
+                prime_status_label.set_text(
+                    f"Priming läuft: {current_controller}/{current_pump} ({current_role}) - "
+                    f"{len(prime_results)}/{prime_plan_total} Pumpen abgeschlossen"
+                )
+            prime_error_label.set_text("")
+        else:
+            # Erst hier (is_active bestätigt False) gilt der Vorgang als
+            # "Gestoppt"/abgeschlossen - last_message spiegelt das bereits
+            # korrekt wider ("Priming gestoppt: ..."/"Priming abgeschlossen.").
+            prime_progress.set_value(1.0 if prime_phase == "FINISHED" else 0.0)
+            prime_status_label.set_text(prime_status.get("last_message", "Bereit"))
+            prime_error_label.set_text(prime_status.get("last_error") or "")
+
+        prime_selection_locked = control_data["is_running"] or manual_drain_active or tank_cleaning_active or prime_active
+
         if (
             control_data["is_running"]
             or manual_drain_active
             or tank_cleaning_active
+            or prime_active
             or not hardware_enabled
         ):
             start_button.disable()
         else:
             start_button.enable()
 
-        if control_data["is_running"] or manual_drain_active or tank_cleaning_active:
+        if control_data["is_running"] or manual_drain_active or tank_cleaning_active or prime_active:
             reset_button.disable()
         else:
             reset_button.enable()
 
-        if control_data["is_running"] or tank_cleaning_active or not hardware_enabled:
+        if control_data["is_running"] or tank_cleaning_active or prime_active or not hardware_enabled:
             manual_drain_button.disable()
         else:
             manual_drain_button.enable()
@@ -1228,6 +1486,7 @@ def create_dashboard_page(controller: CdsController) -> None:
             control_data["is_running"]
             or manual_drain_active
             or tank_cleaning_active
+            or prime_active
             or not tank_cleaning_hardware_enabled
         ):
             tank_cleaning_start_button.disable()
@@ -1239,12 +1498,30 @@ def create_dashboard_page(controller: CdsController) -> None:
         else:
             tank_cleaning_stop_button.disable()
 
+        if prime_selection_locked:
+            prime_start_button.disable()
+            for row_refs in prime_pump_rows.values():
+                row_refs["checkbox"].disable()
+        else:
+            prime_start_button.enable()
+            update_prime_pump_checklist()
+
+        if prime_active:
+            prime_stop_button.enable()
+        else:
+            prime_stop_button.disable()
+
         if control_data["is_running"]:
             add_log(f"[STATE] {fmt(process_state)}")
         elif manual_drain_active:
             add_log(f"[MANUAL DRAIN] running {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s")
         elif tank_cleaning_active:
             add_log(f"[TANK CLEANING] {tank_cleaning_phase} {tank_cleaning_elapsed:.0f}s")
+        elif prime_active:
+            add_log(
+                f"[PRIME] {prime_status.get('current_controller')}/{prime_status.get('current_pump')} "
+                f"({len(prime_results)}/{prime_plan_total})"
+            )
         elif not hardware_enabled:
             add_log("[SAFE] Hardware execution disabled. Start and Manual Drain are locked.")
 

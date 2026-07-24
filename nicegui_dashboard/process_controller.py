@@ -10,6 +10,7 @@ from domain.recipe_limits import MAX_PROCESS_VOLUME_L
 from domain.recipe_model import RunOptions
 from nicegui_dashboard.recipe_store import build_run_config, get_active_recipe, load_recipe_book
 from process.manual_drain_jog import ManualDrainJog
+from process.pump_prime import PRIME_CHUNK_ML, PRIME_MAX_ML_PER_PUMP, PumpPrimeController
 from process.tank_cleaning import TankCleaningController
 from services.settings_validation import SettingField, validate_settings
 
@@ -145,6 +146,9 @@ class ProcessController:
         self.tank_cleaning = TankCleaningController(
             get_sensor_snapshot=self.get_sensor_snapshot,
         )
+        self.prime = PumpPrimeController(
+            get_sensor_snapshot=self.get_sensor_snapshot,
+        )
 
     def load_settings(self) -> dict[str, Any]:
         with SETTINGS_PATH.open("r", encoding="utf-8") as file:
@@ -260,6 +264,8 @@ class ProcessController:
                     "cleaning_hold_seconds"
                 ),
                 "tank_cleaning_settings_error": tank_cleaning_settings_error,
+
+                "prime": self.prime.get_status(),
             }
 
     def start_fill_and_measure(
@@ -279,11 +285,12 @@ class ProcessController:
                 or self._teardown_in_progress
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     False,
                     "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
-                    "or Tank Cleaning is still active.",
+                    "Tank Cleaning, or Prime is still active.",
                 )
 
             self.last_start_request = datetime.now().isoformat(timespec="seconds")
@@ -336,11 +343,12 @@ class ProcessController:
                 or self._teardown_in_progress
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     False,
                     "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
-                    "or Tank Cleaning is still active.",
+                    "Tank Cleaning, or Prime is still active.",
                 )
 
             self.is_running = True
@@ -398,6 +406,11 @@ class ProcessController:
                 self.last_error = f"Tank Cleaning emergency stop failed: {exc}"
 
             try:
+                self.prime.request_stop(reason="emergency_stop")
+            except Exception as exc:
+                self.last_error = f"Prime emergency stop failed: {exc}"
+
+            try:
                 if self.actuators is not None:
                     self.actuators.safe_shutdown_all()
             except Exception as exc:
@@ -420,6 +433,11 @@ class ProcessController:
             except Exception as exc:
                 self.last_error = f"Tank Cleaning emergency stop failed: {exc}"
 
+            try:
+                self.prime.wait_stopped()
+            except Exception as exc:
+                self.last_error = f"Prime emergency stop failed: {exc}"
+
         await asyncio.to_thread(_wait_for_everything)
 
         with self._lock:
@@ -427,6 +445,7 @@ class ProcessController:
                 self._thread_is_alive_locked()
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     True,
@@ -442,10 +461,11 @@ class ProcessController:
                 or self._thread_is_alive_locked()
                 or self._teardown_in_progress
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     False,
-                    "Manual Drain Jog blocked: main process, cleanup, or Tank Cleaning is active.",
+                    "Manual Drain Jog blocked: main process, cleanup, Tank Cleaning, or Prime is active.",
                 )
 
         try:
@@ -466,10 +486,11 @@ class ProcessController:
                 or self._thread_is_alive_locked()
                 or self._teardown_in_progress
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     False,
-                    "Manual Drain Jog blocked: main process, cleanup, or Tank Cleaning is active.",
+                    "Manual Drain Jog blocked: main process, cleanup, Tank Cleaning, or Prime is active.",
                 )
 
             result = self.manual_drain_jog.start(settings)
@@ -514,6 +535,11 @@ class ProcessController:
                 self.last_error = f"Tank Cleaning shutdown failed: {exc}"
 
             try:
+                self.prime.request_stop(reason="controller_shutdown")
+            except Exception as exc:
+                self.last_error = f"Prime shutdown failed: {exc}"
+
+            try:
                 if self.actuators is not None:
                     self.actuators.safe_shutdown_all()
             except Exception as exc:
@@ -535,11 +561,17 @@ class ProcessController:
         except Exception as exc:
             self.last_error = f"Tank Cleaning shutdown failed: {exc}"
 
+        try:
+            self.prime.wait_stopped()
+        except Exception as exc:
+            self.last_error = f"Prime shutdown failed: {exc}"
+
         with self._lock:
             if (
                 self._thread_is_alive_locked()
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(False, "Shutdown timeout: Hintergrundthread läuft noch.")
 
@@ -553,10 +585,11 @@ class ProcessController:
                 or self._teardown_in_progress
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     False,
-                    "Tank Cleaning blocked: another process, cleanup, or Manual Drain Jog is active.",
+                    "Tank Cleaning blocked: another process, cleanup, Manual Drain Jog, or Prime is active.",
                 )
 
         try:
@@ -585,10 +618,11 @@ class ProcessController:
                 or self._teardown_in_progress
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     False,
-                    "Tank Cleaning blocked: another process, cleanup, or Manual Drain Jog is active.",
+                    "Tank Cleaning blocked: another process, cleanup, Manual Drain Jog, or Prime is active.",
                 )
 
             result = self.tank_cleaning.start(settings)
@@ -614,6 +648,80 @@ class ProcessController:
 
         return result
 
+    def start_prime(self, pumps: dict[str, list[str]]) -> dict[str, Any]:
+        """
+        pumps: {"MCU_A": ["P1"], "MCU_B": ["P1", "P2", ...]} - Auswahl aus
+        dem Prime-Dialog. Menge/Chunkgröße kommen NICHT vom Aufrufer, sondern
+        sind feste Konstanten (process/pump_prime.py::PRIME_MAX_ML_PER_PUMP/
+        PRIME_CHUNK_ML) - die UI darf die 150 ml je Pumpe nicht verändern.
+        """
+        with self._lock:
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+            ):
+                return self._result(
+                    False,
+                    "Prime blocked: another process, cleanup, Manual Drain Jog, or Tank Cleaning is active.",
+                )
+
+        # Re-check and start atomically under the same lock: the precondition
+        # check above only fails fast, it does not prevent a concurrent
+        # start_manual_drain_jog()/start_tank_cleaning() call from slipping in
+        # between it and prime.start() actually flipping is_active(). This
+        # second check-and-start is the one that actually has to be race-free.
+        with self._lock:
+            if (
+                self.is_running
+                or self._thread_is_alive_locked()
+                or self._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+            ):
+                return self._result(
+                    False,
+                    "Prime blocked: another process, cleanup, Manual Drain Jog, or Tank Cleaning is active.",
+                )
+
+            settings = {
+                "pumps": pumps,
+                "max_ml_per_pump": PRIME_MAX_ML_PER_PUMP,
+                "chunk_ml": PRIME_CHUNK_ML,
+            }
+            result = self.prime.start(settings)
+
+            self.last_message = result.get("message", "Prime start requested.")
+            self.display_state = "PRIME" if result.get("success") else self.display_state
+            if not result.get("success"):
+                self.last_error = result.get("message")
+
+        return result
+
+    async def stop_prime(self) -> dict[str, Any]:
+        """
+        Async wie emergency_stop(): der Join kann wegen
+        PumpPrimeController.stop_join_timeout_seconds (40s) deutlich länger
+        dauern als bei Manual Drain Jog/Tank Cleaning - ein synchroner Aufruf
+        würde die NiceGUI-Event-Loop für alle verbundenen Clients blockieren.
+        """
+        self.prime.request_stop(reason="stopped_by_user")
+        result = await asyncio.to_thread(self.prime.wait_stopped)
+
+        with self._lock:
+            self.last_message = result.get("message", "Prime stop requested.")
+            if (
+                not self.is_running
+                and not self.manual_drain_jog.is_active()
+                and not self.tank_cleaning.is_active()
+                and not self.prime.is_active()
+            ):
+                self.display_state = "IDLE"
+
+        return result
+
     def acknowledge_error(self) -> dict[str, Any]:
         with self._lock:
             thread_alive = self._thread_is_alive_locked()
@@ -623,10 +731,11 @@ class ProcessController:
                 or thread_alive
                 or self._teardown_in_progress
                 or self.tank_cleaning.is_active()
+                or self.prime.is_active()
             ):
                 return self._result(
                     False,
-                    "Reset blockiert: Prozess, Hintergrundthread, Cleanup oder Tank Cleaning läuft noch."
+                    "Reset blockiert: Prozess, Hintergrundthread, Cleanup, Tank Cleaning oder Prime läuft noch."
                 )
 
             self._stop_requested = False

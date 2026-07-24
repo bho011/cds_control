@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "controllers": {
+    "MCU_A": {
+      "status": "unconfirmed",
+      "profile_id": null,
+      "microsteps": null,
+      "speed_rpm": null,
+      "acceleration_steps_per_s2": null,
+      "max_runtime_ms": null,
+      "pumps": {
+        "P1": {"firmware_ml_per_step": null},
+        "P2": {"firmware_ml_per_step": null},
+        "P3": {"firmware_ml_per_step": null},
+        "P4": {"firmware_ml_per_step": null}
+      }
+    },
+    "MCU_B": {
+      "status": "confirmed",
+      "profile_id": "mcu_b_ec_8_microsteps_v1",
+      "microsteps": 8,
+      "speed_rpm": 120,
+      "acceleration_steps_per_s2": 2000,
+      "max_runtime_ms": 30000,
+      "pumps": {
+        "P1": {"firmware_ml_per_step": 0.000191096},
+        "P2": {"firmware_ml_per_step": 0.000191096},
+        "P3": {"firmware_ml_per_step": 0.000191096},
+        "P4": {"firmware_ml_per_step": 0.000191096}
+      }
+    }
+  }
+}
