@@ -27,6 +27,7 @@ from services.peristaltic.calibration import (
     compute_pump_stats,
     compute_priming_chunks,
     default_calibration_data,
+    has_volumetric_calibration,
     load_calibration_data,
     save_calibration_data,
     validate_dose_ml,
@@ -430,3 +431,38 @@ def test_real_repo_calibration_file_roles_reflect_the_new_pairing_without_touchi
     assert len(p1["trials"]) == 7
     for trial in p1["trials"]:
         assert trial["firmware_ml_per_step_used"] == 0.000191096
+
+
+# --- has_volumetric_calibration() (Prime-Feature: fail-closed Allow-Liste) ------
+
+
+def test_has_volumetric_calibration_accepts_candidate():
+    data = default_calibration_data()
+    data["controllers"]["MCU_B"]["P1"]["status"] = "candidate"
+    assert has_volumetric_calibration(data, "MCU_B", "P1") is True
+
+
+def test_has_volumetric_calibration_accepts_verified():
+    data = default_calibration_data()
+    data["controllers"]["MCU_B"]["P1"]["status"] = "verified"
+    assert has_volumetric_calibration(data, "MCU_B", "P1") is True
+
+
+def test_has_volumetric_calibration_rejects_not_calibrated():
+    data = default_calibration_data()
+    assert data["controllers"]["MCU_A"]["P1"]["status"] == "not_calibrated"
+    assert has_volumetric_calibration(data, "MCU_A", "P1") is False
+
+
+def test_has_volumetric_calibration_rejects_unknown_status():
+    """Allow-Liste statt Verneinung von 'not_calibrated' - ein unbekannter/
+    beschädigter Statuswert darf NIE fälschlich als kalibriert gelten."""
+    data = default_calibration_data()
+    data["controllers"]["MCU_B"]["P1"]["status"] = "some_bogus_value"
+    assert has_volumetric_calibration(data, "MCU_B", "P1") is False
+
+
+def test_has_volumetric_calibration_rejects_missing_or_malformed_data():
+    assert has_volumetric_calibration({}, "MCU_B", "P1") is False
+    assert has_volumetric_calibration({"controllers": {}}, "MCU_B", "P1") is False
+    assert has_volumetric_calibration({"controllers": None}, "MCU_B", "P1") is False

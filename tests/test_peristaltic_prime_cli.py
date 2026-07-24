@@ -24,7 +24,7 @@ from types import ModuleType
 
 import pytest
 
-from fake_mcu import FakeMcu, FakeSerialPort, make_client_factory
+from fake_mcu import AutoCompletingFakeMcu, FakeMcu, FakeSerialPort, make_client_factory
 from services.peristaltic.firmware_profiles import (
     ControllerFirmwareProfile,
     FirmwareProfiles,
@@ -145,24 +145,7 @@ def _install_fake_client(cli_module: ModuleType, port: FakeSerialPort, *, interr
     cli_module._make_client = _make_client
 
 
-class _AutoCompletingFakeMcu(FakeMcu):
-    """Wie FakeMcu, aber DOSE schließt sofort synchron mit DONE ab (keine
-    BUSY-Zwischenphase, kein zweiter Thread/manueller complete_dose()-
-    Aufruf nötig) - für Tests, die viele aufeinanderfolgende
-    prime-Teilaufträge auswerten wollen und bei denen die BUSY/RUNNING-
-    Modellierung selbst nicht Testgegenstand ist (dafür existiert bereits
-    tests/test_peristaltic_protocol.py)."""
-
-    def handle_command(self, line: str) -> list[str]:
-        text = line.strip()
-        parts = text.split(" ", 1)
-        cmd = parts[0].upper() if parts else ""
-
-        lines = super().handle_command(line)
-        if cmd == "DOSE" and lines and lines[0].startswith("OK START"):
-            pump_token = parts[1].split(" ", 1)[0]
-            lines.extend(self.complete_dose(pump_token))
-        return lines
+_AutoCompletingFakeMcu = AutoCompletingFakeMcu  # jetzt in tests/fake_mcu.py, gemeinsam mit Dashboard-Tests genutzt
 
 
 class _McuFailingOnNthDose(FakeMcu):

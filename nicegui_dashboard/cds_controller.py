@@ -119,6 +119,12 @@ class CdsController:
     def stop_tank_cleaning(self) -> dict[str, Any]:
         return self.process_controller.stop_tank_cleaning()
 
+    def start_prime(self, pumps: dict[str, list[str]]) -> dict[str, Any]:
+        return self.process_controller.start_prime(pumps)
+
+    async def stop_prime(self) -> dict[str, Any]:
+        return await self.process_controller.stop_prime()
+
     async def run_preflight_check(self) -> dict[str, Any]:
         """
         Runs preflight_check.py's full check sequence in a worker thread, so

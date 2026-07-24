@@ -1,0 +1,475 @@
+@startuml
+' CDS Control - UML class diagram
+' Generated from the Python source structure in /home/vgreens/cds_control.
+
+title Central Dosing System - Class Diagram
+
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam linetype ortho
+hide empty members
+
+package "domain" {
+  class RecipeValidationError <<exception>>
+
+  class StoredRecipe <<dataclass>> {
+    +schema_version: int
+    +slot: int
+    +recipe_name: str
+    +target_ro_water_l: float
+    +target_ec_ms_cm: float
+    +nutrient_dosing_enabled: bool
+    +target_ph: float
+    +validate(): list[str]
+    +from_dict(data): StoredRecipe
+    +to_dict(): dict
+  }
+
+  class RecipePreview <<dataclass frozen>> {
+    +total_nutrients_ml: float
+    +estimated_process_volume_l: float
+    +remaining_capacity_l: float
+    +from_recipe(recipe): RecipePreview
+  }
+
+  class RunOptions <<dataclass frozen>> {
+    +sensor_circulation_enabled: bool
+    +drain_after_process: bool
+    +validate(): list[str]
+  }
+
+  class RunConfigSnapshot <<dataclass frozen>> {
+    +recipe_id: str
+    +recipe_name: str
+    +target_ro_water_l: float
+    +nutrient_dosing_enabled: bool
+    +calculated_total_nutrients_ml: float
+    +sensor_circulation_enabled: bool
+    +build(recipe, process_settings, run_options): RunConfigSnapshot
+  }
+}
+
+package "nicegui_dashboard" {
+  class RecipeBookCorruptedError <<exception>>
+
+  class CdsController {
+    -sensor_reader: SensorSnapshotReader
+    -process_reader: MqttTopicReader
+    -process_controller: ProcessController
+    +start_fill_and_measure(confirmation_text): dict
+    +emergency_stop(): dict
+    +start_manual_drain_jog(): dict
+    +start_tank_cleaning(confirmation_text): dict
+    +start_prime(pumps): dict
+    +get_process_control_status(): dict
+    +get_sensor_status(): dict
+    +close(): void
+  }
+
+  class ProcessController {
+    -state_machine: FillAndMeasureStateMachine
+    -actuators: ActuatorManager
+    -mqtt_publisher: MqttPublisher
+    -manual_drain_jog: ManualDrainJog
+    -tank_cleaning: TankCleaningController
+    -prime: PumpPrimeController
+    +load_settings(): dict
+    +get_status(): dict
+    +start_fill_and_measure(confirmation_text, run_options): dict
+    +emergency_stop(): dict
+    +shutdown(timeout_seconds): dict
+    +acknowledge_error(): dict
+  }
+
+  class MqttTopicReader {
+    +host: str
+    +port: int
+    +topic: str
+    +start(): void
+    +get_latest(): dict
+    +get_error(): str
+    +clear(): void
+    +close(): void
+  }
+}
+
+package "hardware" {
+  class HardwareLockError <<exception>>
+
+  class ActuatorManager {
+    +active_low: bool
+    -_outputs: dict[str, DigitalOutput]
+    +add(name, gpio_pin): DigitalOutput
+    +get(name): DigitalOutput
+    +status_payload(): dict[str, bool]
+    +safe_shutdown_all(): list[str]
+    +close_all(): list[str]
+  }
+
+  class DigitalOutput {
+    +name: str
+    +gpio_pin: int
+    +is_active: bool
+    +on(): void
+    +off(): void
+    +close(): void
+  }
+}
+
+package "process" {
+  abstract class BackgroundHardwareProcess {
+    +label: str
+    +stop_join_timeout_seconds: float
+    #get_sensor_snapshot: Callable
+    +is_active(): bool
+    +request_stop(reason): void
+    +wait_stopped(timeout): dict
+    +stop(reason): dict
+    +shutdown(): void
+    #_run(settings): void
+  }
+
+  class ManualDrainJog {
+    +max_seconds: float
+    +valve_settle_seconds: float
+    +start(settings): dict
+    +get_status(): dict
+    #_run(settings): void
+  }
+
+  class TankCleaningPhase {
+    +IDLE
+    +FILLING
+    +HOLDING
+    +DRAINING
+    +FINISHED
+    +ERROR
+  }
+
+  class TankCleaningController {
+    -_auto_circulation: AutoCirculationController
+    -_phase: str
+    +start(settings): dict
+    +get_status(): dict
+    #_run(settings): void
+  }
+
+  class PrimePhase {
+    +IDLE
+    +RUNNING
+    +STOPPING
+    +FINISHED
+    +ERROR
+  }
+
+  class PumpPrimeController {
+    -_pumps_plan: dict
+    -_pump_results: list[PrimePumpOutcome]
+    +start(settings): dict
+    +request_stop(reason): void
+    +get_status(): dict
+    #_run(settings): void
+  }
+
+  class AutoCirculationConfig <<dataclass frozen>> {
+    +enabled: bool
+    +start_liters: float
+    +stop_liters: float
+    +outputs: list[str]
+  }
+
+  class AutoCirculationController {
+    +actuators: ActuatorManager
+    +config: AutoCirculationConfig
+    +is_running: bool
+    +update(current_liters): void
+    +stop(): void
+  }
+
+  class FillWatchdog <<dataclass>> {
+    +start_liters: float
+    +max_liters: float
+    +max_seconds: float
+    +check(current_liters, elapsed_seconds, max_elapsed_seconds): tuple
+  }
+
+  class EmptyConfirmCounter {
+    +threshold_liters: float
+    +required_samples: int
+    +update(current_liters): bool
+  }
+
+  class Metrics <<dataclass>>
+  class PhaseResult <<dataclass>>
+}
+
+package "statemachine" {
+  enum FillAndMeasureState {
+    IDLE
+    START_REFILL_PUMP
+    FILL_UNTIL_TARGET
+    STOP_REFILL_PUMP
+    SETTLE_LEVEL
+    START_CIRCULATION
+    SENSOR_STABILIZE
+    MEASURE_VALUES
+    FINISHED
+    ERROR
+  }
+
+  class FillAndMeasureStateMachine {
+    +state: FillAndMeasureState
+    +start_mixer_liters: float
+    +last_added_liters: float
+    +final_snapshot: dict
+    +error_message: str
+    +start(): void
+    +update(): void
+    +safe_shutdown(): void
+    +error(message): void
+  }
+}
+
+package "services" {
+  class MqttPublisher {
+    +host: str
+    +port: int
+    +topic: str
+    +publish_json(payload): bool
+    +publish_process_status(...): bool
+    +close(): void
+  }
+
+  class SensorSnapshotReader {
+    +host: str
+    +port: int
+    +topic: str
+    +start(): void
+    +wait_for_first_snapshot(timeout_seconds): bool
+    +get_latest(max_age_seconds): dict
+    +close(): void
+  }
+
+  class ProcessRunLogger {
+    +write_step(...): void
+    +close(): void
+  }
+
+  class SettingsValidationError <<exception>>
+
+  class SettingField <<dataclass>> {
+    +name: str
+    +type: type
+    +required: bool
+    +default: Any
+    +min_value: float
+    +max_value: float
+  }
+}
+
+package "services.peristaltic" {
+  enum LineKind {
+    PING_OK
+    STATUS_OK
+    DOSE_STARTED
+    RUNNING
+    DONE
+    ERR_BUSY
+    ERR_LIMIT_EXCEEDED
+    ERR_TIMEOUT
+    STOP_OK
+    STOPALL_OK
+    UNKNOWN
+  }
+
+  class ParsedLine <<dataclass frozen>> {
+    +raw: str
+    +kind: LineKind
+    +pump: str
+    +ml: float
+    +statuses: dict
+  }
+
+  class MappingValidationError <<exception>>
+  class ControllerMapping <<dataclass>> {
+    +role: str
+    +port: str
+    +baudrate: int
+    +pumps: dict[str, str]
+  }
+  class PeristalticMapping <<dataclass>> {
+    +schema_version: int
+    +controllers: dict[str, ControllerMapping]
+  }
+
+  class FirmwareProfileError <<exception>>
+  class PumpFirmwareEntry <<dataclass>> {
+    +firmware_ml_per_step: float
+  }
+  class ControllerFirmwareProfile <<dataclass>> {
+    +status: str
+    +profile_id: str
+    +pumps: dict[str, PumpFirmwareEntry]
+  }
+  class FirmwareProfiles <<dataclass>> {
+    +schema_version: int
+    +controllers: dict[str, ControllerFirmwareProfile]
+  }
+
+  class CalibrationValidationError <<exception>>
+  class CalibrationTrial <<dataclass>> {
+    +requested_ml: float
+    +measured_ml: float
+    +firmware_ml_per_step_used: float
+    +candidate_ml_per_step: float
+    +to_dict(): dict
+    +from_dict(data): CalibrationTrial
+  }
+  class PumpCalibrationStats <<dataclass>>
+
+  class PrimeChunkResult <<dataclass>>
+  class PrimePumpOutcome <<dataclass>> {
+    +controller: str
+    +pump: str
+    +role: str
+    +requested_max_ml: float
+    +completed_ml: float
+    +completion_reason: str
+  }
+
+  interface SerialLike {
+    +write(data): int
+    +readline(): bytes
+    +reset_input_buffer(): void
+    +close(): void
+  }
+
+  enum ConnectionState {
+    CLOSED
+    OPENING
+    OPEN
+    DESYNCED
+    CLOSING
+  }
+
+  class ClientConfig <<dataclass>>
+  class PeristalticError <<exception>>
+  class PeristalticConnectionError <<exception>>
+  class PeristalticDesyncError <<exception>>
+  class PeristalticProtocolError <<exception>>
+  class PeristalticCommandError <<exception>>
+  class PeristalticTimeoutError <<exception>>
+
+  class PeristalticSerialClient {
+    -_state: ConnectionState
+    -_port: SerialLike
+    -_config: ClientConfig
+    +state: ConnectionState
+    +open(): void
+    +close(): void
+    +ping(): ParsedLine
+    +status(): dict[str, str]
+    +dose(pump, ml): ParsedLine
+    +stop(pump): void
+    +stop_all(): void
+  }
+
+  class PeristalticSessionLogger {
+    +session_id: str
+    +log_raw(direction, line): void
+    +log_row(...): void
+    +close(metadata): void
+  }
+
+  class SafetyCheckFailed <<exception>>
+}
+
+' Inheritance
+ManualDrainJog --|> BackgroundHardwareProcess
+TankCleaningController --|> BackgroundHardwareProcess
+PumpPrimeController --|> BackgroundHardwareProcess
+
+PeristalticConnectionError --|> PeristalticError
+PeristalticDesyncError --|> PeristalticConnectionError
+PeristalticProtocolError --|> PeristalticError
+PeristalticCommandError --|> PeristalticError
+PeristalticTimeoutError --|> PeristalticError
+
+' Composition / ownership
+CdsController *-- SensorSnapshotReader
+CdsController *-- MqttTopicReader
+CdsController *-- ProcessController
+
+ProcessController *-- ManualDrainJog
+ProcessController *-- TankCleaningController
+ProcessController *-- PumpPrimeController
+ProcessController o-- FillAndMeasureStateMachine
+ProcessController o-- ActuatorManager
+ProcessController o-- MqttPublisher
+ProcessController ..> RunOptions
+ProcessController ..> RunConfigSnapshot
+
+ActuatorManager *-- "0..*" DigitalOutput
+
+BackgroundHardwareProcess o-- ActuatorManager
+BackgroundHardwareProcess o-- MqttPublisher
+
+FillAndMeasureStateMachine --> FillAndMeasureState
+FillAndMeasureStateMachine --> FillWatchdog
+FillAndMeasureStateMachine o-- DigitalOutput
+
+TankCleaningController --> TankCleaningPhase
+TankCleaningController *-- AutoCirculationController
+TankCleaningController --> FillWatchdog
+TankCleaningController --> EmptyConfirmCounter
+
+AutoCirculationController *-- AutoCirculationConfig
+AutoCirculationController --> ActuatorManager
+
+PumpPrimeController --> PrimePhase
+PumpPrimeController --> PrimePumpOutcome
+PumpPrimeController --> PeristalticSerialClient
+PumpPrimeController --> PeristalticSessionLogger
+PumpPrimeController --> ControllerMapping
+PumpPrimeController ..> FirmwareProfiles
+PumpPrimeController ..> CalibrationValidationError
+
+PeristalticSerialClient *-- ClientConfig
+PeristalticSerialClient --> SerialLike
+PeristalticSerialClient --> ConnectionState
+PeristalticSerialClient --> ParsedLine
+ParsedLine --> LineKind
+
+PeristalticMapping *-- "2" ControllerMapping
+FirmwareProfiles *-- "2" ControllerFirmwareProfile
+ControllerFirmwareProfile *-- "4" PumpFirmwareEntry
+
+PrimePumpOutcome ..> PrimeChunkResult
+CalibrationTrial ..> PumpCalibrationStats
+
+RecipePreview ..> StoredRecipe
+RunConfigSnapshot ..> StoredRecipe
+RunConfigSnapshot ..> RunOptions
+RunConfigSnapshot ..> RecipePreview
+
+SettingField ..> SettingsValidationError
+
+note right of ProcessController
+  Central dashboard orchestration.
+  Prevents concurrent hardware processes
+  and builds immutable RunConfigSnapshot
+  before Fill-and-Measure starts.
+end note
+
+note bottom of ActuatorManager
+  Owns GPIO outputs and holds the
+  cross-process hardware lock.
+end note
+
+note bottom of PumpPrimeController
+  Bridges dashboard maintenance prime
+  with the peristaltic service layer.
+end note
+
+@enduml

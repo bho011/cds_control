@@ -283,6 +283,26 @@ def load_calibration_data(path: Path) -> dict[str, Any]:
             raise CalibrationValidationError(f"{path}: ungültiges JSON ({exc}).") from exc
 
 
+# Statuswerte, die als "volumetrisch kalibriert" gelten - bewusst eine
+# Allow-Liste, keine Verneinung von "not_calibrated": ein unbekannter oder
+# beschädigter Statuswert soll fail-closed als NICHT kalibriert gelten,
+# nie versehentlich durchgelassen werden.
+_CALIBRATED_STATUSES = frozenset({"candidate", "verified"})
+
+
+def has_volumetric_calibration(data: dict[str, Any], controller: str, pump: str) -> bool:
+    """True nur für explizit bekannte, tatsächlich kalibrierte Statuswerte
+    ("candidate"/"verified"). load_calibration_data() validiert das Schema
+    nicht (anders als load_mapping()/load_firmware_profiles()) - fehlende
+    Schlüssel oder falsche Typen gelten hier deshalb ebenfalls als NICHT
+    kalibriert, nie als Absturz."""
+    try:
+        status = data["controllers"][controller][pump]["status"]
+    except (KeyError, TypeError):
+        return False
+    return status in _CALIBRATED_STATUSES
+
+
 def save_calibration_data(path: Path, data: dict[str, Any]) -> None:
     with _SAVE_LOCK:
         _save_calibration_data_unlocked(path, data)

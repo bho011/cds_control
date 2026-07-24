@@ -177,6 +177,26 @@ class FakeSerialPort:
         self._raise_on_write = exc if exc is not None else OSError("simulierter Schreibfehler")
 
 
+class AutoCompletingFakeMcu(FakeMcu):
+    """Wie FakeMcu, aber DOSE schließt sofort synchron mit DONE ab (keine
+    BUSY-Zwischenphase, kein zweiter Thread/manueller complete_dose()-
+    Aufruf nötig) - für Tests, die viele aufeinanderfolgende
+    prime-Teilaufträge auswerten wollen und bei denen die BUSY/RUNNING-
+    Modellierung selbst nicht Testgegenstand ist (dafür existiert bereits
+    tests/test_peristaltic_protocol.py)."""
+
+    def handle_command(self, line: str) -> list[str]:
+        text = line.strip()
+        parts = text.split(" ", 1)
+        cmd = parts[0].upper() if parts else ""
+
+        lines = super().handle_command(line)
+        if cmd == "DOSE" and lines and lines[0].startswith("OK START"):
+            pump_token = parts[1].split(" ", 1)[0]
+            lines.extend(self.complete_dose(pump_token))
+        return lines
+
+
 def make_client_factory(port: FakeSerialPort):
     """Liefert eine serial_factory-kompatible Closure, die immer denselben
     FakeSerialPort zurückgibt - unabhängig von den übergebenen

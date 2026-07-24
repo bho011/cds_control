@@ -58,6 +58,12 @@ from services.peristaltic.models import (
     load_mapping,
     save_mapping,
 )
+from services.peristaltic.prime import PrimeChunkResult, prime_single_pump
+from services.peristaltic.safety import (
+    SafetyCheckFailed,
+    best_effort_stop_all as _best_effort_stop_all,
+    ensure_all_idle_before_dose,
+)
 from services.peristaltic.serial_client import (
     ClientConfig,
     ConnectionState,
@@ -77,12 +83,9 @@ REQUIRED_WATER_TEST_CONFIRMATION = "conf"
 # enough to cover the firmware's own 30s runtime watchdog plus margin.
 PARALLEL_MONITOR_TIMEOUT_S = 40.0
 
-
-class SafetyCheckFailed(RuntimeError):
-    """CLI-interne Sicherheitsinvariante verletzt (z.B. nicht alle Pumpen
-    sind nach STOPALL tatsächlich IDLE) - kein Firmwarefehler, aber
-    genauso ein Grund, die Dosis nicht zu erlauben."""
-
+# SafetyCheckFailed, ensure_all_idle_before_dose und best_effort_stop_all
+# (als _best_effort_stop_all) leben jetzt in services/peristaltic/safety.py -
+# gemeinsam mit process/pump_prime.py genutzt, siehe dortige Docstrings.
 
 _GUARDED_EXCEPTIONS = (PeristalticError, SafetyCheckFailed)
 
@@ -294,27 +297,6 @@ def _make_client(entry: ControllerMapping, session_logger: PeristalticSessionLog
         config=ClientConfig(baudrate=entry.baudrate),
         on_raw_line=session_logger.log_raw,
     )
-
-
-def ensure_all_idle_before_dose(client: PeristalticSerialClient) -> dict[str, str]:
-    """STATUS abfragen (loggen) -> STOPALL senden (unconditional) ->
-    STATUS erneut prüfen -> nur wenn danach alle 4 Pumpen IDLE sind, darf
-    dosiert werden."""
-    initial_status = client.status()
-    print(f"STATUS vor Sicherstellung: {initial_status}")
-    client.stop_all()
-    final_status = client.status()
-    if any(state != "IDLE" for state in final_status.values()):
-        raise SafetyCheckFailed(f"Nach STOPALL sind nicht alle Pumpen IDLE: {final_status}")
-    return final_status
-
-
-def _best_effort_stop_all(client: PeristalticSerialClient) -> None:
-    try:
-        if client.state == ConnectionState.OPEN:
-            client.stop_all()
-    except Exception:
-        pass
 
 
 def run_guarded(
@@ -660,29 +642,24 @@ def cmd_prime(args: argparse.Namespace, input_func: Callable[[str], str] = input
 
     session_logger = PeristalticSessionLogger("prime")
     client = _make_client(entry, session_logger)
-    completed_ml = 0.0
+    # Läuft während des Chunk-Loops (in services.peristaltic.prime.prime_single_pump)
+    # mit - so bleibt der zuletzt bekannte Fortschritt hier verfügbar, falls
+    # KeyboardInterrupt/eine unerwartete Exception mitten im Vorgang durchschlägt.
+    progress = {"completed_ml": 0.0}
     completion_reason = "error"
 
-    def _log_prime_row(
-        *,
-        requested_ml: float | None,
-        started_at: str | None,
-        finished_at: str | None,
-        elapsed_seconds: float | None,
-        result: str,
-        firmware_reported_ml: float | None = None,
-        error_code: str | None = None,
-        notes: str | None = None,
-        final_reason: str | None = None,
-    ) -> None:
+    def _on_chunk_complete(chunk: PrimeChunkResult) -> None:
+        progress["completed_ml"] = chunk.completed_total_ml
+        print(f"Priming-Fortschritt: {chunk.completed_total_ml} / {args.max_ml} ml")
+
+    def _log_abort_row(*, result: str, error_code: str | None, notes: str | None) -> None:
         session_logger.log_row(
             controller=args.controller, controller_role=entry.role, serial_port=entry.port,
             pump=args.pump, pump_role=role, command="prime",
             operation="prime", requested_max_ml=args.max_ml, chunk_ml=args.chunk_ml,
-            requested_ml=requested_ml, started_at=started_at, finished_at=finished_at,
-            elapsed_seconds=elapsed_seconds, result=result, firmware_reported_ml=firmware_reported_ml,
-            error_code=error_code, notes=notes,
-            completed_ml=completed_ml, completion_reason=final_reason,
+            requested_ml=None, started_at=None, finished_at=_iso_now(), elapsed_seconds=None,
+            result=result, error_code=error_code, notes=notes,
+            completed_ml=progress["completed_ml"], completion_reason="user_abort" if result == "ABORTED_KEYBOARD_INTERRUPT" else "error",
         )
 
     try:
@@ -691,74 +668,54 @@ def cmd_prime(args: argparse.Namespace, input_func: Callable[[str], str] = input
 
         print(f"Bereit - alle Pumpen IDLE. Starte Priming über {len(chunks)} Teilauftrag(e) (max. {args.max_ml} ml).")
 
-        for index, chunk_ml in enumerate(chunks, start=1):
-            chunk_started_at = _iso_now()
-            chunk_started_monotonic = time.monotonic()
+        outcome = prime_single_pump(
+            client, session_logger,
+            controller_id=args.controller, controller_role=entry.role, port=entry.port,
+            pump=args.pump, role=role, max_ml=args.max_ml, chunk_ml=args.chunk_ml,
+            stop_event=None, on_chunk_complete=_on_chunk_complete,
+        )
+        completion_reason = outcome.completion_reason
 
-            result = client.dose(args.pump, chunk_ml)  # wartet intern auf DONE
+        if outcome.completion_reason == "completed":
+            print()
+            print(f"Priming abgeschlossen: {outcome.completed_ml} / {args.max_ml} ml.")
+            return 0
 
-            finished_at = _iso_now()
-            elapsed_seconds = time.monotonic() - chunk_started_monotonic
-
-            status = client.status()
-            if status.get(args.pump) != "IDLE":
-                raise SafetyCheckFailed(
-                    f"{args.pump} ist nach Teilauftrag {index}/{len(chunks)} nicht IDLE (STATUS: {status})."
-                )
-
-            completed_ml += chunk_ml
-            is_last_chunk = index == len(chunks)
-            print(f"Priming-Fortschritt: {completed_ml} / {args.max_ml} ml")
-
-            _log_prime_row(
-                requested_ml=chunk_ml, started_at=chunk_started_at, finished_at=finished_at,
-                elapsed_seconds=elapsed_seconds, result="DONE", firmware_reported_ml=result.ml,
-                final_reason="completed" if is_last_chunk else None,
-            )
-
-        completion_reason = "completed"
-        print()
-        print(f"Priming abgeschlossen: {completed_ml} / {args.max_ml} ml.")
-        return 0
+        # completion_reason == "error" - CSV-Fehlerzeile und best-effort
+        # STOPALL wurden bereits innerhalb von prime_single_pump geschrieben/
+        # ausgelöst (stop_event=None, "user_abort" kann hier nie auftreten).
+        print(f"[FEHLER] prime: {outcome.error_message}")
+        return 1
 
     except KeyboardInterrupt:
         completion_reason = "user_abort"
-        print(f"\n[ABBRUCH] prime: durch Nutzer unterbrochen (Ctrl+C) nach {completed_ml} ml.")
+        print(f"\n[ABBRUCH] prime: durch Nutzer unterbrochen (Ctrl+C) nach {progress['completed_ml']} ml.")
         _best_effort_stop_all(client)
         try:
             final_status = client.status()
             print(f"STATUS nach Abbruch: {final_status}")
         except PeristalticError:
             pass
-        _log_prime_row(
-            requested_ml=None, started_at=None, finished_at=_iso_now(), elapsed_seconds=None,
-            result="ABORTED_KEYBOARD_INTERRUPT", final_reason="user_abort",
-        )
+        _log_abort_row(result="ABORTED_KEYBOARD_INTERRUPT", error_code=None, notes=None)
         return 130
     except _GUARDED_EXCEPTIONS as exc:
         completion_reason = "error"
         print(f"[FEHLER] prime: {exc}")
         _best_effort_stop_all(client)
-        _log_prime_row(
-            requested_ml=None, started_at=None, finished_at=_iso_now(), elapsed_seconds=None,
-            result="FAILED", error_code=type(exc).__name__, notes=str(exc), final_reason="error",
-        )
+        _log_abort_row(result="FAILED", error_code=type(exc).__name__, notes=str(exc))
         return 1
     except Exception as exc:
         completion_reason = "error"
         print(f"[FEHLER] prime: unerwarteter Fehler: {exc}")
         _best_effort_stop_all(client)
-        _log_prime_row(
-            requested_ml=None, started_at=None, finished_at=_iso_now(), elapsed_seconds=None,
-            result="FAILED", error_code=type(exc).__name__, notes=str(exc), final_reason="error",
-        )
+        _log_abort_row(result="FAILED", error_code=type(exc).__name__, notes=str(exc))
         raise
     finally:
         client.close()
         session_logger.close({
             "command": "prime", "controller": args.controller, "pump": args.pump,
             "operation": "prime", "requested_max_ml": args.max_ml, "chunk_ml": args.chunk_ml,
-            "completed_ml": completed_ml, "completion_reason": completion_reason,
+            "completed_ml": progress["completed_ml"], "completion_reason": completion_reason,
         })
 
 

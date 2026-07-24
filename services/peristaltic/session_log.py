@@ -48,7 +48,7 @@ CSV_FIELDNAMES: tuple[str, ...] = (
     "requested_max_ml",
     "chunk_ml",
     "completed_ml",
-    "completion_reason",   # completed | user_abort | error
+    "completion_reason",   # completed | user_abort | emergency_stop | connection_error | safety_check_failed | timeout | error
     "error_code",
     "notes",
     "raw_log_file",
@@ -73,7 +73,23 @@ def _resolve_unique_base_name(directory: Path, base_name: str) -> str:
 
 
 class PeristalticSessionLogger:
-    def __init__(self, command: str, log_dir: Path = Path("logs/peristaltic")) -> None:
+    def __init__(
+        self,
+        command: str,
+        log_dir: Path = Path("logs/peristaltic"),
+        session_id: str | None = None,
+    ) -> None:
+        """
+        session_id: optionaler, extern vorgegebener Wert für die CSV-Spalte
+        'session_id' - z.B. damit mehrere PeristalticSessionLogger (je einer
+        pro MCU) innerhalb eines einzigen mehrere-MCUs-umfassenden Prime-
+        Laufs dieselbe session_id in jede Zeile schreiben. Wirkt sich NICHT
+        auf die Datei-Namen aus (csv_path/raw_log_path/json_path bleiben von
+        der pro-Logger-eigenen, zeitstempelbasierten unique_base_name
+        abgeleitet - kollisionssicher pro Datei, unverändert). Ohne
+        Angabe (alle bisherigen Aufrufer) bleibt das Verhalten wie zuvor:
+        session_id == unique_base_name.
+        """
         self.command = command
         self._lock = threading.Lock()
 
@@ -83,7 +99,7 @@ class PeristalticSessionLogger:
 
         base_name = f"{command}_{now.strftime('%Y%m%dT%H%M%S')}"
         unique_base_name = _resolve_unique_base_name(day_dir, base_name)
-        self.session_id = unique_base_name
+        self.session_id = session_id if session_id is not None else unique_base_name
 
         self.csv_path = day_dir / f"{unique_base_name}.csv"
         self.raw_log_path = day_dir / f"{unique_base_name}.log"
