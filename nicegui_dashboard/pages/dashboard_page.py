@@ -265,7 +265,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                     ).classes("subtitle")
 
             with ui.row().classes("gap-2 items-center"):
-                dev_info_button = ui.button("Wartung").classes(
+                dev_info_button = ui.button("Maintenance").classes(
                     "dev-info-button"
                 ).props("outline color=grey-5 icon=terminal")
 
@@ -316,7 +316,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                 with ui.dialog() as dev_info_dialog, ui.card().classes(
                     "recipe-dialog-card dev-info-dialog-card"
                 ):
-                    ui.label("Wartung").classes("panel-title")
+                    ui.label("Maintenance").classes("panel-title")
                     ui.label(
                         "Live status badges and dashboard event log. For development and troubleshooting only."
                     ).classes("panel-subtitle")
