@@ -375,7 +375,7 @@ def test_resolve_rejects_missing_pump_entry():
 def test_real_repo_profile_resolves_mcu_b_p1_to_the_confirmed_firmware_value():
     profiles = load_firmware_profiles(REPO_FIRMWARE_PROFILES_PATH)
     value = resolve_firmware_ml_per_step(profiles, "MCU_B", "P1")
-    assert value == 0.000191096
+    assert value == 0.000192624768
     assert value != FIRMWARE_DEFAULT_ML_PER_STEP
 
 

@@ -23,10 +23,10 @@
       "acceleration_steps_per_s2": 2000,
       "max_runtime_ms": 30000,
       "pumps": {
-        "P1": {"firmware_ml_per_step": 0.000191096},
+        "P1": {"firmware_ml_per_step": 0.000192624768},
         "P2": {"firmware_ml_per_step": 0.000191096},
-        "P3": {"firmware_ml_per_step": 0.000191096},
-        "P4": {"firmware_ml_per_step": 0.000191096}
+        "P3": {"firmware_ml_per_step": 0.000175235032},
+        "P4": {"firmware_ml_per_step": 0.000197402168}
       }
     }
   }
