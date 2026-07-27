@@ -372,11 +372,30 @@ def test_resolve_rejects_missing_pump_entry():
 # --- Regressionstest gegen die echte, ausgelieferte Profildatei -----------------
 
 
-def test_real_repo_profile_resolves_mcu_b_p1_to_the_confirmed_firmware_value():
+def test_real_repo_profile_mcu_b_is_confirmed_after_the_verified_real_flash():
+    """Nach nachweislichem Real-Flash (siehe PING/STATUS-Verifikation) ist
+    MCU_B wieder 'confirmed' - dieselben vorbereiteten Pumpenwerte
+    (P1-P4) wie im vorherigen Zwischenzustand, aber resolve_firmware_ml_per_step()
+    muss jetzt für jede Pumpe erfolgreich genau den hinterlegten Wert
+    liefern, statt fail-closed abzulehnen."""
     profiles = load_firmware_profiles(REPO_FIRMWARE_PROFILES_PATH)
-    value = resolve_firmware_ml_per_step(profiles, "MCU_B", "P1")
-    assert value == 0.000192624768
-    assert value != FIRMWARE_DEFAULT_ML_PER_STEP
+    mcu_b = profiles.controllers["MCU_B"]
+
+    assert mcu_b.status == "confirmed"
+    assert mcu_b.profile_id == "mcu_b_ec_8_microsteps_cal_v2"
+
+    expected_values = {
+        "P1": 0.000192624768,
+        "P2": 0.000191096,
+        "P3": 0.000175235032,
+        "P4": 0.000197402168,
+    }
+    for pump, expected_value in expected_values.items():
+        assert mcu_b.pumps[pump].firmware_ml_per_step == pytest.approx(expected_value)
+
+    for pump, expected_value in expected_values.items():
+        value = resolve_firmware_ml_per_step(profiles, "MCU_B", pump)
+        assert value == pytest.approx(expected_value)
 
 
 def test_real_repo_profile_blocks_mcu_a_because_it_is_unconfirmed():

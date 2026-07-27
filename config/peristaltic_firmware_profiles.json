@@ -17,7 +17,7 @@
     },
     "MCU_B": {
       "status": "confirmed",
-      "profile_id": "mcu_b_ec_8_microsteps_v1",
+      "profile_id": "mcu_b_ec_8_microsteps_cal_v2",
       "microsteps": 8,
       "speed_rpm": 120,
       "acceleration_steps_per_s2": 2000,
