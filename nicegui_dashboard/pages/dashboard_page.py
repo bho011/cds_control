@@ -5,6 +5,18 @@ from nicegui import ui
 from domain.recipe_limits import RecipeValidationError, nutrient_b_percent
 from domain.recipe_model import RunOptions, StoredRecipe
 from nicegui_dashboard.cds_controller import CdsController
+from nicegui_dashboard.components.formatting import (
+    fmt,
+    int_or_zero,
+    number_or_zero,
+    percent_to_display,
+    yes_no,
+)
+from nicegui_dashboard.components.status_widgets import create_metric_box, create_tank_gauge
+from nicegui_dashboard.pages.dashboard.status_actuators_section import (
+    build_status_actuators,
+    refresh_status_actuators,
+)
 from nicegui_dashboard.recipe_store import (
     RecipeBookCorruptedError,
     default_recipe_book,
@@ -31,173 +43,6 @@ _PUMP_ROLE_DISPLAY_NAMES = {
 def pump_display_label(controller_id: str, pump: str, role: str | None) -> str:
     role_label = _PUMP_ROLE_DISPLAY_NAMES.get(role, role or "-")
     return f"{role_label} ({controller_id} / {pump})"
-
-
-def fmt(value: Any, unit: str = "", decimals: int = 2) -> str:
-    if value is None:
-        return "-"
-
-    if isinstance(value, float):
-        return f"{value:.{decimals}f} {unit}".strip()
-
-    return f"{value} {unit}".strip()
-
-
-def bool_dot(value: Any) -> str:
-    if value is True:
-        return "dot-on"
-
-    if value is False:
-        return "dot-off"
-
-    return "dot-unknown"
-
-
-def percent_to_display(value: Any) -> float:
-    if value is None:
-        return 0.0
-
-    try:
-        return round(float(value), 1)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def create_status_row(title: str, subtitle: str) -> dict[str, Any]:
-    with ui.row().classes("status-row"):
-        dot = ui.element("div").classes("status-dot dot-unknown")
-
-        with ui.column().classes("gap-0 flex-1"):
-            ui.label(title).classes("status-title")
-            ui.label(subtitle).classes("status-subtitle")
-
-        value = ui.label("-").classes("status-value")
-
-    return {
-        "dot": dot,
-        "value": value,
-    }
-
-
-def create_actuator_row(title: str, subtitle: str = "") -> dict[str, Any]:
-    with ui.row().classes("actuator-row"):
-        with ui.column().classes("gap-0 flex-1"):
-            ui.label(title).classes("actuator-title")
-            if subtitle:
-                ui.label(subtitle).classes("actuator-subtitle")
-
-        badge = ui.label("-").classes("actuator-badge badge-unknown")
-
-    return {"badge": badge}
-
-
-def create_metric_box(title: str, unit: str = "") -> dict[str, Any]:
-    with ui.card().classes("metric-box"):
-        ui.label(title).classes("metric-title")
-        value = ui.label("-").classes("metric-value")
-
-        if unit:
-            ui.label(unit).classes("metric-unit")
-
-    return {"value": value}
-
-
-def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
-    with ui.card().classes("tank-gauge-card"):
-        ui.label(title).classes("tank-title")
-
-        chart = ui.echart(
-            {
-                "backgroundColor": "transparent",
-                "series": [
-                    {
-                        "type": "gauge",
-                        "min": 0,
-                        "max": max_percent,
-                        "startAngle": 210,
-                        "endAngle": -30,
-                        "progress": {
-                            "show": True,
-                            "width": 16,
-                        },
-                        "axisLine": {
-                            "lineStyle": {
-                                "width": 16,
-                                "color": [
-                                    [0.33, "#f20707"],
-                                    [0.66, "#f59e0b"],
-                                    [1.0, "#22c55e"],
-                                ],
-                            }
-                        },
-                        "axisTick": {
-                            "show": False,
-                        },
-                        "splitLine": {
-                            "show": False,
-                        },
-                        "axisLabel": {
-                            "color": "#94a3b8",
-                            "fontSize": 10,
-                        },
-                        "pointer": {
-                            "show": True,
-                            "length": "50%",
-                            "width": 5,
-                        },
-                        "anchor": {
-                            "show": True,
-                            "size": 8,
-                        },
-                        "title": {
-                            "show": False,
-                        },
-                        "detail": {
-                            "valueAnimation": True,
-                            "formatter": "{value}%",
-                            "color": "#f8fafc",
-                            "fontSize": 24,
-                            "fontWeight": "bold",
-                            "offsetCenter": [0, "55%"],
-                        },
-                        "data": [
-                            {
-                                "value": 0,
-                                "name": title,
-                            }
-                        ],
-                    }
-                ],
-            }
-        ).classes("w-full h-52")
-
-        liters_label = ui.label("-").classes("tank-liters")
-        percent_label = ui.label("-").classes("tank-percent")
-
-    return {
-        "chart": chart,
-        "liters": liters_label,
-        "percent": percent_label,
-        "max_percent": max_percent,
-    }
-
-
-
-def number_or_zero(value: Any) -> float:
-    try:
-        if value is None or value == "":
-            return 0.0
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def int_or_zero(value: Any) -> int:
-    return int(round(number_or_zero(value)))
-
-
-def yes_no(value: Any) -> str:
-    return "yes" if value is True else "no"
 
 
 def recipe_summary(recipe: dict[str, Any]) -> str:
@@ -271,47 +116,7 @@ def create_dashboard_page(controller: CdsController) -> None:
 
         with ui.element("div").classes("layout-grid w-full"):
             with ui.column().classes("gap-3 w-full area-left"):
-                with ui.card().classes("panel"):
-                    ui.label("System Status").classes("panel-title")
-                    ui.label("Communication and process modules").classes(
-                        "panel-subtitle"
-                    )
-
-                    mqtt_bridge_row = create_status_row(
-                        "MQTT Sensor Bridge",
-                        "OPC-UA → MQTT → MqttTopicReader",
-                    )
-                    process_reader_row = create_status_row(
-                        "Process MQTT Reader",
-                        "reads cds/status/process",
-                    )
-                    snapshot_row = create_status_row(
-                        "Sensor Snapshot",
-                        "max. 5 seconds old",
-                    )
-                    process_payload_row = create_status_row(
-                        "Process Payload",
-                        "max. 30 seconds old",
-                    )
-
-                with ui.card().classes("panel"):
-                    ui.label("Actuators / Outputs").classes("panel-title")
-
-                    mixer_refill_pump_row = create_actuator_row("Mixer Refill Pump")
-                    supply_valve_6_row = create_actuator_row("Supply Valve 6")
-                    drain_valve_0_row = create_actuator_row("Drain Valve 0")
-                    transfer_pump_row = create_actuator_row("Transfer Pump")
-                    mixing_circulation_pump_row = create_actuator_row(
-                        "Mixing Circulation Pump"
-                    )
-                    sensor_circulation_pump_row = create_actuator_row(
-                        "Sensor Circulation Pump"
-                    )
-                    valve_1_row = create_actuator_row("Valve 1")
-                    valve_2_row = create_actuator_row("Valve 2")
-                    valve_3_row = create_actuator_row("Valve 3")
-                    valve_4_row = create_actuator_row("Valve 4")
-                    valve_5_row = create_actuator_row("Valve 5")
+                status_actuators_widgets = build_status_actuators()
 
                 with ui.dialog() as dev_info_dialog, ui.card().classes(
                     "recipe-dialog-card dev-info-dialog-card"
@@ -706,24 +511,6 @@ def create_dashboard_page(controller: CdsController) -> None:
 
     if recipe_state.get("load_error"):
         add_log(f"[RECIPE] {recipe_state['load_error']}")
-
-    def set_dot(row: dict[str, Any], value: Any) -> None:
-        row["dot"].classes(remove="dot-on dot-off dot-unknown")
-        row["dot"].classes(bool_dot(value))
-
-    def set_actuator(row: dict[str, Any], value: Any) -> None:
-        badge = row["badge"]
-        badge.classes(remove="badge-on badge-off badge-unknown")
-
-        if value is True:
-            badge.set_text("ON")
-            badge.classes("badge-on")
-        elif value is False:
-            badge.set_text("OFF")
-            badge.classes("badge-off")
-        else:
-            badge.set_text("-")
-            badge.classes("badge-unknown")
 
     def update_tank_gauge(
         gauge: dict[str, Any],
@@ -1251,30 +1038,7 @@ def create_dashboard_page(controller: CdsController) -> None:
 
         last_update_badge.set_text(f"Update: {fmt(sensor_data['timestamp'])}")
 
-        sensor_available = sensor_data["snapshot_available"]
-        process_available = process_data["payload_available"]
-
-        mqtt_bridge_ok = (
-            sensor_data["sensor_started"]
-            and sensor_available
-            and not sensor_data["bridge_error"]
-        )
-
-        set_dot(mqtt_bridge_row, mqtt_bridge_ok)
-        mqtt_bridge_row["value"].set_text("connected" if mqtt_bridge_ok else "check")
-
-        set_dot(process_reader_row, process_data["reader_started"])
-        process_reader_row["value"].set_text(
-            "running" if process_data["reader_started"] else "stopped"
-        )
-
-        set_dot(snapshot_row, sensor_available)
-        snapshot_row["value"].set_text("current" if sensor_available else "stale")
-
-        set_dot(process_payload_row, process_available)
-        process_payload_row["value"].set_text(
-            "current" if process_available else "no payload"
-        )
+        refresh_status_actuators(status_actuators_widgets, sensor_data, process_data)
 
         update_tank_gauge(
             ro_tank_gauge,
@@ -1313,18 +1077,6 @@ def create_dashboard_page(controller: CdsController) -> None:
             process_error_label.set_text(f"Process error: {process_data['error']}")
         else:
             process_error_label.set_text("")
-
-        set_actuator(mixer_refill_pump_row, process_data["mixer_refill_pump"])
-        set_actuator(supply_valve_6_row, process_data["supply_valve_6"])
-        set_actuator(drain_valve_0_row, process_data["drain_valve_0"])
-        set_actuator(transfer_pump_row, process_data["transfer_pump"])
-        set_actuator(mixing_circulation_pump_row, process_data["mixing_circulation_pump"])
-        set_actuator(sensor_circulation_pump_row, process_data["sensor_circulation_pump"])
-        set_actuator(valve_1_row, process_data["valve_1"])
-        set_actuator(valve_2_row, process_data["valve_2"])
-        set_actuator(valve_3_row, process_data["valve_3"])
-        set_actuator(valve_4_row, process_data["valve_4"])
-        set_actuator(valve_5_row, process_data["valve_5"])
 
         hardware_enabled = control_data["hardware_execution_enabled"]
 
