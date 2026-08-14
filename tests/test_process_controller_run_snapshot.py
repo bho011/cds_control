@@ -76,7 +76,7 @@ def _release_and_join(controller, release_event) -> None:
 def test_running_process_keeps_showing_the_recipe_it_was_actually_started_with(
     controller, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(recipe_store, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
+    monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
     controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS)
 
     save_recipe_to_slot(
@@ -134,7 +134,7 @@ def test_running_process_keeps_showing_the_recipe_it_was_actually_started_with(
 def test_get_status_shows_a_live_preview_when_no_run_has_ever_been_started(
     controller, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(recipe_store, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
+    monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
     controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS)
 
     save_recipe_to_slot(
@@ -150,7 +150,7 @@ def test_get_status_shows_a_live_preview_when_no_run_has_ever_been_started(
 
 
 def test_get_status_returns_to_live_preview_after_a_run_completes(controller, monkeypatch, tmp_path):
-    monkeypatch.setattr(recipe_store, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
+    monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
     controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS)
 
     save_recipe_to_slot(

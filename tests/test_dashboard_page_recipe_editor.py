@@ -27,7 +27,7 @@ EXPECTED_STEPS = [1, 0.1, 10, 1, 1, 0.01, 0.1, 1, 1, 1, 10, 0.01]
 
 @pytest.fixture(autouse=True)
 def _isolated_recipe_book(tmp_path, monkeypatch):
-    monkeypatch.setattr(recipe_store, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
+    monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
     return tmp_path
 
 

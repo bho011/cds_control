@@ -27,7 +27,7 @@ from nicegui_dashboard.recipe_store import (
 
 @pytest.fixture(autouse=True)
 def _isolated_recipe_book(tmp_path, monkeypatch):
-    monkeypatch.setattr(recipe_store, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
+    monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
     return tmp_path
 
 
@@ -44,7 +44,7 @@ def test_invalid_recipe_is_not_saved():
     with pytest.raises(RecipeValidationError):
         save_recipe_to_slot(slot=1, recipe=_valid_recipe(target_ro_water_l=0.0))
 
-    assert not recipe_store.RECIPE_BOOK_PATH.exists()
+    assert not recipe_store.book_io.RECIPE_BOOK_PATH.exists()
 
 
 def test_valid_recipe_is_saved_and_reloadable():
@@ -59,16 +59,16 @@ def test_valid_recipe_is_saved_and_reloadable():
 def test_save_is_atomic_no_tmp_file_left_behind():
     save_recipe_to_slot(slot=1, recipe=_valid_recipe())
 
-    leftover_tmp_files = list(recipe_store.RECIPE_BOOK_PATH.parent.glob("*.tmp"))
+    leftover_tmp_files = list(recipe_store.book_io.RECIPE_BOOK_PATH.parent.glob("*.tmp"))
     assert leftover_tmp_files == []
-    assert recipe_store.RECIPE_BOOK_PATH.exists()
+    assert recipe_store.book_io.RECIPE_BOOK_PATH.exists()
 
 
 def test_second_save_creates_a_backup_of_the_previous_file():
     save_recipe_to_slot(slot=1, recipe=_valid_recipe(recipe_name="First"))
     save_recipe_to_slot(slot=1, recipe=_valid_recipe(recipe_name="Second"))
 
-    backup_path = recipe_store.RECIPE_BOOK_PATH.with_suffix(".json.bak")
+    backup_path = recipe_store.book_io.RECIPE_BOOK_PATH.with_suffix(".json.bak")
     assert backup_path.exists()
     with backup_path.open(encoding="utf-8") as file:
         backup_data = json.load(file)
@@ -79,47 +79,47 @@ def test_second_save_creates_a_backup_of_the_previous_file():
 
 
 def test_corrupted_json_raises_and_is_not_overwritten():
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text("{not valid json", encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text("{not valid json", encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
 
     # the broken file must still be exactly as broken as before - no silent
     # "reset to defaults" write.
-    assert recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == "{not valid json"
+    assert recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == "{not valid json"
 
 
 def test_non_object_json_top_level_is_treated_as_corrupted():
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text("[1, 2, 3]", encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text("[1, 2, 3]", encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
 
 
 def test_favorites_as_a_string_is_rejected_and_file_stays_byte_identical():
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     original_text = json.dumps(
         {"schema_version": RECIPE_SCHEMA_VERSION, "active_slot": 1, "favorites": "oops"}
     )
-    recipe_store.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
 
-    assert recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
+    assert recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
 
 
 def test_missing_favorites_key_is_rejected_and_file_stays_byte_identical():
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     original_text = json.dumps({"schema_version": RECIPE_SCHEMA_VERSION, "active_slot": 1})
-    recipe_store.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
 
-    assert recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
+    assert recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
 
 
 # --- schema_version 1 -> 2 -> 3 migration chain ---------------------------------
@@ -241,14 +241,14 @@ def test_older_recipe_with_bad_legacy_process_values_type_is_rejected_not_a_raw_
             dict(recipe_store.DEFAULT_RECIPE, slot=3),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     original_text = json.dumps(book)
-    recipe_store.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
 
-    assert recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
+    assert recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
 
 
 # --- schema_version 3 -> 4 migration: Addon 1/Addon 2 removal ---------------------
@@ -328,14 +328,14 @@ def test_older_recipe_with_bad_legacy_recipe_values_type_is_rejected_not_a_raw_v
             dict(recipe_store.DEFAULT_RECIPE, slot=3),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     original_text = json.dumps(book)
-    recipe_store.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
 
-    assert recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
+    assert recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
 
 
 def test_migrate_favorite_dict_full_chain_moves_addons_into_legacy_recipe_values():
@@ -382,8 +382,8 @@ def test_load_recipe_book_migrates_a_v1_file_on_disk_and_resaves_it():
             {"slot": 3, "recipe_name": "Old Recipe 3", "target_fill_total_liters": 30.0},
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(v1_book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(v1_book), encoding="utf-8")
 
     loaded = load_recipe_book()
 
@@ -402,7 +402,7 @@ def test_load_recipe_book_migrates_a_v1_file_on_disk_and_resaves_it():
     assert migrated_recipe["legacy_process_values"]["requested_ro_correction_l"] == 19.0
 
     # persisted back to disk, not just returned in memory
-    with recipe_store.RECIPE_BOOK_PATH.open(encoding="utf-8") as file:
+    with recipe_store.book_io.RECIPE_BOOK_PATH.open(encoding="utf-8") as file:
         on_disk = json.load(file)
     assert on_disk["schema_version"] == RECIPE_SCHEMA_VERSION
 
@@ -416,8 +416,8 @@ def test_load_recipe_book_migrates_a_v1_file_on_disk_and_resaves_it():
 )
 def test_bad_schema_version_type_raises_recipe_book_corrupted_error(bad_schema_version):
     book = {"schema_version": bad_schema_version, "active_slot": 1, "favorites": []}
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -439,8 +439,8 @@ def test_bad_active_slot_type_raises_recipe_book_corrupted_error(bad_active_slot
             dict(recipe_store.DEFAULT_RECIPE, slot=3),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -456,8 +456,8 @@ def test_bad_favorite_slot_type_raises_recipe_book_corrupted_error(bad_slot):
         "active_slot": 1,
         "favorites": [dict(recipe_store.DEFAULT_RECIPE, slot=bad_slot)],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -470,8 +470,8 @@ def test_favorite_slot_out_of_range_raises_recipe_book_corrupted_error(out_of_ra
         "active_slot": 1,
         "favorites": [dict(recipe_store.DEFAULT_RECIPE, slot=out_of_range_slot)],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -490,8 +490,8 @@ def test_active_slot_out_of_range_raises_recipe_book_corrupted_error(out_of_rang
             dict(recipe_store.DEFAULT_RECIPE, slot=3),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -508,14 +508,14 @@ def test_existing_file_with_only_slot_1_is_rejected_and_file_stays_byte_identica
         "active_slot": 1,
         "favorites": [dict(recipe_store.DEFAULT_RECIPE, slot=1)],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     original_text = json.dumps(book)
-    recipe_store.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(original_text, encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
 
-    assert recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
+    assert recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8") == original_text
 
 
 def test_duplicate_slots_raise_recipe_book_corrupted_error():
@@ -527,8 +527,8 @@ def test_duplicate_slots_raise_recipe_book_corrupted_error():
             dict(recipe_store.DEFAULT_RECIPE, slot=1, recipe_name="Duplicate"),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -540,8 +540,8 @@ def test_non_dict_favorite_raises_recipe_book_corrupted_error():
         "active_slot": 1,
         "favorites": ["not a dict", dict(recipe_store.DEFAULT_RECIPE, slot=2)],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -553,8 +553,8 @@ def test_unknown_future_schema_version_raises_recipe_book_corrupted_error():
         "active_slot": 1,
         "favorites": [dict(recipe_store.DEFAULT_RECIPE, slot=1)],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -581,8 +581,8 @@ def test_mixed_schema_version_favorites_are_each_migrated_from_their_own_version
             dict(recipe_store.DEFAULT_RECIPE, slot=3),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     loaded = load_recipe_book()
 
@@ -627,8 +627,8 @@ def test_book_already_at_v4_with_one_favorite_still_at_v3_is_still_migrated():
             dict(recipe_store.DEFAULT_RECIPE, slot=3),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     loaded = load_recipe_book()
 
@@ -649,8 +649,8 @@ def test_future_favorite_schema_version_is_rejected_even_if_book_level_version_i
             dict(recipe_store.DEFAULT_RECIPE, slot=3),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     with pytest.raises(RecipeBookCorruptedError):
         load_recipe_book()
@@ -660,9 +660,9 @@ def test_reloading_an_already_current_book_is_a_no_op():
     save_recipe_to_slot(slot=1, recipe=_valid_recipe(recipe_name="Stable"))
     first_load = load_recipe_book()
 
-    on_disk_before = recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8")
+    on_disk_before = recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8")
     second_load = load_recipe_book()
-    on_disk_after = recipe_store.RECIPE_BOOK_PATH.read_text(encoding="utf-8")
+    on_disk_after = recipe_store.book_io.RECIPE_BOOK_PATH.read_text(encoding="utf-8")
 
     assert first_load == second_load
     assert on_disk_before == on_disk_after
@@ -786,8 +786,8 @@ def test_saving_a_migrated_recipe_via_the_editor_preserves_legacy_audit_fields()
             dict(recipe_store.DEFAULT_RECIPE, slot=3, recipe_name="Favorite 3"),
         ],
     }
-    recipe_store.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    recipe_store.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
+    recipe_store.book_io.RECIPE_BOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recipe_store.book_io.RECIPE_BOOK_PATH.write_text(json.dumps(book), encoding="utf-8")
 
     # v3 -> v4 migration on load: addon_1_ml/addon_2_ml quarantined into
     # legacy_recipe_values, legacy_process_values untouched.
