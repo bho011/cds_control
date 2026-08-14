@@ -94,7 +94,7 @@ Only the following outputs have been tested on the real physical system with con
 
 All other entries in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing_circulation_pump`, `sensor_circulation_pump`, `valve_1`–`valve_9`) are addressable in code but **not** confirmed by a real hardware test. In particular:
 
-- **Transfer Pump** (`transfer_pump`, GPIO26) is already used in `calibration_mixing_tank.py`, `main_safe_drain.py`, and now also in `process/tank_cleaning.py`, but its electrical wiring is, per the project status, not yet conclusively confirmed.
+- **Transfer Pump** (`transfer_pump`, GPIO26) is already used in `calibration_mixing_tank.py`, `main_safe_drain.py`, and now also in `process/tank_cleaning/`, but its electrical wiring is, per the project status, not yet conclusively confirmed.
 - **Valve 5** is noted in a `gpio_config.py` comment as not reliably sealing.
 - **Tank Cleaning** additionally drives `mixing_circulation_pump` and `sensor_circulation_pump` – also without a real hardware test yet. The settings file (`config/tank_cleaning_settings.json`) is therefore deliberately set to a reduced **40-liter test volume** instead of the later 200-liter target, so the first hardware test can be run without major water consumption/risk.
 
@@ -134,12 +134,20 @@ Manual Drain Jog and Tank Cleaning have no dedicated `main.py` command – they 
 ```text
 cds_control/
 ├── main.py
+├── gpio_config.py
 ├── config/
 │   ├── system_config.json
 │   ├── water_cycle_settings.json
 │   ├── calibration_settings.json
 │   ├── process_settings.json
 │   └── tank_cleaning_settings.json
+├── domain/
+│   ├── recipe/                       # limits.py, calculations.py, field_validators.py, validation.py, models.py
+│   ├── recipe_limits.py              # compat wrapper -> domain/recipe/
+│   └── recipe_model.py               # compat wrapper -> domain/recipe/models.py
+├── statemachine/
+│   ├── fill_and_measure_state_machine.py
+│   └── sensor_reading.py             # pure mixer/RO liter fallback functions
 ├── process/
 │   ├── common.py
 │   ├── refill.py
@@ -148,37 +156,51 @@ cds_control/
 │   ├── water_cycle.py
 │   ├── auto_circulation.py
 │   ├── manual_drain_jog.py
-│   ├── tank_cleaning.py
+│   ├── fill_and_measure.py           # FillAndMeasureController
+│   ├── pump_prime.py
+│   ├── tank_cleaning/                # controller.py, phases.py, fill/hold/drain_phase.py, status_publisher.py
 │   ├── watchdog.py
-│   └── background_process.py
+│   └── background_process.py         # BackgroundHardwareProcess base class
 ├── services/
 │   ├── system_config.py
 │   ├── mqtt_publisher.py
+│   ├── mqtt_topic_reader.py          # unified MQTT single-topic reader
 │   ├── process_run_logger.py
-│   ├── sensor_snapshot.py
-│   └── settings_validation.py
+│   ├── settings_validation.py
+│   └── peristaltic/                  # protocol/safety/models/firmware_profiles/prime/session_log/
+│                                      # serial_client/dose_limits/parallel_pump_safety/calibration_*.py
 ├── hardware/
 │   ├── digital_output.py
 │   └── actuator_manager.py
+├── calibration/                      # config/models/cli_input/sensor_reading/measurement_csv/
+│                                      # pump_segments/analysis/session/cli.py
+├── preflight/                        # report/files_and_syntax/disk_space/gpio/services/mqtt/opcua/run.py
 ├── nicegui_dashboard/
 │   ├── app.py
 │   ├── cds_controller.py
-│   ├── process_controller.py
-│   ├── recipe_store.py
-│   ├── mqtt_topic_reader.py
+│   ├── process_controller.py         # coordinator: exclusivity, status aggregation, recipe merge
+│   ├── components/                   # formatting.py, status_widgets.py
+│   ├── recipe_store/                 # book_io.py, migrations.py, queries.py, run_config.py
 │   ├── pages/
+│   │   ├── dashboard_page.py         # thin scaffold, ~190 lines
+│   │   └── dashboard/                # one file per dashboard section (recipe_text, status_actuators,
+│   │                                  # maintenance, recipe, process_control, prime, sensor_tanks)
 │   └── static/
 ├── scripts/
-│   └── check_gpio_conflicts.py
+│   ├── check_gpio_conflicts.py
+│   ├── peristaltic_calibration_cli.py
+│   ├── peristaltic/                  # discover.py
+│   └── manual_tests/
 ├── recipes/
 │   └── dashboard_recipes.json
 ├── tests/
 ├── logs/
 ├── calibration_data/
 ├── mqtt_sensor_bridge.py
-├── calibration_mixing_tank.py
+├── calibration_mixing_tank.py        # compat wrapper -> calibration/cli.py
 ├── main_safe_drain.py
-├── preflight_check.py
+├── main_refill_and_drain_test.py
+├── preflight_check.py                # compat wrapper -> preflight/run.py
 ├── requirements.txt
 ├── requirements-dev.txt
 └── pytest.ini
@@ -216,7 +238,7 @@ Central technical system values live in `config/system_config.json`:
 }
 ```
 
-> Note: this file is now the single source of truth for the OPC-UA endpoint, MQTT connection, and mixer calibration — `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py`, `preflight_check.py`, as well as the dashboard MQTT layer (`services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) and the calibration-factor fallback in `statemachine/fill_and_measure_state_machine.py` now all read from `get_mqtt_config()`/`get_mixer_level_calibration()` instead of their own hardcoded values.
+> Note: this file is now the single source of truth for the OPC-UA endpoint, MQTT connection, and mixer calibration — `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py`, `preflight_check.py`, as well as the dashboard MQTT layer (`services/mqtt_publisher.py`, `services/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) and the calibration-factor fallback in `statemachine/fill_and_measure_state_machine.py` now all read from `get_mqtt_config()`/`get_mixer_level_calibration()` instead of their own hardcoded values.
 
 Further settings files, one per process:
 
@@ -371,7 +393,7 @@ Runs as its own background thread with `threading.Event` control, so an Emergenc
 Automated cleaning cycle for the mixing tank, e.g. after a mixing run.
 
 ```text
-process/tank_cleaning.py       → TankCleaningController
+process/tank_cleaning/         → TankCleaningController
 config/tank_cleaning_settings.json → settings
 ```
 
@@ -443,7 +465,7 @@ Tank volume limits are centrally defined and enforced: `target_ro_water_l` (RO w
 
 EC nutrient dosing uses a single total dose (`nutrients_ml_per_100_l`) split between Nutrient Solution A and B by a percentage (`nutrient_a_percent`, default 50 %); B is always calculated as `100 - A`, never edited independently. `nutrient_dosing_enabled` (default off) gates whether a dose is actually calculated anywhere — while off, every calculated amount is forced to 0 ml, including in the estimated volume. A recipe still flagged for legacy review (`legacy_dosing_needs_review`) cannot enable dosing until the editor's "Legacy review completed" switch explicitly clears that flag. The EC setpoint field uses a `0.1` stepper as a UI convenience only — arbitrary in-range values (e.g. `2.35`) are accepted and stored unchanged. No claim is made that real chemical dosing has been tested — this logic is fully implemented and unit-tested as pure domain logic, but no real peristaltic pump is connected yet (see below).
 
-**Actually effective** (`nicegui_dashboard/recipe_store.py::build_run_config()`, called from `ProcessController.start_fill_and_measure()`): `target_ro_water_l` determines the real fill target volume (forces `fill_mode="absolute"`); `sensor_circulation_enabled`, sourced from a fresh `RunOptions` chosen in the Process Control panel's confirmation area (not the recipe, not persisted, always defaults to off, and only reset back to off after a start is actually accepted — a blocked start leaves the choice untouched so the user can correct and retry), determines whether the sensor-box circulation pump is driven during the run. Both are checked against `max_mixer_liters` and the `process_settings.json` schema — a recipe target volume above the mixer's capacity blocks the start with a clear message, instead of starting the process and only aborting mid-run via the watchdog. `RunConfigSnapshot.build(recipe, process_settings, run_options)` is the only place these are combined; everything downstream reads exclusively from that immutable snapshot. `ProcessController` stores the exact snapshot a run was actually started with, and the dashboard's status keeps showing *that* snapshot — not a freshly recomputed one — for as long as the process is running, even if a different favorite is activated in the meantime; only the next run picks up the newly active recipe.
+**Actually effective** (`nicegui_dashboard/recipe_store/run_config.py::build_run_config()`, called from `ProcessController.start_fill_and_measure()`): `target_ro_water_l` determines the real fill target volume (forces `fill_mode="absolute"`); `sensor_circulation_enabled`, sourced from a fresh `RunOptions` chosen in the Process Control panel's confirmation area (not the recipe, not persisted, always defaults to off, and only reset back to off after a start is actually accepted — a blocked start leaves the choice untouched so the user can correct and retry), determines whether the sensor-box circulation pump is driven during the run. Both are checked against `max_mixer_liters` and the `process_settings.json` schema — a recipe target volume above the mixer's capacity blocks the start with a clear message, instead of starting the process and only aborting mid-run via the watchdog. `RunConfigSnapshot.build(recipe, process_settings, run_options)` is the only place these are combined; everything downstream reads exclusively from that immutable snapshot. `ProcessController` stores the exact snapshot a run was actually started with, and the dashboard's status keeps showing *that* snapshot — not a freshly recomputed one — for as long as the process is running, even if a different favorite is activated in the meantime; only the next run picks up the newly active recipe.
 
 Not yet active (no consumer in the code): the EC nutrient dosing fields and pH correction — the validated `RunConfigSnapshot` calculates and carries them (attached to the run's settings as `recipe_run_config_snapshot`), but there is still no peristaltic-pump control to actually dose them, and **no real peristaltic pumps are connected**. `drain_after_process` exists as a typed `RunOptions` field but has no hardware consumer at all and is deliberately **not** shown as a GUI toggle, so it is never presented as functional. See `docs/RECIPE_AND_DOSING_RULES.md` Section 5 and `docs/PERISTALTIC_PROFILE_PLAN.md` for the exact remaining integration point.
 
@@ -493,9 +515,9 @@ Derived from all calibration sessions so far (zero-normalized, fill phase only, 
 3. **Secure the 175–200 L calibration range** — no reliable tank marking at the upper end to cross-check against yet; the production formula extrapolates slightly beyond the confirmed range there.
 4. Test the modular Water Cycle on real hardware.
 5. Gradually migrate logging from `print()` to `logging` (so far only `actuator_manager.py`, `cds_controller.py`).
-6. Unify the MQTT staleness/payload readers (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`).
+6. ~~Unify the MQTT staleness/payload readers.~~ Done: `services/sensor_snapshot.py` (`SensorSnapshotReader`) and the old `nicegui_dashboard/mqtt_topic_reader.py` (`MqttTopicReader`) were merged into one class in `services/mqtt_topic_reader.py`, with locking, error tracking, and a sentinel-based `get_latest(max_age_seconds=...)` — a deliberate, small, documented behavior change (see the commit message on that change for the exact deltas), not a pure move.
 7. No CI, no linting/mypy despite consistent type annotations (`tests/` with `pytest` for locking/watchdogs/config validation now exists, see Section 9).
-8. ~~Connect recipe values to Water Cycle settings in a controlled way.~~ Done: `nicegui_dashboard/recipe_store.py::build_run_config()` connects the two recipe fields that have a real consumer (`target_ro_water_l` → `fill_mode="absolute"`/`target_total_liters`, `sensor_circulation_enabled` → `enable_sensor_circulation`) when starting Fill-and-Measure, including a `max_mixer_liters` bound check. The recipe's EC nutrient dosing fields are now fully typed, calculated, and validated (see Section 15, `docs/RECIPE_AND_DOSING_RULES.md`) and attached as `recipe_run_config_snapshot`, but stay without a hardware consumer until chemical dosing is implemented (item 9 below). pH correction fields are unchanged/out of scope for that work.
+8. ~~Connect recipe values to Water Cycle settings in a controlled way.~~ Done: `nicegui_dashboard/recipe_store/run_config.py::build_run_config()` connects the two recipe fields that have a real consumer (`target_ro_water_l` → `fill_mode="absolute"`/`target_total_liters`, `sensor_circulation_enabled` → `enable_sensor_circulation`) when starting Fill-and-Measure, including a `max_mixer_liters` bound check. The recipe's EC nutrient dosing fields are now fully typed, calculated, and validated (see Section 15, `docs/RECIPE_AND_DOSING_RULES.md`) and attached as `recipe_run_config_snapshot`, but stay without a hardware consumer until chemical dosing is implemented (item 9 below). pH correction fields are unchanged/out of scope for that work.
 9. **Peristaltic pump control** — firmware-side hardening is complete in the separate `central_dosing_sys_peristaltic` repository (branch `harden-serial-protocol`) and verified on both Arduino MCUs on real hardware: drivers disabled by default, dose/runtime limits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), a machine-readable `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL` protocol (see `docs/SERIAL_PROTOCOL.md` there). `cds_control` now has a standalone, hardware-free-tested Python serial client and terminal CLI for this protocol (`services/peristaltic/`, `scripts/peristaltic_calibration_cli.py` — discover/map/check/stop-all/test/calibrate/pair-test/all-four-test, water-only, max 10 ml per test dose, see `docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md`), but it is deliberately **not** wired into the recipe logic, the NiceGUI dashboard, or the state machine, and **no real peristaltic pumps are connected** — that integration, and real per-pump calibration/verification, remain separate, not-yet-started steps. A design-only plan for splitting the shared firmware into an `MCU_A_PH`/`MCU_B_EC` profile pair also exists at `docs/PERISTALTIC_PROFILE_PLAN.md` (no firmware/behavior changed by it).
 10. **pH dosing bounds not yet enforced** — pH setpoint, pH mixing-time, and pH stock-volume bounds were confirmed against the legacy Node-RED configuration (see `docs/OPEN_RECIPE_DECISIONS.md`) but intentionally not added as hard validation, since pH dosing has no consumer yet and they were outside the explicitly requested rule set. (EC setpoint/mixing-time bounds and the EC adjustment factor bound *are* enforced — see Section 15. Addon 1/Addon 2 bounds no longer apply at all, since Addon 1/Addon 2 were removed from the active recipe model entirely.) Whether/how to enforce the remaining pH bounds is a product decision, not yet made.
 
@@ -658,7 +680,7 @@ Nur die folgenden Ausgänge wurden real am physischen System getestet und ihre W
 
 Alle übrigen Einträge in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing_circulation_pump`, `sensor_circulation_pump`, `valve_1`–`valve_9`) sind im Code ansteuerbar, aber **nicht** durch einen realen Hardwaretest bestätigt. Insbesondere:
 
-- **Transfer Pump** (`transfer_pump`, GPIO26) wird bereits in `calibration_mixing_tank.py`, `main_safe_drain.py` und jetzt auch in `process/tank_cleaning.py` verwendet, ihre elektrische Anbindung ist aber laut Projektstand noch nicht abschließend geklärt.
+- **Transfer Pump** (`transfer_pump`, GPIO26) wird bereits in `calibration_mixing_tank.py`, `main_safe_drain.py` und jetzt auch in `process/tank_cleaning/` verwendet, ihre elektrische Anbindung ist aber laut Projektstand noch nicht abschließend geklärt.
 - **Valve 5** ist laut Kommentar in `gpio_config.py` nicht zuverlässig dicht.
 - **Tank Cleaning** steuert zusätzlich `mixing_circulation_pump` und `sensor_circulation_pump` an – ebenfalls noch ohne realen Hardwaretest. Die Settings-Datei (`config/tank_cleaning_settings.json`) ist deshalb bewusst auf ein reduziertes **40-Liter-Testvolumen** statt des späteren 200-Liter-Zielwerts gestellt, um den ersten Hardwaretest ohne größeren Wasserverbrauch/-risiko durchzuführen.
 
@@ -698,12 +720,20 @@ Manual Drain Jog und Tank Cleaning haben keinen eigenen `main.py`-Befehl – sie
 ```text
 cds_control/
 ├── main.py
+├── gpio_config.py
 ├── config/
 │   ├── system_config.json
 │   ├── water_cycle_settings.json
 │   ├── calibration_settings.json
 │   ├── process_settings.json
 │   └── tank_cleaning_settings.json
+├── domain/
+│   ├── recipe/                       # limits.py, calculations.py, field_validators.py, validation.py, models.py
+│   ├── recipe_limits.py              # Compat-Wrapper -> domain/recipe/
+│   └── recipe_model.py               # Compat-Wrapper -> domain/recipe/models.py
+├── statemachine/
+│   ├── fill_and_measure_state_machine.py
+│   └── sensor_reading.py             # reine Mixer-/RO-Liter-Fallback-Funktionen
 ├── process/
 │   ├── common.py
 │   ├── refill.py
@@ -712,37 +742,51 @@ cds_control/
 │   ├── water_cycle.py
 │   ├── auto_circulation.py
 │   ├── manual_drain_jog.py
-│   ├── tank_cleaning.py
+│   ├── fill_and_measure.py           # FillAndMeasureController
+│   ├── pump_prime.py
+│   ├── tank_cleaning/                # controller.py, phases.py, fill/hold/drain_phase.py, status_publisher.py
 │   ├── watchdog.py
-│   └── background_process.py
+│   └── background_process.py         # Basisklasse BackgroundHardwareProcess
 ├── services/
 │   ├── system_config.py
 │   ├── mqtt_publisher.py
+│   ├── mqtt_topic_reader.py          # vereinheitlichter MQTT-Einzeltopic-Reader
 │   ├── process_run_logger.py
-│   ├── sensor_snapshot.py
-│   └── settings_validation.py
+│   ├── settings_validation.py
+│   └── peristaltic/                  # protocol/safety/models/firmware_profiles/prime/session_log/
+│                                      # serial_client/dose_limits/parallel_pump_safety/calibration_*.py
 ├── hardware/
 │   ├── digital_output.py
 │   └── actuator_manager.py
+├── calibration/                      # config/models/cli_input/sensor_reading/measurement_csv/
+│                                      # pump_segments/analysis/session/cli.py
+├── preflight/                        # report/files_and_syntax/disk_space/gpio/services/mqtt/opcua/run.py
 ├── nicegui_dashboard/
 │   ├── app.py
 │   ├── cds_controller.py
-│   ├── process_controller.py
-│   ├── recipe_store.py
-│   ├── mqtt_topic_reader.py
+│   ├── process_controller.py         # Koordinator: Exklusivität, Status-Aggregation, Rezept-Merge
+│   ├── components/                   # formatting.py, status_widgets.py
+│   ├── recipe_store/                 # book_io.py, migrations.py, queries.py, run_config.py
 │   ├── pages/
+│   │   ├── dashboard_page.py         # dünnes Gerüst, ~190 Zeilen
+│   │   └── dashboard/                # je eine Datei pro Dashboard-Bereich (recipe_text, status_actuators,
+│   │                                  # maintenance, recipe, process_control, prime, sensor_tanks)
 │   └── static/
 ├── scripts/
-│   └── check_gpio_conflicts.py
+│   ├── check_gpio_conflicts.py
+│   ├── peristaltic_calibration_cli.py
+│   ├── peristaltic/                  # discover.py
+│   └── manual_tests/
 ├── recipes/
 │   └── dashboard_recipes.json
 ├── tests/
 ├── logs/
 ├── calibration_data/
 ├── mqtt_sensor_bridge.py
-├── calibration_mixing_tank.py
+├── calibration_mixing_tank.py        # Compat-Wrapper -> calibration/cli.py
 ├── main_safe_drain.py
-├── preflight_check.py
+├── main_refill_and_drain_test.py
+├── preflight_check.py                # Compat-Wrapper -> preflight/run.py
 ├── requirements.txt
 ├── requirements-dev.txt
 └── pytest.ini
@@ -780,7 +824,7 @@ Zentrale technische Systemwerte liegen in `config/system_config.json`:
 }
 ```
 
-> Hinweis: Diese Datei ist inzwischen die alleinige Quelle für OPC-UA-Endpoint, MQTT-Verbindung und Mixer-Kalibrierung — sowohl `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py`, `preflight_check.py` als auch der Dashboard-MQTT-Layer (`services/mqtt_publisher.py`, `nicegui_dashboard/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) und der Kalibrierfaktor-Fallback in `statemachine/fill_and_measure_state_machine.py` lesen jetzt aus `get_mqtt_config()`/`get_mixer_level_calibration()` statt aus eigenen hartcodierten Werten.
+> Hinweis: Diese Datei ist inzwischen die alleinige Quelle für OPC-UA-Endpoint, MQTT-Verbindung und Mixer-Kalibrierung — sowohl `mqtt_sensor_bridge.py`, `calibration_mixing_tank.py`, `preflight_check.py` als auch der Dashboard-MQTT-Layer (`services/mqtt_publisher.py`, `services/mqtt_topic_reader.py`, `nicegui_dashboard/cds_controller.py`) und der Kalibrierfaktor-Fallback in `statemachine/fill_and_measure_state_machine.py` lesen jetzt aus `get_mqtt_config()`/`get_mixer_level_calibration()` statt aus eigenen hartcodierten Werten.
 
 Weitere Settings-Dateien, je Prozess eine eigene:
 
@@ -934,7 +978,7 @@ Läuft als eigener Hintergrund-Thread mit `threading.Event`-Steuerung, damit ein
 Automatisierter Reinigungszyklus für den Mixing Tank, z. B. nach einem Mischvorgang.
 
 ```text
-process/tank_cleaning.py       → TankCleaningController
+process/tank_cleaning/         → TankCleaningController
 config/tank_cleaning_settings.json → Einstellungen
 ```
 
@@ -1004,7 +1048,7 @@ Tankvolumengrenzen sind zentral definiert und werden durchgesetzt: `target_ro_wa
 
 Die EC-Nährstoffdosierung nutzt eine Gesamtdosis (`nutrients_ml_per_100_l`), aufgeteilt zwischen Nährstofflösung A und B über einen Prozentanteil (`nutrient_a_percent`, Standard 50 %); B wird stets als `100 - A` berechnet, nie unabhängig editiert. `nutrient_dosing_enabled` (Standard aus) steuert, ob überhaupt irgendwo eine Dosis berechnet wird — solange aus, werden alle berechneten Mengen auf 0 ml erzwungen, auch im geschätzten Volumen. Ein noch als Legacy-prüfungsbedürftig markiertes Rezept (`legacy_dosing_needs_review`) kann die Dosierung erst aktivieren, nachdem der "Legacy review completed"-Schalter im Editor dieses Flag ausdrücklich aufgehoben hat. Das EC-Sollwert-Feld nutzt eine `0,1`-Schrittweite nur als Bedienhilfe — beliebige Zwischenwerte im gültigen Bereich (z. B. `2,35`) werden unverändert akzeptiert und gespeichert. Es wird nicht behauptet, dass eine echte Chemikaliendosierung bereits getestet wurde — diese Logik ist als reine Domänenlogik vollständig implementiert und getestet, aber es ist noch keine echte Peristaltikpumpe angeschlossen (siehe unten).
 
-**Tatsächlich wirksam** (`nicegui_dashboard/recipe_store.py::build_run_config()`, aufgerufen von `ProcessController.start_fill_and_measure()`): `target_ro_water_l` bestimmt das reale Füll-Zielvolumen (erzwingt `fill_mode="absolute"`); `sensor_circulation_enabled`, aus einem frisch im Bestätigungsbereich von Process Control gewählten `RunOptions` (nicht aus dem Rezept, nicht gespeichert, startet immer auf „aus" und wird erst nach einem tatsächlich akzeptierten Start wieder auf „aus" zurückgesetzt — ein blockierter Start lässt die Wahl unverändert, damit ein erneuter Versuch möglich ist), bestimmt, ob die Sensorbox-Zirkulationspumpe beim Lauf mit angesteuert wird. Beide werden gegen `max_mixer_liters` und das `process_settings.json`-Schema geprüft — ein Rezept-Zielvolumen über der Mixer-Kapazität blockiert den Start mit klarer Meldung, statt den Prozess zu starten und erst per Watchdog mittendrin abzubrechen. `RunConfigSnapshot.build(recipe, process_settings, run_options)` ist die einzige Stelle, an der diese drei Quellen zusammengeführt werden; alles Nachgelagerte liest ausschließlich aus diesem unveränderlichen Snapshot. `ProcessController` speichert den genauen Snapshot, mit dem ein Lauf tatsächlich gestartet wurde, und der Status im Dashboard zeigt weiterhin genau diesen Snapshot — nicht neu berechnet — solange der Prozess läuft, selbst wenn währenddessen ein anderer Favorit aktiviert wird; erst der nächste Lauf verwendet das neu aktive Rezept.
+**Tatsächlich wirksam** (`nicegui_dashboard/recipe_store/run_config.py::build_run_config()`, aufgerufen von `ProcessController.start_fill_and_measure()`): `target_ro_water_l` bestimmt das reale Füll-Zielvolumen (erzwingt `fill_mode="absolute"`); `sensor_circulation_enabled`, aus einem frisch im Bestätigungsbereich von Process Control gewählten `RunOptions` (nicht aus dem Rezept, nicht gespeichert, startet immer auf „aus" und wird erst nach einem tatsächlich akzeptierten Start wieder auf „aus" zurückgesetzt — ein blockierter Start lässt die Wahl unverändert, damit ein erneuter Versuch möglich ist), bestimmt, ob die Sensorbox-Zirkulationspumpe beim Lauf mit angesteuert wird. Beide werden gegen `max_mixer_liters` und das `process_settings.json`-Schema geprüft — ein Rezept-Zielvolumen über der Mixer-Kapazität blockiert den Start mit klarer Meldung, statt den Prozess zu starten und erst per Watchdog mittendrin abzubrechen. `RunConfigSnapshot.build(recipe, process_settings, run_options)` ist die einzige Stelle, an der diese drei Quellen zusammengeführt werden; alles Nachgelagerte liest ausschließlich aus diesem unveränderlichen Snapshot. `ProcessController` speichert den genauen Snapshot, mit dem ein Lauf tatsächlich gestartet wurde, und der Status im Dashboard zeigt weiterhin genau diesen Snapshot — nicht neu berechnet — solange der Prozess läuft, selbst wenn währenddessen ein anderer Favorit aktiviert wird; erst der nächste Lauf verwendet das neu aktive Rezept.
 
 Noch nicht aktiv (kein Konsument im Code): die EC-Nährstoffdosierfelder und die pH-Korrektur — der validierte `RunConfigSnapshot` berechnet und führt sie mit (als `recipe_run_config_snapshot` an die Lauf-Settings angehängt), aber es gibt noch keine Peristaltikpumpensteuerung, die sie tatsächlich dosiert, und **es sind noch keine echten Peristaltikpumpen angeschlossen**. `drain_after_process` existiert als typisiertes `RunOptions`-Feld, hat aber keinerlei Hardware-Konsumenten und wird bewusst **nicht** als GUI-Schalter angezeigt, damit nichts Nicht-Implementiertes als funktionsfähig dargestellt wird. Siehe `docs/RECIPE_AND_DOSING_RULES.md` Abschnitt 5 und `docs/PERISTALTIC_PROFILE_PLAN.md` für den genauen verbleibenden Integrationspunkt.
 
@@ -1054,9 +1098,9 @@ Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fi
 3. **Kalibrierbereich 175–200 L absichern** — bisher keine verlässliche Tankmarkierung am oberen Ende zum Gegenchecken; die produktive Formel extrapoliert dort leicht über den bestätigten Bereich hinaus.
 4. Modularen Water-Cycle real mit Hardware testen.
 5. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
-6. MQTT-Staleness-/Payload-Reader (`services/sensor_snapshot.py`, `nicegui_dashboard/mqtt_topic_reader.py`) vereinheitlichen.
+6. ~~MQTT-Staleness-/Payload-Reader vereinheitlichen.~~ Erledigt: `services/sensor_snapshot.py` (`SensorSnapshotReader`) und das alte `nicegui_dashboard/mqtt_topic_reader.py` (`MqttTopicReader`) wurden zu einer Klasse in `services/mqtt_topic_reader.py` zusammengeführt, mit Locking, Fehler-Tracking und einem Sentinel-basierten `get_latest(max_age_seconds=...)` — eine bewusste, kleine, dokumentierte Verhaltensänderung (siehe die Commit-Nachricht dieser Änderung für die genauen Deltas), kein reines Verschieben.
 7. Kein CI, kein Linting/mypy trotz durchgängiger Typannotationen (`tests/` mit `pytest` für Locking/Watchdogs/Config-Validierung existiert inzwischen, siehe Abschnitt 9).
-8. ~~Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.~~ Erledigt: `nicegui_dashboard/recipe_store.py::build_run_config()` verbindet die zwei Rezeptfelder mit einem echten Konsumenten (`target_ro_water_l` → `fill_mode="absolute"`/`target_total_liters`, `sensor_circulation_enabled` → `enable_sensor_circulation`) beim Start von Fill-and-Measure, inklusive `max_mixer_liters`-Grenzprüfung. Die EC-Nährstoffdosierfelder des Rezepts sind jetzt vollständig typisiert, berechnet und validiert (siehe Abschnitt 15, `docs/RECIPE_AND_DOSING_RULES.md`) und als `recipe_run_config_snapshot` angehängt, bleiben aber ohne Hardware-Konsument, solange Chemikaliendosierung nicht implementiert ist (Punkt 9 unten). Die pH-Korrekturfelder sind unverändert/außerhalb des Umfangs dieser Arbeit.
+8. ~~Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.~~ Erledigt: `nicegui_dashboard/recipe_store/run_config.py::build_run_config()` verbindet die zwei Rezeptfelder mit einem echten Konsumenten (`target_ro_water_l` → `fill_mode="absolute"`/`target_total_liters`, `sensor_circulation_enabled` → `enable_sensor_circulation`) beim Start von Fill-and-Measure, inklusive `max_mixer_liters`-Grenzprüfung. Die EC-Nährstoffdosierfelder des Rezepts sind jetzt vollständig typisiert, berechnet und validiert (siehe Abschnitt 15, `docs/RECIPE_AND_DOSING_RULES.md`) und als `recipe_run_config_snapshot` angehängt, bleiben aber ohne Hardware-Konsument, solange Chemikaliendosierung nicht implementiert ist (Punkt 9 unten). Die pH-Korrekturfelder sind unverändert/außerhalb des Umfangs dieser Arbeit.
 9. **Peristaltikpumpensteuerung** — Firmware-seitige Härtung ist im separaten Repository `central_dosing_sys_peristaltic` (Branch `harden-serial-protocol`) abgeschlossen und auf beiden Arduino-MCUs real verifiziert: Treiber standardmäßig deaktiviert, Dosis-/Laufzeitlimits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), maschinenlesbares `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL`-Protokoll (siehe dortige `docs/SERIAL_PROTOCOL.md`). `cds_control` hat jetzt einen eigenständigen, hardwarefrei getesteten Python-Serial-Client und ein Terminal-CLI dafür (`services/peristaltic/`, `scripts/peristaltic_calibration_cli.py` — discover/map/check/stop-all/test/calibrate/pair-test/all-four-test, ausschließlich Wasser, max. 10 ml pro Testdosis, siehe `docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md`), das aber bewusst **nicht** an Rezeptlogik, NiceGUI-Dashboard oder State Machine angebunden ist, und es sind **noch keine echten Peristaltikpumpen angeschlossen** — diese Anbindung sowie eine reale Pumpen-Kalibrierung/-Verifikation bleiben separate, noch nicht begonnene Schritte. Ein reiner Entwurf für die Aufteilung der gemeinsamen Firmware in ein `MCU_A_PH`/`MCU_B_EC`-Profilpaar liegt außerdem unter `docs/PERISTALTIC_PROFILE_PLAN.md` vor (keine Firmware-/Verhaltensänderung dadurch).
 10. **pH-Dosierungsgrenzen noch nicht durchgesetzt** — pH-Sollwert, pH-Mischzeit und pH-Stockvolumengrenzen wurden gegen die alte Node-RED-Konfiguration bestätigt (siehe `docs/OPEN_RECIPE_DECISIONS.md`), aber bewusst nicht als harte Validierung ergänzt, da die pH-Dosierung noch keinen Konsumenten hat und sie außerhalb des explizit angeforderten Regelsatzes lagen. (EC-Sollwert-/Mischzeitgrenzen und die Grenze des EC-Anpassungsfaktors *sind* durchgesetzt — siehe Abschnitt 15. Addon-1/Addon-2-Grenzen entfallen vollständig, da Addon 1/Addon 2 vollständig aus dem aktiven Rezeptmodell entfernt wurden.) Ob/wie die verbleibenden pH-Grenzen durchgesetzt werden sollen, ist eine noch offene fachliche Entscheidung.
 

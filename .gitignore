@@ -24,12 +24,13 @@ calibration_data/*.csv
 nicegui_dashboard/pages/dashboard_page_before_*.py
 nicegui_dashboard/static/dashboard_before_*.css
 
-# Local archive / old generated versions
-archive/backups/
-archive/old_dashboard_versions/
+# Local archive / old generated versions (root-level only - docs/archive/
+# is a separate, git-tracked documentation archive, not this)
+/archive/backups/
+/archive/old_dashboard_versions/
 
 # Local archive only
-archive/
+/archive/
 
 recipes/*.json.bak
 recipes/dashboard_recipes.json
