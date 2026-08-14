@@ -10,11 +10,12 @@ sensor_circulation_enabled=True the whole time - Recipe B only applies to a
 later run.
 
 Uses the same fixture pattern as tests/conftest.py / test_process_locking.py:
-ProcessController._run_fill_and_measure is replaced with a no-op stand-in
-(installed on the instance, not the class) before any real run is started,
-so the background thread never imports gpio_config/ActuatorManager or
-touches real hardware. RECIPE_BOOK_PATH is monkeypatched to a tmp_path so
-the real recipes/dashboard_recipes.json is never touched.
+ProcessController.fill_and_measure._run is replaced with a no-op stand-in
+(installed on the FillAndMeasureController instance, not the class) before
+any real run is started, so the background thread never imports
+gpio_config/ActuatorManager or touches real hardware. RECIPE_BOOK_PATH is
+monkeypatched to a tmp_path so the real recipes/dashboard_recipes.json is
+never touched.
 """
 
 from __future__ import annotations
@@ -47,28 +48,29 @@ FULL_PROCESS_SETTINGS = {
 
 
 def _install_blocking_fake_run(controller):
-    """Replaces _run_fill_and_measure on this ProcessController INSTANCE
-    only (not the class) with a stand-in that blocks until released, then
-    tears itself down the same way the real method's finally block would -
-    never touches GPIO/ActuatorManager/state machine."""
+    """Replaces _run on the FillAndMeasureController INSTANCE only (not the
+    class) with a stand-in that blocks until released, then tears itself
+    down the same way the real method's finally block would - never
+    touches GPIO/ActuatorManager/state machine."""
+    fill_and_measure = controller.fill_and_measure
     started_event = threading.Event()
     release_event = threading.Event()
 
     def fake_run(settings) -> None:
         started_event.set()
         release_event.wait(5.0)
-        with controller._lock:
-            controller.is_running = False
-            controller._teardown_in_progress = False
-            controller.last_message = "Fake run finished."
+        with fill_and_measure._lock:
+            fill_and_measure.is_running = False
+            fill_and_measure._teardown_in_progress = False
+            fill_and_measure._last_message = "Fake run finished."
 
-    controller._run_fill_and_measure = fake_run
+    fill_and_measure._run = fake_run
     return started_event, release_event
 
 
 def _release_and_join(controller, release_event) -> None:
     release_event.set()
-    thread = controller._thread
+    thread = controller.fill_and_measure._thread
     if thread is not None:
         thread.join(timeout=5.0)
 
@@ -99,7 +101,7 @@ def test_running_process_keeps_showing_the_recipe_it_was_actually_started_with(
         assert result["success"], result
 
         assert started_event.wait(2.0), "fake run never started"
-        assert controller.is_running is True
+        assert controller.fill_and_measure.is_running is True
 
         status_while_running = controller.get_status()
         snapshot = status_while_running["recipe_run_config_snapshot"]
@@ -121,7 +123,7 @@ def test_running_process_keeps_showing_the_recipe_it_was_actually_started_with(
 
         _release_and_join(controller, release_event)
 
-        assert controller.is_running is False
+        assert controller.fill_and_measure.is_running is False
 
         status_after_finish = controller.get_status()
         snapshot_after_finish = status_after_finish["recipe_run_config_snapshot"]
@@ -143,7 +145,7 @@ def test_get_status_shows_a_live_preview_when_no_run_has_ever_been_started(
         make_active=True,
     )
 
-    assert controller.is_running is False
+    assert controller.fill_and_measure.is_running is False
     status = controller.get_status()
     assert status["recipe_run_config_snapshot"]["recipe_name"] == "Live Preview Recipe"
     assert status["target_total_liters"] == 22.0
@@ -167,8 +169,8 @@ def test_get_status_returns_to_live_preview_after_a_run_completes(controller, mo
         assert started_event.wait(2.0), "fake run never started"
 
         _release_and_join(controller, release_event)
-        assert controller.is_running is False
-        assert controller._teardown_in_progress is False
+        assert controller.fill_and_measure.is_running is False
+        assert controller.fill_and_measure._teardown_in_progress is False
 
         status = controller.get_status()
         assert status["recipe_run_config_snapshot"]["recipe_name"] == "Recipe A"

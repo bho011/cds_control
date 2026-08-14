@@ -1,7 +1,6 @@
 import asyncio
 import json
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -9,6 +8,7 @@ from typing import Any, Callable
 from domain.recipe_limits import MAX_PROCESS_VOLUME_L
 from domain.recipe_model import RunOptions
 from nicegui_dashboard.recipe_store import build_run_config, get_active_recipe, load_recipe_book
+from process.fill_and_measure import FillAndMeasureController
 from process.manual_drain_jog import ManualDrainJog
 from process.pump_prime import PRIME_CHUNK_ML, PRIME_MAX_ML_PER_PUMP, PumpPrimeController
 from process.tank_cleaning import TankCleaningController
@@ -25,6 +25,14 @@ TANK_CLEANING_SETTINGS_PATH = Path("config/tank_cleaning_settings.json")
 # closes: no_fill_progress_timeout_seconds/min_fill_progress_liters/
 # max_negative_level_drift_liters used to have their own, diverging,
 # hardcoded fallback values in fill_and_measure_state_machine.py).
+#
+# Stays here (not moved into process/fill_and_measure.py): validated
+# against the settings dict BEFORE process.fill_and_measure.FillAndMeasureController.start()
+# is ever called (see start_fill_and_measure() below) - the sub-controller
+# itself only receives an already-loaded, already-validated dict, exactly
+# like TankCleaningController/ManualDrainJog already do. See
+# Modularisierungs-Plan Phase 7 for why this avoids a process -> nicegui_dashboard
+# layering inversion.
 PROCESS_SETTINGS_SCHEMA = [
     SettingField("fill_mode", str, required=False, default="delta", allowed_values={"delta", "absolute"}),
     SettingField("target_add_liters", float, min_value=0.0),
@@ -51,7 +59,7 @@ PROCESS_SETTINGS_SCHEMA = [
 ]
 
 # Every key here is already read via settings.get(key, default) in
-# process/tank_cleaning.py, consistently (unlike process_settings.json,
+# process/tank_cleaning/, consistently (unlike process_settings.json,
 # nothing here is a hard KeyError today) - the schema mirrors those same
 # defaults rather than tightening them, so this only adds an early, clear
 # error for genuinely wrong types/ranges without changing today's behavior.
@@ -99,7 +107,12 @@ TANK_CLEANING_SETTINGS_SCHEMA = [
 
 class ProcessController:
     """
-    Steuert den Fill-and-Measure-Prozess aus NiceGUI heraus.
+    Koordiniert die vier Hintergrundprozesse (Fill-and-Measure, Manual Drain
+    Jog, Tank Cleaning, Prime) aus NiceGUI heraus: exklusiver Start/Stop,
+    Settings-Laden, Rezept-Merge, Status-Aggregation, Emergency Stop/Shutdown.
+    Die eigentliche Prozesslogik jedes einzelnen Prozesses lebt in eigenen
+    Controllern (process/fill_and_measure.py, process/manual_drain_jog.py,
+    process/tank_cleaning/, process/pump_prime.py) - siehe deren Docstrings.
 
     Sicherheitsprinzip:
     - Beim Laden des Dashboards werden keine GPIOs initialisiert.
@@ -117,20 +130,9 @@ class ProcessController:
         self.get_sensor_snapshot = get_sensor_snapshot
 
         self._lock = threading.RLock()
-        self._thread: threading.Thread | None = None
-        self._stop_requested = False
-        self._teardown_in_progress = False
 
-        self.state_machine = None
-        self.actuators = None
-        self.mqtt_publisher = None
-        self.process_logger = None
-
-        self.is_running = False
         self.last_error: str | None = None
         self.last_message: str = "ProcessController initialized."
-        self.last_start_request: str | None = None
-        self.display_state: str | None = "IDLE"
 
         # The full RunConfig (recipe + process_settings.json merge) actually
         # used by the run currently in progress, set once at start time and
@@ -140,6 +142,9 @@ class ProcessController:
         # of the currently active recipe again.
         self._last_run_settings: dict[str, Any] | None = None
 
+        self.fill_and_measure = FillAndMeasureController(
+            get_sensor_snapshot=self.get_sensor_snapshot,
+        )
         self.manual_drain_jog = ManualDrainJog(
             get_sensor_snapshot=self.get_sensor_snapshot,
         )
@@ -164,12 +169,76 @@ class ProcessController:
             settings, TANK_CLEANING_SETTINGS_SCHEMA, str(TANK_CLEANING_SETTINGS_PATH)
         )
 
-    def _thread_is_alive_locked(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+    def _busy_reason(self, starting: str) -> str | None:
+        """
+        The one shared exclusivity check, replacing 8 near-identical
+        copy-pasted boolean blocks (2 each across the four start_*()
+        methods below - a first fail-fast check and a second, race-free
+        check under the same lock right before actually starting).
+
+        `starting` is which process is about to start
+        ("fill_and_measure"/"manual_drain_jog"/"tank_cleaning"/"prime") -
+        each variant below reproduces exactly the set of sibling checks
+        (and exact message) the original code used for that process, which
+        was NOT symmetric: start_tank_cleaning() already checked its own
+        tank_cleaning.is_active() (harmless, always False before it starts,
+        but present), while start_manual_drain_jog()/start_prime() did not
+        check their own is_active() at all. That asymmetry is preserved
+        here rather than "cleaned up", since changing it would be an
+        actual (even if minor) behavior change.
+        """
+        fill_and_measure_busy = self.fill_and_measure.is_running or self.fill_and_measure.is_active()
+
+        if starting == "fill_and_measure":
+            if (
+                fill_and_measure_busy
+                or self.fill_and_measure._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+                or self.prime.is_active()
+            ):
+                return (
+                    "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
+                    "Tank Cleaning, or Prime is still active."
+                )
+            return None
+
+        if starting == "manual_drain_jog":
+            if (
+                fill_and_measure_busy
+                or self.fill_and_measure._teardown_in_progress
+                or self.tank_cleaning.is_active()
+                or self.prime.is_active()
+            ):
+                return "Manual Drain Jog blocked: main process, cleanup, Tank Cleaning, or Prime is active."
+            return None
+
+        if starting == "tank_cleaning":
+            if (
+                fill_and_measure_busy
+                or self.fill_and_measure._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+                or self.prime.is_active()
+            ):
+                return "Tank Cleaning blocked: another process, cleanup, Manual Drain Jog, or Prime is active."
+            return None
+
+        if starting == "prime":
+            if (
+                fill_and_measure_busy
+                or self.fill_and_measure._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+            ):
+                return "Prime blocked: another process, cleanup, Manual Drain Jog, or Tank Cleaning is active."
+            return None
+
+        raise ValueError(f"Unknown process for _busy_reason(): {starting!r}")
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
-            run_in_progress = self.is_running or self._teardown_in_progress
+            run_in_progress = self.fill_and_measure.is_running or self.fill_and_measure._teardown_in_progress
             last_run_settings = self._last_run_settings
 
         if run_in_progress and last_run_settings is not None:
@@ -207,25 +276,16 @@ class ProcessController:
             tank_cleaning_settings_error = str(exc)
 
         with self._lock:
-            state_name = self.display_state
-            error_message = self.last_error
-            start_mixer_liters = None
-            added_liters = None
-
-            if self.state_machine is not None:
-                state_name = self.state_machine.state.name
-                error_message = self.state_machine.error_message or self.last_error
-                start_mixer_liters = self.state_machine.start_mixer_liters
-                added_liters = self.state_machine.last_added_liters
+            fill_and_measure_status = self.fill_and_measure.get_status()
 
             return {
-                "is_running": self.is_running,
-                "thread_alive": self._thread_is_alive_locked(),
-                "teardown_in_progress": self._teardown_in_progress,
-                "state_name": state_name,
-                "error": error_message,
-                "last_message": self.last_message,
-                "last_start_request": self.last_start_request,
+                "is_running": fill_and_measure_status["is_running"],
+                "thread_alive": fill_and_measure_status["thread_alive"],
+                "teardown_in_progress": fill_and_measure_status["teardown_in_progress"],
+                "state_name": fill_and_measure_status["state_name"],
+                "error": fill_and_measure_status["error"],
+                "last_message": fill_and_measure_status["last_message"],
+                "last_start_request": fill_and_measure_status["last_start_request"],
                 "settings_error": settings_error,
 
                 "hardware_execution_enabled": settings.get(
@@ -246,8 +306,8 @@ class ProcessController:
                 ),
                 "recipe_run_config_snapshot": settings.get("recipe_run_config_snapshot"),
 
-                "start_mixer_liters": start_mixer_liters,
-                "added_liters": added_liters,
+                "start_mixer_liters": fill_and_measure_status["start_mixer_liters"],
+                "added_liters": fill_and_measure_status["added_liters"],
                 "manual_drain_jog": self.manual_drain_jog.get_status(),
 
                 "tank_cleaning": self.tank_cleaning.get_status(),
@@ -279,28 +339,15 @@ class ProcessController:
         itself turn anything on.
         """
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.manual_drain_jog.is_active()
-                or self.tank_cleaning.is_active()
-                or self.prime.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
-                    "Tank Cleaning, or Prime is still active.",
-                )
-
-            self.last_start_request = datetime.now().isoformat(timespec="seconds")
-            self.last_error = None
+            busy_message = self._busy_reason("fill_and_measure")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
         try:
             settings = self.load_settings()
         except Exception as exc:
             message = f"Settings konnten nicht geladen werden: {exc}"
-            self._set_error(message)
+            self._set_fill_and_measure_error(message)
             return self._result(False, message)
 
         try:
@@ -309,7 +356,7 @@ class ProcessController:
             settings = validate_settings(settings, PROCESS_SETTINGS_SCHEMA, "RunConfig (Rezept + process_settings.json)")
         except Exception as exc:
             message = f"Rezept konnte nicht angewendet werden: {exc}"
-            self._set_error(message)
+            self._set_fill_and_measure_error(message)
             return self._result(False, message)
 
         hardware_enabled = settings.get("hardware_execution_enabled", False)
@@ -319,59 +366,40 @@ class ProcessController:
                 "Start blockiert: hardware_execution_enabled ist false. "
                 "Es wurden keine GPIOs initialisiert."
             )
-            self._set_error(message)
+            self._set_fill_and_measure_error(message)
             return self._result(False, message)
 
         required_text = settings.get("required_confirmation_text", "confirmed")
 
         if confirmation_text.strip() != required_text:
             message = "Start blockiert: Bestätigungstext ist falsch."
-            self._set_error(message)
+            self._set_fill_and_measure_error(message)
             return self._result(False, message)
 
         snapshot = self.get_sensor_snapshot()
 
         if snapshot is None:
             message = "Start blockiert: Kein aktueller SensorSnapshot vorhanden."
-            self._set_error(message)
+            self._set_fill_and_measure_error(message)
             return self._result(False, message)
 
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.manual_drain_jog.is_active()
-                or self.tank_cleaning.is_active()
-                or self.prime.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
-                    "Tank Cleaning, or Prime is still active.",
-                )
+            # Re-check and start atomically under the same lock: the precondition
+            # check above only fails fast, it does not prevent a concurrent
+            # start call for another process from slipping in between it and
+            # fill_and_measure.start() actually flipping is_active(). This second
+            # check-and-start is the one that actually has to be race-free.
+            busy_message = self._busy_reason("fill_and_measure")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
-            self.is_running = True
-            self._stop_requested = False
-            self._teardown_in_progress = False
-            self.last_error = None
-            self.last_message = "Fill-and-Measure-Prozess wird gestartet."
-            self.display_state = "START_REQUESTED"
-            # Set atomically with is_running=True, under the same lock: this
-            # is the RunConfig actually used to start this run - see
-            # get_status() above, which prefers this over a fresh live
-            # preview for as long as a run is in progress.
             self._last_run_settings = settings
+            result = self.fill_and_measure.start(settings)
 
-            self._thread = threading.Thread(
-                target=self._run_fill_and_measure,
-                args=(settings,),
-                daemon=False,
-                name="cds-fill-and-measure",
-            )
-            self._thread.start()
+            if not result.get("success"):
+                self.last_error = result.get("message")
 
-        return self._result(True, "Fill-and-Measure-Prozess gestartet.")
+        return result
 
     async def emergency_stop(self) -> dict[str, Any]:
         """
@@ -382,18 +410,19 @@ class ProcessController:
         holding self._lock, so get_status()/other dashboard calls are never
         stalled for the duration of an emergency stop - see Phase 1 plan.
         """
-        thread_to_join: threading.Thread | None = None
-
         with self._lock:
-            self._stop_requested = True
             self.last_message = "Emergency Stop requested from NiceGUI."
-            self.display_state = "EMERGENCY_STOP_REQUESTED"
 
             try:
-                if self.state_machine is not None:
-                    self.state_machine.error("Emergency stop requested from NiceGUI.")
+                if self.fill_and_measure.state_machine is not None:
+                    self.fill_and_measure.state_machine.error("Emergency stop requested from NiceGUI.")
             except Exception as exc:
                 self.last_error = f"State machine emergency stop failed: {exc}"
+
+            try:
+                self.fill_and_measure.request_stop(reason="emergency_stop")
+            except Exception as exc:
+                self.last_error = f"Fill-and-Measure emergency stop failed: {exc}"
 
             try:
                 self.manual_drain_jog.request_stop(reason="emergency_stop")
@@ -411,17 +440,16 @@ class ProcessController:
                 self.last_error = f"Prime emergency stop failed: {exc}"
 
             try:
-                if self.actuators is not None:
-                    self.actuators.safe_shutdown_all()
+                if self.fill_and_measure._actuators is not None:
+                    self.fill_and_measure._actuators.safe_shutdown_all()
             except Exception as exc:
                 self.last_error = f"Actuator emergency stop failed: {exc}"
 
-            if self._thread_is_alive_locked():
-                thread_to_join = self._thread
-
         def _wait_for_everything() -> None:
-            if thread_to_join is not None and thread_to_join is not threading.current_thread():
-                thread_to_join.join(timeout=2.0)
+            try:
+                self.fill_and_measure.wait_stopped()
+            except Exception as exc:
+                self.last_error = f"Fill-and-Measure emergency stop failed: {exc}"
 
             try:
                 self.manual_drain_jog.wait_stopped()
@@ -442,7 +470,7 @@ class ProcessController:
 
         with self._lock:
             if (
-                self._thread_is_alive_locked()
+                self.fill_and_measure.is_active()
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
@@ -456,17 +484,9 @@ class ProcessController:
 
     def start_manual_drain_jog(self) -> dict[str, Any]:
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.tank_cleaning.is_active()
-                or self.prime.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Manual Drain Jog blocked: main process, cleanup, Tank Cleaning, or Prime is active.",
-                )
+            busy_message = self._busy_reason("manual_drain_jog")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
         try:
             settings = self.load_settings()
@@ -481,22 +501,13 @@ class ProcessController:
         # manual_drain_jog.start() actually flipping is_active(). This second
         # check-and-start is the one that actually has to be race-free.
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.tank_cleaning.is_active()
-                or self.prime.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Manual Drain Jog blocked: main process, cleanup, Tank Cleaning, or Prime is active.",
-                )
+            busy_message = self._busy_reason("manual_drain_jog")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
             result = self.manual_drain_jog.start(settings)
 
             self.last_message = result.get("message", "Manual Drain Jog start requested.")
-            self.display_state = "MANUAL_DRAIN_JOG" if result.get("success") else self.display_state
             if not result.get("success"):
                 self.last_error = result.get("message")
 
@@ -507,8 +518,6 @@ class ProcessController:
 
         with self._lock:
             self.last_message = result.get("message", "Manual Drain Jog stop requested.")
-            if not self.is_running and not self.manual_drain_jog.is_active():
-                self.display_state = "IDLE"
 
         return result
 
@@ -517,12 +526,13 @@ class ProcessController:
         Für späteren NiceGUI/App-Shutdown:
         Stop anfordern, Aktoren abschalten, Thread kurz joinen.
         """
-        thread_to_join: threading.Thread | None = None
-
         with self._lock:
-            self._stop_requested = True
             self.last_message = "Controller shutdown requested."
-            self.display_state = "SHUTDOWN_REQUESTED"
+
+            try:
+                self.fill_and_measure.request_stop(reason="controller_shutdown")
+            except Exception as exc:
+                self.last_error = f"Fill-and-Measure shutdown failed: {exc}"
 
             try:
                 self.manual_drain_jog.request_stop(reason="controller_shutdown")
@@ -540,16 +550,15 @@ class ProcessController:
                 self.last_error = f"Prime shutdown failed: {exc}"
 
             try:
-                if self.actuators is not None:
-                    self.actuators.safe_shutdown_all()
+                if self.fill_and_measure._actuators is not None:
+                    self.fill_and_measure._actuators.safe_shutdown_all()
             except Exception as exc:
                 self.last_error = f"Actuator shutdown failed: {exc}"
 
-            if self._thread_is_alive_locked():
-                thread_to_join = self._thread
-
-        if thread_to_join is not None and thread_to_join is not threading.current_thread():
-            thread_to_join.join(timeout=timeout_seconds)
+        try:
+            self.fill_and_measure.wait_stopped(timeout_seconds)
+        except Exception as exc:
+            self.last_error = f"Fill-and-Measure shutdown failed: {exc}"
 
         try:
             self.manual_drain_jog.wait_stopped()
@@ -568,7 +577,7 @@ class ProcessController:
 
         with self._lock:
             if (
-                self._thread_is_alive_locked()
+                self.fill_and_measure.is_active()
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
@@ -579,18 +588,9 @@ class ProcessController:
 
     def start_tank_cleaning(self, confirmation_text: str) -> dict[str, Any]:
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.manual_drain_jog.is_active()
-                or self.tank_cleaning.is_active()
-                or self.prime.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Tank Cleaning blocked: another process, cleanup, Manual Drain Jog, or Prime is active.",
-                )
+            busy_message = self._busy_reason("tank_cleaning")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
         try:
             settings = self.load_tank_cleaning_settings()
@@ -612,23 +612,13 @@ class ProcessController:
         # tank_cleaning.start() actually flipping is_active(). This second
         # check-and-start is the one that actually has to be race-free.
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.manual_drain_jog.is_active()
-                or self.tank_cleaning.is_active()
-                or self.prime.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Tank Cleaning blocked: another process, cleanup, Manual Drain Jog, or Prime is active.",
-                )
+            busy_message = self._busy_reason("tank_cleaning")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
             result = self.tank_cleaning.start(settings)
 
             self.last_message = result.get("message", "Tank Cleaning start requested.")
-            self.display_state = "TANK_CLEANING" if result.get("success") else self.display_state
             if not result.get("success"):
                 self.last_error = result.get("message")
 
@@ -639,12 +629,6 @@ class ProcessController:
 
         with self._lock:
             self.last_message = result.get("message", "Tank Cleaning stop requested.")
-            if (
-                not self.is_running
-                and not self.manual_drain_jog.is_active()
-                and not self.tank_cleaning.is_active()
-            ):
-                self.display_state = "IDLE"
 
         return result
 
@@ -656,17 +640,9 @@ class ProcessController:
         PRIME_CHUNK_ML) - die UI darf die 150 ml je Pumpe nicht verändern.
         """
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.manual_drain_jog.is_active()
-                or self.tank_cleaning.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Prime blocked: another process, cleanup, Manual Drain Jog, or Tank Cleaning is active.",
-                )
+            busy_message = self._busy_reason("prime")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
         # Re-check and start atomically under the same lock: the precondition
         # check above only fails fast, it does not prevent a concurrent
@@ -674,17 +650,9 @@ class ProcessController:
         # between it and prime.start() actually flipping is_active(). This
         # second check-and-start is the one that actually has to be race-free.
         with self._lock:
-            if (
-                self.is_running
-                or self._thread_is_alive_locked()
-                or self._teardown_in_progress
-                or self.manual_drain_jog.is_active()
-                or self.tank_cleaning.is_active()
-            ):
-                return self._result(
-                    False,
-                    "Prime blocked: another process, cleanup, Manual Drain Jog, or Tank Cleaning is active.",
-                )
+            busy_message = self._busy_reason("prime")
+            if busy_message is not None:
+                return self._result(False, busy_message)
 
             settings = {
                 "pumps": pumps,
@@ -694,7 +662,6 @@ class ProcessController:
             result = self.prime.start(settings)
 
             self.last_message = result.get("message", "Prime start requested.")
-            self.display_state = "PRIME" if result.get("success") else self.display_state
             if not result.get("success"):
                 self.last_error = result.get("message")
 
@@ -712,24 +679,14 @@ class ProcessController:
 
         with self._lock:
             self.last_message = result.get("message", "Prime stop requested.")
-            if (
-                not self.is_running
-                and not self.manual_drain_jog.is_active()
-                and not self.tank_cleaning.is_active()
-                and not self.prime.is_active()
-            ):
-                self.display_state = "IDLE"
 
         return result
 
     def acknowledge_error(self) -> dict[str, Any]:
         with self._lock:
-            thread_alive = self._thread_is_alive_locked()
-
             if (
-                self.is_running
-                or thread_alive
-                or self._teardown_in_progress
+                self.fill_and_measure.is_active()
+                or self.fill_and_measure._teardown_in_progress
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
             ):
@@ -738,241 +695,34 @@ class ProcessController:
                     "Reset blockiert: Prozess, Hintergrundthread, Cleanup, Tank Cleaning oder Prime läuft noch."
                 )
 
-            self._stop_requested = False
-            self._teardown_in_progress = False
-            self._thread = None
-            self.state_machine = None
-            self.actuators = None
-            self.mqtt_publisher = None
-            self.process_logger = None
-            self.is_running = False
+            result = self.fill_and_measure.acknowledge_error()
             self.last_error = None
-            self.display_state = "IDLE"
             self.last_message = "Reset acknowledged. Controller ready."
 
-        return self._result(True, "Fehler wurde quittiert. Controller ist wieder bereit.")
-
-    def _run_fill_and_measure(self, settings: dict[str, Any]) -> None:
-        from gpio_config import ACTIVE_LOW, OUTPUTS
-        from hardware.actuator_manager import ActuatorManager
-        from services.mqtt_publisher import MqttPublisher
-        from services.process_run_logger import ProcessRunLogger
-        from statemachine.fill_and_measure_state_machine import (
-            FillAndMeasureStateMachine,
-        )
-
-        try:
-            actuators = ActuatorManager(active_low=ACTIVE_LOW)
-
-            with self._lock:
-                self.actuators = actuators
-
-            mixer_refill_pump = actuators.add(
-                name="mixer_refill_pump",
-                gpio_pin=OUTPUTS["mixer_refill_pump"],
-            )
-
-            supply_valve_6 = actuators.add(
-                name="supply_valve_6",
-                gpio_pin=OUTPUTS["test_supply_valve_6"],
-            )
-
-            mixing_circulation_pump = None
-            sensor_circulation_pump = None
-
-            if settings.get("enable_mixing_circulation", False):
-                mixing_circulation_pump = actuators.add(
-                    name="mixing_circulation_pump",
-                    gpio_pin=OUTPUTS["mixing_circulation_pump"],
-                )
-
-            if settings.get("enable_sensor_circulation", False):
-                sensor_circulation_pump = actuators.add(
-                    name="sensor_circulation_pump",
-                    gpio_pin=OUTPUTS["sensor_circulation_pump"],
-                )
-
-            mqtt_publisher = MqttPublisher()
-            process_logger = ProcessRunLogger(process_name="fill_and_measure")
-
-            state_machine = FillAndMeasureStateMachine(
-                mixer_refill_pump=mixer_refill_pump,
-                ro_inlet_valve=supply_valve_6,
-                mixing_circulation_pump=mixing_circulation_pump,
-                sensor_circulation_pump=sensor_circulation_pump,
-                get_sensor_snapshot=self.get_sensor_snapshot,
-                settings=settings,
-            )
-
-            with self._lock:
-                self.mqtt_publisher = mqtt_publisher
-                self.process_logger = process_logger
-                self.state_machine = state_machine
-                self.last_message = "State Machine initialized."
-                self.display_state = "STATE_MACHINE_INITIALIZED"
-
-                if self._stop_requested:
-                    state_machine.error("Stop requested before process start.")
-                    return
-
-                state_machine.start()
-                self._publish_status()
-                self._log_step()
-
-            while True:
-                with self._lock:
-                    if self._stop_requested:
-                        if state_machine.error_message is None:
-                            state_machine.error("Stop requested from NiceGUI.")
-                        else:
-                            state_machine.safe_shutdown()
-                        break
-
-                    if state_machine.is_done:
-                        break
-
-                    state_machine.update()
-                    self._publish_status()
-                    self._log_step()
-
-                time.sleep(0.5)
-
-        except Exception as exc:
-            self._set_error(f"Process failed: {exc}")
-
-            with self._lock:
-                try:
-                    if self.state_machine is not None:
-                        self.state_machine.safe_shutdown()
-                except Exception:
-                    pass
-
-                try:
-                    if self.actuators is not None:
-                        self.actuators.safe_shutdown_all()
-                except Exception:
-                    pass
-
-        finally:
-            with self._lock:
-                self._teardown_in_progress = True
-                self.display_state = "TEARDOWN"
-                self.last_message = "Fill-and-Measure cleanup läuft."
-
-                try:
-                    if self.state_machine is not None:
-                        self.state_machine.safe_shutdown()
-                except Exception:
-                    pass
-
-                try:
-                    if self.actuators is not None:
-                        self.actuators.safe_shutdown_all()
-                except Exception:
-                    pass
-
-                try:
-                    self._publish_status()
-                except Exception:
-                    pass
-
-                try:
-                    self._log_step()
-                except Exception:
-                    pass
-
-                try:
-                    if self.mqtt_publisher is not None:
-                        self.mqtt_publisher.close()
-                except Exception:
-                    pass
-
-                try:
-                    if self.actuators is not None:
-                        self.actuators.close_all()
-                except Exception:
-                    pass
-
-                try:
-                    if self.process_logger is not None:
-                        self.process_logger.close()
-                except Exception:
-                    pass
-
-                self.is_running = False
-                self._stop_requested = False
-                self._teardown_in_progress = False
-                self.last_message = "Fill-and-Measure-Prozess beendet."
-
-                if self.last_error is None and self.state_machine is not None:
-                    if self.state_machine.error_message:
-                        self.last_error = self.state_machine.error_message
-
-    def _publish_status(self) -> None:
-        if self.mqtt_publisher is None or self.state_machine is None:
-            return
-
-        actuator_status = {}
-
-        if self.actuators is not None:
-            actuator_status = self.actuators.status_payload()
-
-        payload = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "source": "python_nicegui",
-            "process_state": self.state_machine.state.name,
-            "actuators": {
-                "mixer_refill_pump": actuator_status.get("mixer_refill_pump", False),
-                "supply_valve_6": actuator_status.get("supply_valve_6", False),
-                "drain_valve_0": actuator_status.get("drain_valve_0", False),
-                "transfer_pump": actuator_status.get("transfer_pump"),
-                "mixing_circulation_pump": actuator_status.get(
-                    "mixing_circulation_pump"
-                ),
-                "sensor_circulation_pump": actuator_status.get(
-                    "sensor_circulation_pump"
-                ),
-            },
-            "error": self.state_machine.error_message,
-        }
-
-        self.mqtt_publisher.publish_json(payload)
-
-    def _log_step(self) -> None:
-        if (
-            self.process_logger is None
-            or self.state_machine is None
-            or self.actuators is None
-        ):
-            return
-
-        snapshot = self.get_sensor_snapshot()
-        actuator_status = self.actuators.status_payload()
-
-        mixer_liters_filtered = None
-
-        if snapshot is not None:
-            try:
-                mixer_liters_filtered = self.state_machine._filtered_mixer_liters(
-                    snapshot
-                )
-            except Exception:
-                mixer_liters_filtered = None
-
-        self.process_logger.write_step(
-            state=self.state_machine.state.name,
-            error=self.state_machine.error_message,
-            snapshot=snapshot,
-            actuator_status=actuator_status,
-            mixer_liters_filtered=mixer_liters_filtered,
-            start_mixer_liters=self.state_machine.start_mixer_liters,
-            added_liters=self.state_machine.last_added_liters,
-        )
+        return result
 
     def _set_error(self, message: str) -> None:
         with self._lock:
             self.last_error = message
             self.last_message = message
+
+    def _set_fill_and_measure_error(self, message: str) -> None:
+        """
+        Facade-level Fill-and-Measure-Fehler (Settings/Rezept/Bestätigung/
+        Sensor-Snapshot, alle VOR dem eigentlichen Start) landen direkt auf
+        dem FillAndMeasureController, nicht auf dem geteilten self.last_error
+        dieser Fassade - get_status() liest error/last_message für den
+        obersten Statusbereich ausschließlich von self.fill_and_measure,
+        siehe dortiges get_status(). Kleine, bewusste Vereinfachung
+        gegenüber dem Vorzustand (in dem ALLE vier Prozesse denselben
+        self.last_error-Slot der Fassade teilten, wodurch z.B. ein
+        Tank-Cleaning-Settings-Fehler theoretisch im Fill-and-Measure-
+        Statusbereich aufgetaucht wäre) - ungetestet, siehe Modularisierungs-
+        Plan Phase 7b.
+        """
+        with self.fill_and_measure._lock:
+            self.fill_and_measure._last_error = message
+            self.fill_and_measure._last_message = message
 
     @staticmethod
     def _result(success: bool, message: str) -> dict[str, Any]:
