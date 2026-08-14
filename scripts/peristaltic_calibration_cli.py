@@ -10,12 +10,31 @@ vollständigen Ablauf und die Sicherheitsregeln.
 
 Unterbefehle: discover, map, check, stop-all, test, calibrate, prime,
 pair-test, all-four-test.
+
+Modularisierungs-Hinweis (Phase 2b): nur 'discover' (scripts/peristaltic/
+discover.py) ist ausgelagert. Alle anderen Unterbefehle - inkl. der
+gemeinsamen Helfer _load_mapping_or_exit/_resolve_controller/_make_client/
+_resolve_firmware_value_or_exit - bleiben bewusst HIER, in dieser Datei,
+zusammen mit den Modul-Konstanten MAPPING_PATH/CALIBRATION_DATA_PATH/
+FIRMWARE_PROFILES_PATH und dem Namen PeristalticSerialClient:
+tests/test_peristaltic_calibration_cli.py lädt dieses Skript per
+importlib direkt (kein normaler Package-Import) und patcht genau diese
+Modul-Attribute auf dem geladenen Modul-Objekt (z.B. "cli.MAPPING_PATH =
+tmp_path / ..."), um cmd_calibrate ohne echte Dateien/Hardware fail-closed
+zu testen. Ein Python-Funktionskörper liest ein globales Attribut immer aus
+dem Modul, in dem er DEFINIERT wurde - nicht aus dem Modul, aus dem er
+später importiert wird. Würde man cmd_calibrate/cmd_map/die genannten
+Helfer in eine Unterdatei verschieben, würde das Patchen dieser Tests
+still und leise wirkungslos werden (sie würden echte Pfade/echte Hardware-
+Objekte sehen statt der Fake-Werte). Ein Umbau auf explizite Parameter
+statt Modul-globaler Werte wäre möglich, ist aber kein reines Verschieben
+mehr und deshalb nicht Teil dieses Schritts - siehe Modularisierungs-Plan,
+Entscheidungsprotokoll Phase 2b.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -25,7 +44,7 @@ from typing import Any, Callable
 
 # Erlaubt den Direktaufruf "python scripts/peristaltic_calibration_cli.py ..."
 # aus dem Projekt-Root heraus - das Skript liegt in scripts/, die Pakete
-# (services/) aber eine Ebene höher.
+# (services/, scripts.peristaltic/) aber eine Ebene höher bzw. daneben.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.peristaltic.calibration import (
@@ -71,6 +90,7 @@ from services.peristaltic.serial_client import (
     PeristalticSerialClient,
 )
 from services.peristaltic.session_log import PeristalticSessionLogger
+from scripts.peristaltic.discover import DiscoveredPort, cmd_discover, discover_ports  # noqa: F401 (DiscoveredPort re-exported for callers/tests)
 
 MAPPING_PATH = Path("config/peristaltic_mapping.json")
 CALIBRATION_DATA_PATH = Path("calibration_data/peristaltic_calibration.json")
@@ -96,56 +116,6 @@ def _iso_now() -> str:
 
 def _prompt(prompt: str, input_func: Callable[[str], str] = input) -> str:
     return input_func(prompt).strip()
-
-
-# --- discover ------------------------------------------------------------------
-
-
-@dataclass
-class DiscoveredPort:
-    device: str
-    by_id_path: str | None
-    description: str
-
-
-def discover_ports() -> list[DiscoveredPort]:
-    """Listet verfügbare serielle Ports auf, bevorzugt stabile
-    /dev/serial/by-id-Pfade. Öffnet keinen Port, bewegt keine Pumpe."""
-    import serial.tools.list_ports
-
-    by_id_map: dict[str, str] = {}
-    by_id_dir = Path("/dev/serial/by-id")
-    if by_id_dir.is_dir():
-        for entry in sorted(by_id_dir.iterdir()):
-            try:
-                resolved = os.path.realpath(str(entry))
-            except OSError:
-                continue
-            by_id_map[resolved] = str(entry)
-
-    discovered: list[DiscoveredPort] = []
-    for info in serial.tools.list_ports.comports():
-        resolved_device = os.path.realpath(info.device)
-        discovered.append(
-            DiscoveredPort(device=info.device, by_id_path=by_id_map.get(resolved_device), description=info.description or "")
-        )
-    return discovered
-
-
-def cmd_discover(args: argparse.Namespace) -> int:
-    ports = discover_ports()
-    if not ports:
-        print("Keine seriellen Ports gefunden.")
-        return 0
-
-    print("Gefundene serielle Ports:")
-    for port in ports:
-        stable = port.by_id_path or "(kein /dev/serial/by-id-Eintrag - Pfad ist NICHT stabil)"
-        print(f"  {port.device}  [{port.description}]")
-        print(f"    stabiler Pfad: {stable}")
-    print()
-    print("Hinweis: 'discover' führt keine Pumpenbewegung aus und öffnet keine Verbindung.")
-    return 0
 
 
 # --- map ------------------------------------------------------------------------
