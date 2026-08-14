@@ -2,7 +2,6 @@ from typing import Any
 
 from nicegui import ui
 
-from domain.recipe_model import RunOptions
 from nicegui_dashboard.cds_controller import CdsController
 from nicegui_dashboard.components.formatting import fmt, percent_to_display
 from nicegui_dashboard.components.status_widgets import create_metric_box, create_tank_gauge
@@ -10,6 +9,11 @@ from nicegui_dashboard.pages.dashboard.maintenance_section import (
     build_maintenance,
     handle_run_preflight,
     make_add_log,
+)
+from nicegui_dashboard.pages.dashboard.process_control_section import (
+    build_process_control,
+    refresh_process_control,
+    wire_process_control_handlers,
 )
 from nicegui_dashboard.pages.dashboard.recipe_section import (
     build_recipe_section,
@@ -161,91 +165,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                     card_widgets, editor_widgets = build_recipe_section(recipe_state)
 
                 with ui.column().classes("gap-5 w-full area-side"):
-                    with ui.card().classes("panel process-control-panel"):
-                        ui.label("Process Control").classes("panel-title")
-                        #ui.label("Start, reset, emergency stop and maintenance actions").classes(
-                        #    "panel-subtitle"
-                        #)
-
-                        ui.label("Safety Confirmation").classes("control-section-title")
-                        confirmation_input = ui.input(
-                            label="Confirmation",
-                            placeholder="type exactly: confirmed",
-                            password=False,
-                        ).classes("control-input w-full")
-
-                        ui.label(
-                            "To start the process, type exactly 'confirmed'. GPIOs are only initialized after valid confirmation and hardware_execution_enabled=true."
-                        ).classes("confirmation-help")
-
-                        run_sensor_circulation_switch = ui.switch(
-                            "Sensor circulation for this run", value=False
-                        ).classes("text-slate-200 mt-2")
-                        ui.label(
-                            "Per-run choice, not saved with the recipe - always resets to off. "
-                            "Drives the real sensor-circulation pump."
-                        ).classes("confirmation-help")
-
-                        with ui.row().classes("w-full gap-3 mt-3"):
-                            start_button = ui.button("Start Process").classes(
-                                "flex-1 font-bold"
-                            ).props("color=positive")
-                            reset_button = ui.button("Reset / Ack").classes(
-                                "flex-1 font-bold"
-                            ).props("color=primary")
-
-                        stop_button = ui.button("Emergency Stop").classes(
-                            "w-full font-bold mt-3"
-                        ).props("color=negative")
-
-                        ui.separator().classes("control-separator")
-
-                        ui.label("Maintenance").classes("control-section-title")
-                        manual_drain_status_label = ui.label("Manual Drain Jog: ready").classes(
-                            "manual-drain-status"
-                        )
-                        manual_drain_progress = ui.linear_progress(value=0.0).classes(
-                            "manual-drain-progress w-full"
-                        )
-                        manual_drain_button = ui.button("Hold to Drain – max. 30 s").classes(
-                            "manual-drain-button w-full font-bold"
-                        ).props("color=warning")
-                        ui.label(
-                            "Press and hold. Release stops immediately. Server-side watchdog stops after 30 seconds."
-                        ).classes("confirmation-help")
-
-                        ui.separator().classes("control-separator")
-
-                        ui.label("Tank Cleaning").classes("control-section-title")
-                        tank_cleaning_status_label = ui.label(
-                            "Tank Cleaning: ready"
-                        ).classes("manual-drain-status")
-                        tank_cleaning_progress = ui.linear_progress(value=0.0).classes(
-                            "manual-drain-progress w-full"
-                        )
-                        with ui.row().classes("w-full gap-3"):
-                            tank_cleaning_start_button = ui.button(
-                                "Start Tank Cleaning"
-                            ).classes("flex-1 font-bold").props("color=info")
-                            tank_cleaning_stop_button = ui.button("Stop").classes(
-                                "flex-1 font-bold"
-                            ).props("color=negative outline")
-                        ui.label(
-                            "Fills the Mixing Tank with RO water (target from settings), "
-                            "circulates for a fixed hold time, then drains automatically. "
-                            "Runs unattended - use Stop or Emergency Stop to abort. "
-                            "Uses the confirmation field above."
-                        ).classes("confirmation-help")
-
-                        hardware_enabled_label = ui.label(
-                            "hardware_execution_enabled: -"
-                        ).classes("warn-text mt-3")
-                        fill_settings_label = ui.label("Water-cycle settings: -").classes(
-                            "text-sm text-slate-300"
-                        )
-                        required_text_label = ui.label(
-                            "required_confirmation_text: -"
-                        ).classes("text-sm text-slate-400")
+                    process_control_widgets = build_process_control()
 
                 with ui.column().classes("gap-5 w-full area-data"):
                     with ui.card().classes("panel sensor-panel"):
@@ -303,110 +223,6 @@ def create_dashboard_page(controller: CdsController) -> None:
     dev_info_button.on_click(maintenance_widgets["dev_info_dialog"].open)
     wire_recipe_handlers(recipe_state, recipe_form_state, card_widgets, editor_widgets, add_log)
     update_recipe_card(recipe_state, card_widgets)
-
-    def handle_start() -> None:
-        control_data = controller.get_process_control_status()
-
-        if not control_data["hardware_execution_enabled"]:
-            message = (
-                "Start blocked: hardware_execution_enabled is false. "
-                "NiceGUI remains in monitor mode."
-            )
-            ui.notify(message, color="negative")
-            add_log(f"[SAFE] {message}")
-            return
-
-        entered_text = (confirmation_input.value or "").strip()
-        required_text = str(control_data["required_confirmation_text"]).strip()
-
-        add_log(
-            f"[DEBUG] Confirmation received: '{entered_text}' | required: '{required_text}'"
-        )
-
-        if entered_text != required_text:
-            message = (
-                "Start blocked: confirmation text is wrong. "
-                f"Entered='{entered_text}' Required='{required_text}'"
-            )
-            ui.notify(message, color="negative")
-            add_log(f"[BLOCKED] {message}")
-            return
-
-        # Raw value, deliberately NOT bool(...)-coerced here: RunOptions is
-        # validated strictly (type(value) is bool) inside
-        # controller.start_fill_and_measure() -> build_run_config() ->
-        # RunConfigSnapshot.build() -> RunOptions.validate(), which already
-        # turns an invalid value into a blocked-start message below - a
-        # pre-emptive bool() would silently mask a bug that produced a
-        # non-bool switch value instead of surfacing it.
-        run_options = RunOptions(sensor_circulation_enabled=run_sensor_circulation_switch.value)
-        result = controller.start_fill_and_measure(entered_text, run_options=run_options)
-
-        if result["success"]:
-            ui.notify(result["message"], color="positive")
-            add_log(f"[OK] {result['message']}")
-            # Reset ONLY after an actually accepted start - a blocked start
-            # (wrong confirmation text, invalid recipe, already running,
-            # validation error) must leave the user's choice untouched so
-            # they can fix the problem and retry without re-selecting it.
-            run_sensor_circulation_switch.value = False
-        else:
-            ui.notify(result["message"], color="negative")
-            add_log(f"[BLOCKED] {result['message']}")
-
-    def handle_reset() -> None:
-        result = controller.acknowledge_error()
-
-        if result["success"]:
-            ui.notify(result["message"], color="positive")
-            add_log(f"[RESET] {result['message']}")
-        else:
-            ui.notify(result["message"], color="negative")
-            add_log(f"[BLOCKED] {result['message']}")
-
-    async def handle_stop() -> None:
-        stop_button.props("loading")
-        stop_button.disable()
-
-        try:
-            result = await controller.emergency_stop()
-
-            if result["success"]:
-                ui.notify(result["message"], color="warning")
-                add_log(f"[STOP] {result['message']}")
-            else:
-                ui.notify(result["message"], color="negative")
-                add_log(f"[ERROR] {result['message']}")
-        finally:
-            stop_button.props(remove="loading")
-            stop_button.enable()
-
-    def handle_manual_drain_start() -> None:
-        result = controller.start_manual_drain_jog()
-
-        if result["success"]:
-            add_log(f"[MANUAL DRAIN] {result['message']}")
-        else:
-            ui.notify(result["message"], color="negative")
-            add_log(f"[BLOCKED] {result['message']}")
-
-    def handle_manual_drain_stop() -> None:
-        result = controller.stop_manual_drain_jog()
-        add_log(f"[MANUAL DRAIN] {result['message']}")
-
-    def handle_tank_cleaning_start() -> None:
-        entered_text = (confirmation_input.value or "").strip()
-        result = controller.start_tank_cleaning(entered_text)
-
-        if result["success"]:
-            add_log(f"[TANK CLEANING] {result['message']}")
-        else:
-            ui.notify(result["message"], color="negative")
-            add_log(f"[BLOCKED] {result['message']}")
-
-    def handle_tank_cleaning_stop() -> None:
-        result = controller.stop_tank_cleaning()
-        add_log(f"[TANK CLEANING] {result['message']}")
 
     def update_prime_pump_checklist() -> None:
         options = describe_pump_options()
@@ -538,11 +354,7 @@ def create_dashboard_page(controller: CdsController) -> None:
         )
         prime_dialog.close()
 
-    start_button.on_click(handle_start)
-    reset_button.on_click(handle_reset)
-    stop_button.on_click(handle_stop)
-    tank_cleaning_start_button.on_click(handle_tank_cleaning_start)
-    tank_cleaning_stop_button.on_click(handle_tank_cleaning_stop)
+    wire_process_control_handlers(controller, process_control_widgets, add_log)
     maintenance_widgets["preflight_button"].on_click(
         lambda: handle_run_preflight(controller, maintenance_widgets["preflight_button"], add_log)
     )
@@ -551,13 +363,6 @@ def create_dashboard_page(controller: CdsController) -> None:
     prime_start_button.on_click(handle_prime_start)
     prime_stop_button.on_click(handle_prime_stop)
     prime_close_button.on_click(handle_prime_close)
-
-    manual_drain_button.on("mousedown", lambda _: handle_manual_drain_start())
-    manual_drain_button.on("mouseup", lambda _: handle_manual_drain_stop())
-    manual_drain_button.on("mouseleave", lambda _: handle_manual_drain_stop())
-    manual_drain_button.on("touchstart", lambda _: handle_manual_drain_start())
-    manual_drain_button.on("touchend", lambda _: handle_manual_drain_stop())
-    manual_drain_button.on("touchcancel", lambda _: handle_manual_drain_stop())
 
     def refresh() -> None:
         sensor_data = controller.get_sensor_status()
@@ -608,105 +413,25 @@ def create_dashboard_page(controller: CdsController) -> None:
 
         hardware_enabled = control_data["hardware_execution_enabled"]
 
-        hardware_enabled_label.set_text(
-            f"hardware_execution_enabled: {hardware_enabled}"
-        )
-
-        required_text_label.set_text(
-            f"required_confirmation_text: {control_data['required_confirmation_text']}"
-        )
-
-        fill_settings_label.set_text(
-            f"mode={control_data['fill_mode']} | "
-            f"target_add={control_data['target_add_liters']} L | "
-            f"target_total={control_data['target_total_liters']} L | "
-            f"max_fill={control_data['max_fill_seconds']} s | "
-            f"mixing_circulation={control_data['enable_mixing_circulation']} | "
-            f"sensor_circulation={control_data['enable_sensor_circulation']}"
-        )
-
-        control_state_label.set_text(
-            "Controller: "
-            f"running={control_data['is_running']} | "
-            f"state={fmt(control_data['state_name'])} | "
-            f"start_mixer={fmt(control_data['start_mixer_liters'], 'L')} | "
-            f"added={fmt(control_data['added_liters'], 'L')}"
-        )
-
-        control_message_label.set_text(str(control_data["last_message"] or "Ready"))
-
-        if control_data["error"]:
-            control_error_label.set_text(f"Controller error: {control_data['error']}")
-        else:
-            control_error_label.set_text("")
-
         manual_drain_status = control_data.get("manual_drain_jog", {}) or {}
         manual_drain_active = bool(manual_drain_status.get("is_active", False))
-        manual_drain_elapsed = float(manual_drain_status.get("elapsed_seconds", 0.0) or 0.0)
-        manual_drain_max = float(manual_drain_status.get("max_seconds", 30.0) or 30.0)
-        manual_drain_progress_value = float(manual_drain_status.get("progress", 0.0) or 0.0)
-
-        manual_drain_progress.set_value(manual_drain_progress_value)
-
-        if manual_drain_active:
-            manual_drain_button.set_text(
-                f"Draining... {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s"
-            )
-            manual_drain_button.classes("manual-drain-active")
-            manual_drain_status_label.set_text(
-                f"Manual Drain Jog: running | {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s"
-            )
-        else:
-            manual_drain_button.set_text("Hold to Drain – max. 30 s")
-            manual_drain_button.classes(remove="manual-drain-active")
-            manual_drain_status_label.set_text(
-                f"Manual Drain Jog: {manual_drain_status.get('last_message', 'ready')}"
-            )
 
         tank_cleaning_status = control_data.get("tank_cleaning", {}) or {}
         tank_cleaning_active = bool(tank_cleaning_status.get("is_active", False))
-        tank_cleaning_phase = tank_cleaning_status.get("phase", "IDLE")
-        tank_cleaning_elapsed = float(tank_cleaning_status.get("phase_elapsed_seconds", 0.0) or 0.0)
-        tank_cleaning_current = tank_cleaning_status.get("current_liters")
-        tank_cleaning_target = (
-            tank_cleaning_status.get("target_liters")
-            or control_data.get("tank_cleaning_target_liters")
-            or 0.0
-        )
-        tank_cleaning_hold = (
-            tank_cleaning_status.get("hold_seconds")
-            or control_data.get("tank_cleaning_hold_seconds")
-            or 0.0
-        )
-        tank_cleaning_hardware_enabled = bool(
-            control_data.get("tank_cleaning_hardware_execution_enabled", False)
-        )
-
-        if tank_cleaning_active:
-            if tank_cleaning_phase == "FILLING" and tank_cleaning_target:
-                progress_value = min(1.0, (tank_cleaning_current or 0.0) / tank_cleaning_target) * 0.4
-            elif tank_cleaning_phase == "HOLDING" and tank_cleaning_hold:
-                progress_value = 0.4 + min(1.0, tank_cleaning_elapsed / tank_cleaning_hold) * 0.3
-            elif tank_cleaning_phase == "DRAINING":
-                progress_value = 0.85
-            else:
-                progress_value = 0.0
-
-            tank_cleaning_progress.set_value(progress_value)
-            tank_cleaning_status_label.set_text(
-                f"Tank Cleaning: {tank_cleaning_phase} | "
-                f"{fmt(tank_cleaning_current, 'L')} | {tank_cleaning_elapsed:.0f}s"
-            )
-        else:
-            tank_cleaning_progress.set_value(
-                1.0 if tank_cleaning_phase == "FINISHED" else 0.0
-            )
-            tank_cleaning_status_label.set_text(
-                f"Tank Cleaning: {tank_cleaning_status.get('last_message', 'ready')}"
-            )
 
         prime_status = control_data.get("prime", {}) or {}
         prime_active = bool(prime_status.get("is_active", False))
+
+        refresh_process_control(
+            process_control_widgets,
+            control_data,
+            manual_drain_status,
+            tank_cleaning_status,
+            manual_drain_active,
+            tank_cleaning_active,
+            prime_active,
+        )
+
         prime_phase = prime_status.get("phase", "IDLE")
         prime_results = prime_status.get("pump_results", []) or []
         prime_plan_total = sum(len(pumps) for pumps in (prime_status.get("pumps_plan", {}) or {}).values())
@@ -741,43 +466,6 @@ def create_dashboard_page(controller: CdsController) -> None:
 
         prime_selection_locked = control_data["is_running"] or manual_drain_active or tank_cleaning_active or prime_active
 
-        if (
-            control_data["is_running"]
-            or manual_drain_active
-            or tank_cleaning_active
-            or prime_active
-            or not hardware_enabled
-        ):
-            start_button.disable()
-        else:
-            start_button.enable()
-
-        if control_data["is_running"] or manual_drain_active or tank_cleaning_active or prime_active:
-            reset_button.disable()
-        else:
-            reset_button.enable()
-
-        if control_data["is_running"] or tank_cleaning_active or prime_active or not hardware_enabled:
-            manual_drain_button.disable()
-        else:
-            manual_drain_button.enable()
-
-        if (
-            control_data["is_running"]
-            or manual_drain_active
-            or tank_cleaning_active
-            or prime_active
-            or not tank_cleaning_hardware_enabled
-        ):
-            tank_cleaning_start_button.disable()
-        else:
-            tank_cleaning_start_button.enable()
-
-        if tank_cleaning_active:
-            tank_cleaning_stop_button.enable()
-        else:
-            tank_cleaning_stop_button.disable()
-
         if prime_selection_locked:
             prime_start_button.disable()
             for row_refs in prime_pump_rows.values():
@@ -790,6 +478,11 @@ def create_dashboard_page(controller: CdsController) -> None:
             prime_stop_button.enable()
         else:
             prime_stop_button.disable()
+
+        manual_drain_elapsed = float(manual_drain_status.get("elapsed_seconds", 0.0) or 0.0)
+        manual_drain_max = float(manual_drain_status.get("max_seconds", 30.0) or 30.0)
+        tank_cleaning_phase = tank_cleaning_status.get("phase", "IDLE")
+        tank_cleaning_elapsed = float(tank_cleaning_status.get("phase_elapsed_seconds", 0.0) or 0.0)
 
         if control_data["is_running"]:
             add_log(f"[STATE] {fmt(process_state)}")
