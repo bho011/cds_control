@@ -1,4 +1,3 @@
-from services.system_config import get_mixer_level_calibration
 import time
 from collections import deque
 from enum import Enum, auto
@@ -6,10 +5,7 @@ from typing import Any, Callable
 
 from process.watchdog import FillWatchdog
 
-# Same calibration mqtt_sensor_bridge.py already applies to volume_liters_calc.
-# Used below only as the fallback for the rare case where the bridge hasn't
-# published a calibrated value yet.
-_SYSTEM_MIXER_CALIBRATION = get_mixer_level_calibration()
+from .sensor_reading import filtered_mixer_liters, mixer_liters_from_snapshot, ro_liters_from_snapshot
 
 
 class FillAndMeasureState(Enum):
@@ -379,59 +375,17 @@ class FillAndMeasureStateMachine:
         return time.monotonic() - self.process_started_at
 
     def _filtered_mixer_liters(self, snapshot: dict[str, Any]) -> float | None:
-        mixer_liters = self._mixer_liters_from_snapshot(snapshot)
-
-        if mixer_liters is None:
-            return None
-
-        self.mixer_liter_history.append(mixer_liters)
-
-        return sum(self.mixer_liter_history) / len(self.mixer_liter_history)
+        """Thin wrapper around statemachine/sensor_reading.py::filtered_mixer_liters -
+        kept as a method because nicegui_dashboard/process_controller.py calls
+        this on a live state_machine instance (self.state_machine._filtered_mixer_liters(...))."""
+        return filtered_mixer_liters(self.mixer_liter_history, snapshot, self.settings)
 
     def _mixer_liters_from_snapshot(self, snapshot: dict[str, Any]) -> float | None:
-        mixer = snapshot.get("mixer") or {}
-
-        # Preferred value:
-        # mqtt_sensor_bridge.py already publishes the calibrated liter value here.
-        value = mixer.get("volume_liters_calc")
-        if value is not None:
-            return float(value)
-
-        # Fallback: raw liter value, calibrated with the same factor/offset
-        # the bridge uses (config/system_config.json), unless a process-
-        # specific override is set in self.settings.
-        raw_liters = mixer.get("volume_liters_raw")
-        if raw_liters is not None:
-            factor = float(
-                self.settings.get("mixer_sensor_liter_factor", _SYSTEM_MIXER_CALIBRATION["factor"])
-            )
-            offset = float(
-                self.settings.get("mixer_sensor_liter_offset", _SYSTEM_MIXER_CALIBRATION["offset"])
-            )
-            return max(0.0, (float(raw_liters) * factor) + offset)
-
-        # Last fallback: percent.
-        # With the current bridge, level_percent is already calibrated.
-        level_percent = mixer.get("level_percent")
-        if level_percent is not None:
-            max_liters = float(self.settings["max_mixer_liters"])
-            return (float(level_percent) / 100.0) * max_liters
-
-        return None
+        return mixer_liters_from_snapshot(snapshot, self.settings)
 
     @staticmethod
     def _ro_liters(snapshot: dict[str, Any]) -> float | None:
-        ro = snapshot.get("ro") or {}
-
-        value = ro.get("volume_liters_calc")
-        if value is not None:
-            return float(value)
-
-        level_percent = ro.get("level_percent")
-        configured_max_liters = ro.get("configured_max_liters")
-
-        if level_percent is not None and configured_max_liters is not None:
-            return (float(level_percent) / 100.0) * float(configured_max_liters)
+        return ro_liters_from_snapshot(snapshot)
 
         return None
 
