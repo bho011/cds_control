@@ -279,7 +279,7 @@ def create_dashboard_page(controller: CdsController) -> None:
 
                     mqtt_bridge_row = create_status_row(
                         "MQTT Sensor Bridge",
-                        "OPC-UA → MQTT → SensorSnapshotReader",
+                        "OPC-UA → MQTT → MqttTopicReader",
                     )
                     process_reader_row = create_status_row(
                         "Process MQTT Reader",

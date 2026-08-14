@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from gpio_config import OUTPUTS, ACTIVE_LOW
 from hardware.actuator_manager import ActuatorManager
+from mqtt_sensor_bridge import MQTT_HOST, MQTT_PORT, MQTT_TOPIC
 from services.mqtt_publisher import MqttPublisher
+from services.mqtt_topic_reader import MqttTopicReader
 from services.process_run_logger import ProcessRunLogger
-from services.sensor_snapshot import SensorSnapshotReader
 
 from .auto_circulation import AutoCirculationController, load_auto_circulation_config
 from .common import (
@@ -72,12 +73,19 @@ def main():
     auto_circulation = None
 
     try:
-        sensor_reader = SensorSnapshotReader()
+        sensor_reader = MqttTopicReader(host=MQTT_HOST, port=MQTT_PORT, topic=MQTT_TOPIC)
         mqtt_publisher = MqttPublisher()
         logger = ProcessRunLogger(process_name="water_cycle")
         actuators = ActuatorManager(active_low=ACTIVE_LOW)
 
         sensor_reader.start()
+        # MqttTopicReader.start() sets get_error() on a connect failure
+        # instead of raising (unlike the old SensorSnapshotReader.start()) -
+        # check explicitly instead of relying on wait_for_first_snapshot()'s
+        # generic timeout message below, see Modularisierungs-Plan Phase 3.
+        if sensor_reader.get_error() is not None:
+            print(f"[ERROR] Sensor-MQTT-Verbindung fehlgeschlagen: {sensor_reader.get_error()}")
+            return
 
         print("[INFO] Warte auf erstes Sensor-MQTT-Payload...")
         if not sensor_reader.wait_for_first_snapshot(timeout_seconds=5.0):

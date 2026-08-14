@@ -2,10 +2,9 @@ import asyncio
 import logging
 from typing import Any
 
-from nicegui_dashboard.mqtt_topic_reader import MqttTopicReader
 from nicegui_dashboard.process_controller import ProcessController
 from preflight_check import run_preflight_report
-from services.sensor_snapshot import SensorSnapshotReader
+from services.mqtt_topic_reader import MqttTopicReader
 from services.system_config import get_mqtt_config
 
 
@@ -28,7 +27,12 @@ class CdsController:
     def __init__(self) -> None:
         self.controller_errors: list[str] = []
 
-        self.sensor_reader = SensorSnapshotReader()
+        self.sensor_reader = MqttTopicReader(
+            host=_SYSTEM_MQTT_CONFIG["host"],
+            port=_SYSTEM_MQTT_CONFIG["port"],
+            topic=_SYSTEM_MQTT_CONFIG["sensor_topic"],
+            max_age_seconds=5.0,
+        )
         self.sensor_started = False
         self.sensor_error: str | None = None
 
@@ -164,9 +168,16 @@ class CdsController:
                 self.sensor_error = f"Sensor read failed: {exc}"
                 self._record_warning(self.sensor_error, exc)
 
+        # MqttTopicReader.start() sets get_error() on a connect failure
+        # instead of raising (see Modularisierungs-Plan Phase 3) - checked
+        # here the same way get_process_status() already checks
+        # process_reader.get_error(), so a connect failure stays visible
+        # instead of silently degrading to "no snapshot, no reason given".
+        reader_error = self.sensor_reader.get_error()
+
         return {
             "sensor_started": self.sensor_started,
-            "sensor_error": self.sensor_error,
+            "sensor_error": reader_error or self.sensor_error,
             "controller_errors": list(self.controller_errors),
             "last_controller_error": (
                 self.controller_errors[-1] if self.controller_errors else None
