@@ -13,6 +13,11 @@ from nicegui_dashboard.components.formatting import (
     yes_no,
 )
 from nicegui_dashboard.components.status_widgets import create_metric_box, create_tank_gauge
+from nicegui_dashboard.pages.dashboard.maintenance_section import (
+    build_maintenance,
+    handle_run_preflight,
+    make_add_log,
+)
 from nicegui_dashboard.pages.dashboard.status_actuators_section import (
     build_status_actuators,
     refresh_status_actuators,
@@ -117,40 +122,7 @@ def create_dashboard_page(controller: CdsController) -> None:
         with ui.element("div").classes("layout-grid w-full"):
             with ui.column().classes("gap-3 w-full area-left"):
                 status_actuators_widgets = build_status_actuators()
-
-                with ui.dialog() as dev_info_dialog, ui.card().classes(
-                    "recipe-dialog-card dev-info-dialog-card"
-                ):
-                    ui.label("Maintenance").classes("panel-title")
-                    ui.label(
-                        "Live status badges and dashboard event log. For development and troubleshooting only."
-                    ).classes("panel-subtitle")
-
-                    with ui.row().classes("gap-2 mt-2"):
-                        ui.label("RASPI LIVE").classes("top-badge badge-green")
-                        ui.label("PYTHON CORE").classes("top-badge badge-blue")
-                        last_update_badge = ui.label("Update: -").classes(
-                            "top-badge badge-orange"
-                        )
-
-                    ui.separator().classes("control-separator")
-                    ui.label("Peristaltikpumpen").classes("control-section-title")
-                    prime_button = ui.button("Prime").props(
-                        "outline color=grey-5 icon=water_drop"
-                    )
-
-                    with ui.row().classes("w-full items-center justify-between mt-4"):
-                        ui.label("Process Log").classes("control-section-title")
-                        preflight_button = ui.button("Run Preflight Check").props(
-                            "outline color=grey-5 icon=fact_check"
-                        )
-
-                    log_box = ui.label("").classes("log-box")
-
-                    with ui.row().classes("w-full justify-end gap-3 mt-3"):
-                        ui.button("Close", on_click=dev_info_dialog.close).props(
-                            "color=grey outline"
-                        )
+                maintenance_widgets = build_maintenance()
 
                 with ui.dialog() as prime_dialog, ui.card().classes(
                     "recipe-dialog-card prime-dialog-card"
@@ -498,16 +470,7 @@ def create_dashboard_page(controller: CdsController) -> None:
                             ro_tank_gauge = create_tank_gauge("RO Tank", max_percent=120)
                             mixer_tank_gauge = create_tank_gauge("Mixing Tank", max_percent=100)
     
-    event_log: list[str] = ["[OK] NiceGUI dashboard loaded."]
-
-    def add_log(message: str) -> None:
-        if not event_log or event_log[-1] != message:
-            event_log.append(message)
-
-        if len(event_log) > 18:
-            del event_log[:-18]
-
-        log_box.set_text("\n".join(event_log))
+    add_log = make_add_log(maintenance_widgets["log_box"])
 
     if recipe_state.get("load_error"):
         add_log(f"[RECIPE] {recipe_state['load_error']}")
@@ -740,7 +703,7 @@ def create_dashboard_page(controller: CdsController) -> None:
         ui.notify(f"Active recipe: {active_recipe.get('recipe_name', '-')}", color="positive")
         add_log(f"[RECIPE] Favorite {slot} activated: {active_recipe.get('recipe_name', '-')}")
 
-    dev_info_button.on_click(dev_info_dialog.open)
+    dev_info_button.on_click(maintenance_widgets["dev_info_dialog"].open)
     edit_recipe_button.on_click(open_recipe_dialog)
     apply_recipe_button.on_click(handle_apply_active_recipe)
     save_recipe_button.on_click(handle_save_recipe)
@@ -992,34 +955,16 @@ def create_dashboard_page(controller: CdsController) -> None:
         )
         prime_dialog.close()
 
-    async def handle_run_preflight() -> None:
-        preflight_button.props("loading")
-        preflight_button.disable()
-        add_log("[PREFLIGHT] Running checks...")
-
-        try:
-            result = await controller.run_preflight_check()
-            add_log("[PREFLIGHT]\n" + "\n".join(result["lines"]))
-
-            notify_color = {
-                "OK": "positive",
-                "WARN": "warning",
-                "FAIL": "negative",
-                "ERROR": "negative",
-            }.get(result["status"], "negative")
-            ui.notify(f"Preflight: {result['status']}", color=notify_color)
-        finally:
-            preflight_button.props(remove="loading")
-            preflight_button.enable()
-
     start_button.on_click(handle_start)
     reset_button.on_click(handle_reset)
     stop_button.on_click(handle_stop)
     tank_cleaning_start_button.on_click(handle_tank_cleaning_start)
     tank_cleaning_stop_button.on_click(handle_tank_cleaning_stop)
-    preflight_button.on_click(handle_run_preflight)
+    maintenance_widgets["preflight_button"].on_click(
+        lambda: handle_run_preflight(controller, maintenance_widgets["preflight_button"], add_log)
+    )
 
-    prime_button.on_click(open_prime_dialog)
+    maintenance_widgets["prime_button"].on_click(open_prime_dialog)
     prime_start_button.on_click(handle_prime_start)
     prime_stop_button.on_click(handle_prime_stop)
     prime_close_button.on_click(handle_prime_close)
@@ -1036,7 +981,7 @@ def create_dashboard_page(controller: CdsController) -> None:
         process_data = controller.get_process_status()
         control_data = controller.get_process_control_status()
 
-        last_update_badge.set_text(f"Update: {fmt(sensor_data['timestamp'])}")
+        maintenance_widgets["last_update_badge"].set_text(f"Update: {fmt(sensor_data['timestamp'])}")
 
         refresh_status_actuators(status_actuators_widgets, sensor_data, process_data)
 
