@@ -1,14 +1,12 @@
-"""Compatibility shim: domain/recipe_limits.py moved into domain/recipe/.
+"""Recipe domain model package - re-exports the public API of its submodules.
 
-# Re-exports: hält "from domain.recipe_limits import Y" nach dem
-# Package-Split funktionsfähig. Der eigentliche Inhalt lebt jetzt in
-# domain/recipe/limits.py, calculations.py, field_validators.py und
-# validation.py (siehe Modularisierungs-Plan, Phase 1).
+# Re-exports: hält "from X import Y" nach dem Package-Split funktionsfähig,
+# hier zusätzlich als bequemer Einstiegspunkt "from domain.recipe import Y".
 """
 
 from __future__ import annotations
 
-from domain.recipe.calculations import (
+from .calculations import (
     compute_available_process_capacity_l,
     compute_base_volume_before_ro_correction_l,
     compute_max_possible_ro_correction_l,
@@ -18,8 +16,8 @@ from domain.recipe.calculations import (
     round_l,
     round_ml,
 )
-from domain.recipe.field_validators import validate_bool_field, validate_numeric_field, validate_strict_int_field
-from domain.recipe.limits import (
+from .field_validators import validate_bool_field, validate_numeric_field, validate_strict_int_field
+from .limits import (
     EC_ADJUSTMENT_FACTOR_ENABLED_MIN,
     EC_ADJUSTMENT_FACTOR_MAX,
     EC_ADJUSTMENT_FACTOR_MIN,
@@ -37,7 +35,8 @@ from domain.recipe.limits import (
     TANK_PHYSICAL_CAPACITY_L,
     RecipeValidationError,
 )
-from domain.recipe.validation import (
+from .models import RECIPE_SCHEMA_VERSION, RecipePreview, RunConfigSnapshot, RunOptions, StoredRecipe
+from .validation import (
     RECIPE_BOOLEAN_FIELDS,
     RECIPE_NUMERIC_FIELDS,
     RECIPE_STRICT_INT_FIELDS,
@@ -78,4 +77,9 @@ __all__ = [
     "RECIPE_BOOLEAN_FIELDS",
     "validate_recipe_field_types",
     "validate_recipe_values",
+    "RECIPE_SCHEMA_VERSION",
+    "StoredRecipe",
+    "RecipePreview",
+    "RunOptions",
+    "RunConfigSnapshot",
 ]
