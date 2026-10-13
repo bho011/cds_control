@@ -4,7 +4,43 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
+from statemachine.sensor_reading import finite_number
+
 from .background_process import BackgroundHardwareProcess
+from .drain_safety import safe_stop_drain, shutdown_errors
+
+# Binding hard maximum runtime of the dead-man jog. Configured values above it
+# (or non-finite, non-positive, non-numeric ones) block the start.
+MANUAL_DRAIN_JOG_MAX_SECONDS = 30.0
+DEFAULT_VALVE_SETTLE_SECONDS = 0.5
+
+
+def parse_jog_timing(settings: dict[str, Any]) -> tuple[float, float] | str:
+    """
+    (max_seconds, valve_settle_seconds) from the settings, or an error string.
+
+    Absent keys use the documented defaults; keys that are present but unusable
+    (NaN/Infinity, bool, string, None, <= 0, > 30 s, negative settle time) are
+    rejected - never silently replaced by a default.
+    """
+    max_seconds = MANUAL_DRAIN_JOG_MAX_SECONDS
+    if "manual_drain_jog_max_seconds" in settings:
+        raw = settings["manual_drain_jog_max_seconds"]
+        max_seconds = finite_number(raw)
+        if max_seconds is None or max_seconds <= 0 or max_seconds > MANUAL_DRAIN_JOG_MAX_SECONDS:
+            return (
+                "manual_drain_jog_max_seconds must be a finite number > 0 and <= "
+                f"{MANUAL_DRAIN_JOG_MAX_SECONDS:.0f}, got {raw!r}."
+            )
+
+    settle = DEFAULT_VALVE_SETTLE_SECONDS
+    if "manual_drain_jog_valve_settle_seconds" in settings:
+        raw = settings["manual_drain_jog_valve_settle_seconds"]
+        settle = finite_number(raw)
+        if settle is None or settle < 0:
+            return f"manual_drain_jog_valve_settle_seconds must be a finite number >= 0, got {raw!r}."
+
+    return max_seconds, settle
 
 
 class ManualDrainJog(BackgroundHardwareProcess):
@@ -31,6 +67,7 @@ class ManualDrainJog(BackgroundHardwareProcess):
         self.max_seconds = float(max_seconds)
         self.valve_settle_seconds = float(valve_settle_seconds)
         self._started_at_monotonic: float | None = None
+        self._cleanup_errors: list[str] = []
 
     def start(self, settings: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -41,11 +78,14 @@ class ManualDrainJog(BackgroundHardwareProcess):
             if block_message is not None:
                 return self._result(False, block_message)
 
-            self.max_seconds = float(settings.get("manual_drain_jog_max_seconds", 30.0))
-            self.valve_settle_seconds = float(settings.get("manual_drain_jog_valve_settle_seconds", 0.5))
+            timing = parse_jog_timing(settings)
+            if isinstance(timing, str):
+                self._last_error = timing
+                self._last_message = f"Manual Drain Jog blocked: {timing}"
+                return self._result(False, self._last_message)
 
-            if self.max_seconds <= 0:
-                self.max_seconds = 30.0
+            self.max_seconds, self.valve_settle_seconds = timing
+            self._cleanup_errors = []
 
             self._last_message = "Manual Drain Jog start requested."
             self._started_at_monotonic = time.monotonic()
@@ -105,6 +145,12 @@ class ManualDrainJog(BackgroundHardwareProcess):
                 self._stop_reason = self._stop_reason or "button_released_before_pump_start"
                 return
 
+            # Re-check immediately before the pump: a stop request must never be
+            # followed by a pump start.
+            if self._stop_event.is_set():
+                self._stop_reason = self._stop_reason or "button_released_before_pump_start"
+                return
+
             transfer_pump.on()
             with self._lock:
                 self._last_message = "Manual Drain running."
@@ -116,7 +162,7 @@ class ManualDrainJog(BackgroundHardwareProcess):
                 if elapsed >= self.max_seconds:
                     with self._lock:
                         self._stop_reason = "max_runtime_reached"
-                        self._last_message = "Manual Drain stopped by 30 s watchdog."
+                        self._last_message = f"Manual Drain stopped by {self.max_seconds:g} s watchdog."
                     break
 
                 time.sleep(0.1)
@@ -128,31 +174,35 @@ class ManualDrainJog(BackgroundHardwareProcess):
                 self._stop_reason = "error"
 
         finally:
-            try:
-                if transfer_pump is not None:
-                    transfer_pump.off()
-            except Exception:
-                pass
+            shutdown_problems: list[str] = []
 
-            try:
-                if drain_valve is not None:
-                    drain_valve.off()
-            except Exception:
-                pass
+            # Stop: transfer pump OFF, then drain valve OFF (both always attempted).
+            # O1: behaviour after a failing pump switch-off is intentionally unchanged.
+            shutdown_problems.extend(safe_stop_drain(transfer_pump, drain_valve).errors)
+            if shutdown_problems:
+                self._record_cleanup_failure(shutdown_problems)  # before the status goes out
 
             self._publish("Manual Drain: Stopped")
 
             try:
                 if self._actuators is not None:
-                    self._actuators.safe_shutdown_all()
-            except Exception:
-                pass
+                    shutdown_problems.extend(shutdown_errors(self._actuators.safe_shutdown_all()))
+            except Exception as exc:
+                shutdown_problems.append(f"safe_shutdown_all failed: {type(exc).__name__}: {exc}")
 
             try:
                 if self._actuators is not None:
-                    self._actuators.close_all()
-            except Exception:
-                pass
+                    shutdown_problems.extend(shutdown_errors(self._actuators.close_all()))
+            except Exception as exc:
+                shutdown_problems.append(f"close_all failed: {type(exc).__name__}: {exc}")
+
+            # Errors first known after the last publish must not stay invisible:
+            # record them and send the final status again.
+            if shutdown_problems:
+                already_published = len(self._cleanup_errors)
+                self._record_cleanup_failure(shutdown_problems)
+                if len(self._cleanup_errors) != already_published:
+                    self._publish("Manual Drain: Stopped")
 
             try:
                 if self._mqtt_publisher is not None:
@@ -163,10 +213,23 @@ class ManualDrainJog(BackgroundHardwareProcess):
             with self._lock:
                 if self._stop_reason is None:
                     self._stop_reason = "button_released"
-                if self._last_error is None and self._last_message == "Manual Drain running.":
+                if not shutdown_problems and self._last_error is None and self._last_message == "Manual Drain running.":
                     self._last_message = "Manual Drain stopped."
                 self._actuators = None
                 self._mqtt_publisher = None
+
+    def _record_cleanup_failure(self, errors: list[str]) -> None:
+        """Record actuator switch-off errors (accumulated); never reported as a successful stop."""
+        with self._lock:
+            for error in errors:
+                if error not in self._cleanup_errors:
+                    self._cleanup_errors.append(error)
+            self._stop_reason = "cleanup_failed"
+            self._last_error = (
+                f"Actuator switch-off failed: {'; '.join(self._cleanup_errors)}. "
+                "Verify transfer pump and drain valve physically."
+            )
+            self._last_message = self._last_error
 
     def _publish(self, process_state: str) -> None:
         if self._mqtt_publisher is None:

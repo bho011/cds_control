@@ -375,14 +375,11 @@ def test_stop_during_drain_loop_leaves_no_actuator_on(monkeypatch) -> None:
     assert drain_valve.is_on is False
 
 
-def test_stop_exactly_during_valve_settle_wait_is_a_known_gap(monkeypatch) -> None:
-    """Charakterisiert (nicht bewertet) einen bestehenden Randfall: wenn der
-    Stop exakt in dem Moment eintrifft, in dem _run_drain() gerade das
-    Drain-Ventil geöffnet hat und auf valve_settle_seconds wartet, gibt es
-    dafür KEIN try/finally - die Funktion kehrt zurück, BEVOR die
-    Transferpumpe je anläuft, aber das Ventil bleibt offen. Dieser Plan
-    ändert daran nichts (reine Charakterisierung); im Abschlussbericht als
-    Befund vermerkt."""
+def test_stop_exactly_during_valve_settle_wait_closes_valve(monkeypatch) -> None:
+    """AP-04A: frueher bekannte Luecke (Ventil blieb offen, wenn der Stop
+    waehrend der valve_settle-Wartezeit eintraf). Das Oeffnen des Ventils liegt
+    jetzt im try/finally von run_drain_phase(): die Pumpe laeuft nie an und das
+    Ventil wird geschlossen."""
     monkeypatch.setattr("hardware.actuator_manager.ActuatorManager", FakeActuatorManager)
     monkeypatch.setattr("services.mqtt_publisher.MqttPublisher", FakeMqttPublisher)
 
@@ -401,8 +398,10 @@ def test_stop_exactly_during_valve_settle_wait_is_a_known_gap(monkeypatch) -> No
     controller.request_stop(reason="stopped_by_user")
     run_drain_phase(controller, settings, actuators, transfer_pump, drain_valve)
 
-    assert transfer_pump.is_on is False  # nie eingeschaltet
-    assert drain_valve.is_on is True  # bekannter Randfall: bleibt offen
+    assert transfer_pump.on_calls == 0  # nie eingeschaltet
+    assert transfer_pump.is_on is False
+    assert drain_valve.on_calls == 1
+    assert drain_valve.is_on is False  # geschlossen
 
 
 # --- kein Aktor bleibt unbeabsichtigt an ---------------------------------------

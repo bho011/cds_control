@@ -41,6 +41,7 @@ from typing import Any, Callable
 from ..auto_circulation import AutoCirculationController, load_auto_circulation_config
 from ..background_process import BackgroundHardwareProcess
 from ..common import mixer_liters_from_snapshot
+from ..drain_safety import shutdown_errors, snapshot_stamp
 from .drain_phase import run_drain_phase
 from .fill_phase import run_fill_phase
 from .hold_phase import run_hold_phase
@@ -77,6 +78,15 @@ class TankCleaningController(BackgroundHardwareProcess):
         self._target_liters: float | None = None
         self._hold_seconds: float | None = None
 
+        # Unfiltered level and bridge timestamp of the most recent
+        # _read_mixer_liters() call (None if that reading was unusable). Read
+        # by the drain sensor watchdog, which must judge raw values.
+        self._last_raw_liters: float | None = None
+        self._last_snapshot_stamp: str | None = None
+
+        self._cleanup_errors: list[str] = []
+        self._cleanup_previous_reason: str | None = None
+
     # ---- public dashboard API -----------------------------------------
 
     def start(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +99,8 @@ class TankCleaningController(BackgroundHardwareProcess):
                 return self._result(False, block_message)
 
             self._current_liters = None
+            self._cleanup_errors = []
+            self._cleanup_previous_reason = None
             self._target_liters = float(settings.get("target_fill_total_liters", 200.0))
             self._hold_seconds = float(settings.get("cleaning_hold_seconds", 300.0))
             self._last_message = "Tank Cleaning start requested."
@@ -134,14 +146,43 @@ class TankCleaningController(BackgroundHardwareProcess):
             self._last_message = message
             self._phase = TankCleaningPhase.ERROR
 
+    def _set_current_liters(self, liters: float | None) -> None:
+        with self._lock:
+            self._current_liters = liters
+
+    def _record_cleanup_failure(self, errors: list[str]) -> None:
+        """Record actuator switch-off errors (accumulated); never reported as a successful stop."""
+        with self._lock:
+            if not self._cleanup_errors:
+                self._cleanup_previous_reason = self._stop_reason
+            for error in errors:
+                if error not in self._cleanup_errors:
+                    self._cleanup_errors.append(error)
+
+            previous = self._cleanup_previous_reason
+            self._stop_reason = "cleanup_failed"
+            self._last_error = (
+                f"Actuator switch-off failed: {'; '.join(self._cleanup_errors)}. "
+                "Verify transfer pump and drain valve physically."
+                + (f" (before: {previous})" if previous not in (None, "cleanup_failed") else "")
+            )
+            self._last_message = self._last_error
+            self._phase = TankCleaningPhase.ERROR
+
     def _read_mixer_liters(self, settings: dict[str, Any], level_history) -> float | None:
+        self._last_raw_liters = None
+        self._last_snapshot_stamp = None
+
         snapshot = self.get_sensor_snapshot()
         if snapshot is None:
             return None
 
+        self._last_snapshot_stamp = snapshot_stamp(snapshot)
         liters = mixer_liters_from_snapshot(snapshot, settings)
         if liters is None:
             return None
+
+        self._last_raw_liters = liters
 
         level_history.append(liters)
         filtered = sum(level_history) / len(level_history)
@@ -202,25 +243,45 @@ class TankCleaningController(BackgroundHardwareProcess):
             self._safe_shutdown_and_publish(actuators)
 
     def _safe_shutdown_and_publish(self, actuators) -> None:
+        shutdown_problems: list[str] = []
+
         try:
             if self._auto_circulation is not None:
                 self._auto_circulation.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            shutdown_problems.append(f"auto circulation stop failed: {type(exc).__name__}: {exc}")
 
         try:
             if actuators is not None:
-                actuators.safe_shutdown_all()
-        except Exception:
-            pass
+                shutdown_problems.extend(shutdown_errors(actuators.safe_shutdown_all()))
+        except Exception as exc:
+            shutdown_problems.append(f"safe_shutdown_all failed: {type(exc).__name__}: {exc}")
 
-        publish_status(self, actuators, "TANK_CLEANING_STOPPED")
+        # Record BEFORE the status goes out, so the published status carries the error.
+        if shutdown_problems:
+            self._record_cleanup_failure(shutdown_problems)
 
         try:
-            if actuators is not None:
-                actuators.close_all()
+            publish_status(self, actuators, "TANK_CLEANING_STOPPED")
         except Exception:
-            pass
+            pass  # status telemetry only; the actuators were already shut down above
+
+        close_problems: list[str] = []
+        try:
+            if actuators is not None:
+                close_problems.extend(shutdown_errors(actuators.close_all()))
+        except Exception as exc:
+            close_problems.append(f"close_all failed: {type(exc).__name__}: {exc}")
+
+        # An error first known after the last publish must not stay invisible:
+        # record it and send the final status again.
+        if close_problems:
+            shutdown_problems.extend(close_problems)
+            self._record_cleanup_failure(shutdown_problems)
+            try:
+                publish_status(self, actuators, "TANK_CLEANING_STOPPED")
+            except Exception:
+                pass
 
         try:
             if self._mqtt_publisher is not None:
