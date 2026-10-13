@@ -14,6 +14,7 @@ this project's existing minimal-dependency style.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -34,6 +35,45 @@ class SettingField:
     # Custom check run after type/range checks pass. Returns an error
     # message to reject the value, or None to accept it.
     validator: Callable[[Any], str | None] | None = None
+
+
+def _coerce_value(spec: SettingField, raw_value: Any) -> Any:
+    """Strict type handling; raises TypeError/ValueError if raw_value is not
+    acceptable for spec.type.
+
+    - bool: only a genuine bool. bool("false") is True, so truthiness
+      coercion must never be used for safety flags such as
+      hardware_execution_enabled; "false"/"true"/0/1/None are rejected.
+    - float/int: a genuine bool is rejected (True would silently become
+      1.0/1), the result must be finite (NaN/Infinity pass every min/max
+      comparison because those comparisons are all False), and an int field
+      must not silently truncate a non-integral number (int(2.7) == 2).
+      Numeric strings such as "20" keep being accepted as before.
+    - everything else (str): unchanged, spec.type(raw_value).
+    """
+    if spec.type is bool:
+        if not isinstance(raw_value, bool):
+            raise TypeError("bool erwartet")
+        return raw_value
+
+    if spec.type in (float, int):
+        if isinstance(raw_value, bool):
+            raise TypeError("bool ist keine Zahl")
+        try:
+            number = float(raw_value)
+        except OverflowError:  # e.g. 10**400 does not fit into a float
+            raise ValueError("Zahl zu gross") from None
+        if not math.isfinite(number):
+            raise ValueError("Zahl muss endlich sein")
+        if spec.type is int:
+            if isinstance(raw_value, int):
+                return raw_value
+            if not number.is_integer():
+                raise ValueError("ganze Zahl erwartet")
+            return int(number)
+        return number
+
+    return spec.type(raw_value)
 
 
 def validate_settings(settings: dict, schema: list[SettingField], file_label: str) -> dict:
@@ -70,7 +110,7 @@ def validate_settings(settings: dict, schema: list[SettingField], file_label: st
             value: Any = raw_value
         else:
             try:
-                value = bool(raw_value) if spec.type is bool else spec.type(raw_value)
+                value = _coerce_value(spec, raw_value)
             except (TypeError, ValueError):
                 errors.append(
                     f"'{spec.name}' muss vom Typ {spec.type.__name__} sein (war: {raw_value!r})."
