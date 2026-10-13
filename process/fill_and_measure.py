@@ -24,6 +24,8 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
+from statemachine.start_validation import validate_fill_start
+
 from .background_process import BackgroundHardwareProcess
 
 
@@ -44,9 +46,40 @@ class FillAndMeasureController(BackgroundHardwareProcess):
 
     def start(self, settings: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
-            block_message = self._check_start_preconditions_locked(settings)
+            # Strikte Vorpruefung (AP-02B): BackgroundHardwareProcess wertet das
+            # Flag per bool(...) aus (bool("false") ist True) und liest den
+            # Sensor ungeschuetzt. Beides wird hier VOR dem Basis-Gate und
+            # ohne Aenderung der Basisklasse abgefangen.
+            if not isinstance(settings, dict):
+                return self._reject_start_locked(
+                    "Start blockiert: Prozesseinstellungen fehlen oder sind ungueltig."
+                )
+            if settings.get("hardware_execution_enabled") is not True:
+                return self._reject_start_locked(
+                    "Start blockiert: hardware_execution_enabled ist nicht strikt true."
+                )
+
+            try:
+                block_message = self._check_start_preconditions_locked(settings)
+            except Exception as exc:
+                return self._reject_start_locked(
+                    f"Start blockiert: Sicherheitspruefung fehlgeschlagen ({type(exc).__name__}: {exc})."
+                )
             if block_message is not None:
                 return self._result(False, block_message)
+
+            # Verbindliche Startfreigabe: vor is_running, Thread und
+            # GPIO-Initialisierung. Ein Fehler beim Sensorlesen blockiert ebenfalls.
+            try:
+                sensor_snapshot = self.get_sensor_snapshot()
+            except Exception as exc:
+                return self._reject_start_locked(
+                    f"Start blockiert: Sensor-Snapshot nicht lesbar ({type(exc).__name__}: {exc})."
+                )
+
+            allowed, validation_message = validate_fill_start(settings, sensor_snapshot)
+            if not allowed:
+                return self._reject_start_locked(validation_message)
 
             self.last_start_request = datetime.now().isoformat(timespec="seconds")
             self.is_running = True
@@ -58,6 +91,12 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             self._begin_run_locked("cds-fill-and-measure", settings)
 
         return self._result(True, "Fill-and-Measure-Prozess gestartet.")
+
+    def _reject_start_locked(self, message: str) -> dict[str, Any]:
+        """Abgelehnter Start: nur Fehler-/Meldungstext, kein Laufstatus. Lock gehalten."""
+        self._last_error = message
+        self._last_message = message
+        return self._result(False, message)
 
     def acknowledge_error(self) -> dict[str, Any]:
         """

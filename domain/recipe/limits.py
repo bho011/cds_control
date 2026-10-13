@@ -29,6 +29,22 @@ TANK_PHYSICAL_CAPACITY_L = 200.0
 MAX_RECIPE_RO_WATER_L = 180.0
 MAX_PROCESS_VOLUME_L = 185.0
 
+# Capacity of the RO supply tank as configured in the sensor bridge
+# (mqtt_sensor_bridge.py::RO_VOLUME_LITERS, published as
+# ro.configured_max_liters). The bridge cannot import this module without
+# changing a running service, so tests/test_start_validation.py asserts that
+# both values stay identical. Used only to cross-check the reported capacity.
+RO_TANK_CAPACITY_L = 1300.0
+
+# "Empty veto" for starting a new recipe run: a mixer reading above this value
+# contradicts the operator's "tank emptied" confirmation and blocks the start.
+# Same value as the existing drain end criterion empty_threshold_liters
+# (config/tank_cleaning_settings.json, config/water_cycle_settings.json).
+# NOT a measured proof of emptiness: the mixer calibration is unreliable
+# below ~10 L, so a reading at or below this value never replaces the
+# operator confirmation.
+MIXER_EMPTY_VETO_L = 0.3
+
 # Legacy Node-RED "EC_config.maxvol3" (RO/dilution correction) - a static cap
 # on any *future* runtime RO correction (not a stored recipe value - see
 # compute_max_possible_ro_correction_l in calculations.py and

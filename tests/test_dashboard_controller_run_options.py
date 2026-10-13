@@ -30,6 +30,15 @@ from nicegui_dashboard.cds_controller import CdsController
 from nicegui_dashboard.pages.dashboard import process_control_section as pcs
 
 
+@pytest.fixture(autouse=True)
+def _plausible_start_sensors(empty_tank):
+    """AP-02B: a recipe start needs a plausible empty-tank reading (simulated)."""
+    return empty_tank
+
+
+CONFIRMED = RunOptions(tank_emptied_confirmed=True)
+
+
 @pytest.fixture
 def cds(controller, monkeypatch, tmp_path):
     monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
@@ -61,10 +70,11 @@ def notifications(monkeypatch):
     return notes
 
 
-def _widgets(text="confirmed", circulation=False):
+def _widgets(text="confirmed", circulation=False, tank_emptied=True):
     return SimpleNamespace(
         confirmation_input=SimpleNamespace(value=text),
         run_sensor_circulation_switch=SimpleNamespace(value=circulation),
+        tank_emptied_confirm_switch=SimpleNamespace(value=tank_emptied),
     )
 
 
@@ -76,7 +86,7 @@ def test_cds_controller_signature_accepts_run_options():
 
 def test_a_enabled_run_option_reaches_process_controller_unchanged(cds, controller, spy):
     started, release = _install_blocking_fake_run(controller)
-    options = RunOptions(sensor_circulation_enabled=True)
+    options = RunOptions(sensor_circulation_enabled=True, tank_emptied_confirmed=True)
     try:
         result = cds.start_fill_and_measure("confirmed", run_options=options)
         assert result["success"], result
@@ -88,12 +98,21 @@ def test_a_enabled_run_option_reaches_process_controller_unchanged(cds, controll
         _release_and_join(controller, release)
 
 
-def test_b_default_call_stays_compatible_and_enables_nothing(cds, controller, spy):
+def test_b_default_call_without_tank_confirmation_is_blocked(cds, controller, spy):
+    result = cds.start_fill_and_measure("confirmed")
+    assert result["success"] is False
+    assert "nicht bestaetigt" in result["message"]
+    assert spy == [None]
+    assert controller.fill_and_measure.is_active() is False
+    assert controller.fill_and_measure.is_running is False
+
+
+def test_b_confirmed_call_without_other_options_enables_nothing(cds, controller, spy):
     started, release = _install_blocking_fake_run(controller)
     try:
-        result = cds.start_fill_and_measure("confirmed")
+        result = cds.start_fill_and_measure("confirmed", run_options=CONFIRMED)
         assert result["success"], result
-        assert spy == [None]
+        assert spy == [CONFIRMED]
         assert started.wait(2.0)
         status = controller.get_status()
         assert status["enable_sensor_circulation"] is False
@@ -110,26 +129,31 @@ def test_c_handle_start_reaches_real_cds_controller_method(cds, controller, spy,
     try:
         pcs.handle_start(cds, widgets, log.append)  # old code raised TypeError here
         assert len(spy) == 1
-        assert spy[0] == RunOptions(sensor_circulation_enabled=circulation)
+        assert spy[0] == RunOptions(sensor_circulation_enabled=circulation, tank_emptied_confirmed=True)
         assert notifications[-1][1] == "positive"
         assert started.wait(2.0)
         assert controller.get_status()["enable_sensor_circulation"] is circulation
         assert widgets.run_sensor_circulation_switch.value is False  # reset after accepted start
+        assert widgets.tank_emptied_confirm_switch.value is False
     finally:
         _release_and_join(controller, release)
 
 
 def test_d_hardware_disabled_blocks_start(cds, controller, spy, notifications):
     controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS, hardware_execution_enabled=False)
-    pcs.handle_start(cds, _widgets(circulation=True), lambda m: None)
+    widgets = _widgets(circulation=True)
+    pcs.handle_start(cds, widgets, lambda m: None)
     assert spy == []
     assert notifications[-1][1] == "negative"
     assert controller.fill_and_measure.is_active() is False
+    assert widgets.tank_emptied_confirm_switch.value is False  # reset even on early block
 
 
 def test_d_hardware_disabled_blocks_direct_controller_call(cds, controller):
     controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS, hardware_execution_enabled=False)
-    result = cds.start_fill_and_measure("confirmed", run_options=RunOptions(sensor_circulation_enabled=True))
+    result = cds.start_fill_and_measure(
+        "confirmed", run_options=RunOptions(sensor_circulation_enabled=True, tank_emptied_confirmed=True)
+    )
     assert result["success"] is False
     assert "hardware_execution_enabled" in result["message"]
 
@@ -140,6 +164,7 @@ def test_d_wrong_confirmation_text_blocks_start(cds, controller, spy, notificati
     assert spy == []
     assert notifications[-1][1] == "negative"
     assert widgets.run_sensor_circulation_switch.value is True  # blocked start keeps the choice
+    assert widgets.tank_emptied_confirm_switch.value is False  # but never the tank confirmation
 
 
 def test_d_wrong_confirmation_text_blocks_direct_controller_call(cds):
@@ -157,6 +182,7 @@ def test_d_missing_sensor_snapshot_blocks_start(cds, controller, spy, notificati
     assert "SensorSnapshot" in notifications[-1][0]
     assert controller.fill_and_measure.is_active() is False
     assert widgets.run_sensor_circulation_switch.value is True
+    assert widgets.tank_emptied_confirm_switch.value is False
 
 
 @pytest.mark.parametrize("bad", ["true", "false", 1, 0, None])

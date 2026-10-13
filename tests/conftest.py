@@ -17,6 +17,7 @@ erben die Isolation ueber tests/_guard_site/sitecustomize.py.
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 from pathlib import Path
@@ -49,7 +50,10 @@ os.environ["PYTHONPATH"] = os.pathsep.join(
 from nicegui_dashboard.process_controller import ProcessController  # noqa: E402
 
 
-FAKE_SENSOR_SNAPSHOT = {"mixer": {"volume_liters_calc": 10.0}, "ro": {"volume_liters_calc": 500.0}}
+FAKE_SENSOR_SNAPSHOT = {
+    "mixer": {"volume_liters_calc": 10.0},
+    "ro": {"volume_liters_calc": 500.0, "configured_max_liters": 1300.0},
+}
 
 FAKE_PROCESS_SETTINGS = {
     "hardware_execution_enabled": True,
@@ -63,9 +67,24 @@ FAKE_TANK_CLEANING_SETTINGS = {
 
 
 @pytest.fixture
-def controller() -> ProcessController:
+def fake_sensors() -> dict:
+    """Per-test copy of the fake sensor snapshot served to the ProcessController
+    (mutate it to simulate other readings without leaking into other tests)."""
+    return copy.deepcopy(FAKE_SENSOR_SNAPSHOT)
+
+
+@pytest.fixture
+def empty_tank(fake_sensors) -> dict:
+    """Simulated, plausible sensor state for a recipe start: mixer reads 0.0 L
+    (the operator confirmation 'tank emptied' still has to be given separately)."""
+    fake_sensors["mixer"]["volume_liters_calc"] = 0.0
+    return fake_sensors
+
+
+@pytest.fixture
+def controller(fake_sensors) -> ProcessController:
     """A ProcessController wired to fake settings/sensor data, no real files touched."""
-    pc = ProcessController(get_sensor_snapshot=lambda: FAKE_SENSOR_SNAPSHOT)
+    pc = ProcessController(get_sensor_snapshot=lambda: fake_sensors)
     pc.load_settings = lambda: dict(FAKE_PROCESS_SETTINGS)
     pc.load_tank_cleaning_settings = lambda: dict(FAKE_TANK_CLEANING_SETTINGS)
     yield pc

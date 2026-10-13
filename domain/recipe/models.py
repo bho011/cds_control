@@ -238,12 +238,18 @@ class RunOptions:
 
     sensor_circulation_enabled: bool = False
     drain_after_process: bool = False
+    # Operator confirmation that the mixing tank was emptied before THIS run.
+    # Valid for exactly one start attempt: never persisted, never taken over
+    # from an earlier run, and not a measurement (see
+    # statemachine/start_validation.py).
+    tank_emptied_confirmed: bool = False
 
     def validate(self) -> list[str]:
         errors: list[str] = []
         for name, value in (
             ("sensor_circulation_enabled", self.sensor_circulation_enabled),
             ("drain_after_process", self.drain_after_process),
+            ("tank_emptied_confirmed", self.tank_emptied_confirmed),
         ):
             message = validate_bool_field(name, value)
             if message:
@@ -300,6 +306,7 @@ class RunConfigSnapshot:
     # From RunOptions - a per-run choice, never from the recipe itself.
     sensor_circulation_enabled: bool
     drain_after_process: bool
+    tank_emptied_confirmed: bool
 
     @classmethod
     def build(
@@ -350,6 +357,7 @@ class RunConfigSnapshot:
             max_possible_ro_correction_l=preview.max_possible_ro_correction_l,
             sensor_circulation_enabled=run_options.sensor_circulation_enabled,
             drain_after_process=run_options.drain_after_process,
+            tank_emptied_confirmed=run_options.tank_emptied_confirmed,
         )
 
     def to_dict(self) -> dict[str, Any]:

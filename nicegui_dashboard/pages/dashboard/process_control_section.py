@@ -15,6 +15,7 @@ from nicegui_dashboard.components.formatting import fmt
 class ProcessControlWidgets:
     confirmation_input: ui.input
     run_sensor_circulation_switch: ui.switch
+    tank_emptied_confirm_switch: ui.switch
     start_button: ui.button
     reset_button: ui.button
     stop_button: ui.button
@@ -54,6 +55,16 @@ def build_process_control() -> ProcessControlWidgets:
         ui.label(
             "Per-run choice, not saved with the recipe - always resets to off. "
             "Drives the real sensor-circulation pump."
+        ).classes("confirmation-help")
+
+        tank_emptied_confirm_switch = ui.switch(
+            "Ich bestätige, dass der Mischtank für diesen Rezeptlauf entleert wurde.",
+            value=False,
+        ).classes("text-slate-200 mt-2")
+        ui.label(
+            "Eigene Betreiberbestätigung, keine automatische Sensormessung: Der Füllstandssensor "
+            "kann Leere unterhalb von ca. 10 L nicht nachweisen. Gilt nur für den nächsten "
+            "Startversuch und wird nach jedem Versuch (auch nach einem blockierten) zurückgesetzt."
         ).classes("confirmation-help")
 
         with ui.row().classes("w-full gap-3 mt-3"):
@@ -120,6 +131,7 @@ def build_process_control() -> ProcessControlWidgets:
     return ProcessControlWidgets(
         confirmation_input=confirmation_input,
         run_sensor_circulation_switch=run_sensor_circulation_switch,
+        tank_emptied_confirm_switch=tank_emptied_confirm_switch,
         start_button=start_button,
         reset_button=reset_button,
         stop_button=stop_button,
@@ -137,6 +149,13 @@ def build_process_control() -> ProcessControlWidgets:
 
 
 def handle_start(controller: Any, widgets: ProcessControlWidgets, add_log: Callable[[str], None]) -> None:
+    # The tank-emptied confirmation is valid for this single start attempt
+    # only: read the raw value once and reset the switch immediately, so every
+    # path below (early dashboard block, controller block, success, exception)
+    # leaves it off. Unlike the circulation switch it is never kept for a retry.
+    tank_emptied_confirmed = widgets.tank_emptied_confirm_switch.value
+    widgets.tank_emptied_confirm_switch.value = False
+
     control_data = controller.get_process_control_status()
 
     if not control_data["hardware_execution_enabled"]:
@@ -171,7 +190,10 @@ def handle_start(controller: Any, widgets: ProcessControlWidgets, add_log: Calla
     # turns an invalid value into a blocked-start message below - a
     # pre-emptive bool() would silently mask a bug that produced a
     # non-bool switch value instead of surfacing it.
-    run_options = RunOptions(sensor_circulation_enabled=widgets.run_sensor_circulation_switch.value)
+    run_options = RunOptions(
+        sensor_circulation_enabled=widgets.run_sensor_circulation_switch.value,
+        tank_emptied_confirmed=tank_emptied_confirmed,
+    )
     result = controller.start_fill_and_measure(entered_text, run_options=run_options)
 
     if result["success"]:

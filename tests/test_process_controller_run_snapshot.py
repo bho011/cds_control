@@ -76,7 +76,7 @@ def _release_and_join(controller, release_event) -> None:
 
 
 def test_running_process_keeps_showing_the_recipe_it_was_actually_started_with(
-    controller, monkeypatch, tmp_path
+    controller, monkeypatch, tmp_path, empty_tank
 ):
     monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
     controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS)
@@ -96,7 +96,7 @@ def test_running_process_keeps_showing_the_recipe_it_was_actually_started_with(
 
     try:
         result = controller.start_fill_and_measure(
-            "confirmed", run_options=RunOptions(sensor_circulation_enabled=True)
+            "confirmed", run_options=RunOptions(sensor_circulation_enabled=True, tank_emptied_confirmed=True)
         )
         assert result["success"], result
 
@@ -151,7 +151,7 @@ def test_get_status_shows_a_live_preview_when_no_run_has_ever_been_started(
     assert status["target_total_liters"] == 22.0
 
 
-def test_get_status_returns_to_live_preview_after_a_run_completes(controller, monkeypatch, tmp_path):
+def test_get_status_returns_to_live_preview_after_a_run_completes(controller, monkeypatch, tmp_path, empty_tank):
     monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
     controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS)
 
@@ -164,7 +164,7 @@ def test_get_status_returns_to_live_preview_after_a_run_completes(controller, mo
     started_event, release_event = _install_blocking_fake_run(controller)
 
     try:
-        result = controller.start_fill_and_measure("confirmed")
+        result = controller.start_fill_and_measure("confirmed", run_options=RunOptions(tank_emptied_confirmed=True))
         assert result["success"], result
         assert started_event.wait(2.0), "fake run never started"
 
