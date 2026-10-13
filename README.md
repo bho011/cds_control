@@ -2,11 +2,47 @@
 
 *This file is bilingual: English first, [German version below](#central-dosing-system--python-control-layer-deutsch). / Diese Datei ist zweisprachig: Englisch zuerst, deutsche Version weiter unten.*
 
-Status: 2026-07-17
+Status: 2026-10-14 (see [Development status](#development-status-2026-10-14))
 Project status: development and validation phase
 Goal: safe, traceable, and modularly extensible control logic for the water-based CDS process.
 
 > **Safety status in one sentence:** Hardware execution is disabled by default in this repository (`hardware_execution_enabled: false`); of the 15 configured GPIO outputs, only **three** are currently validated on the real physical system (see Section 4). All other outputs are software-addressable but without confirmed real-world effect.
+
+---
+
+## Development status (2026-10-14)
+
+Basis: `main` and `origin/main` (GitHub, verified with `git ls-remote origin` on 2026-10-14) both at `f463a0f`. Detailed results: Sections 21–24.
+
+| Category | Content |
+|---|---|
+| Implemented, integrated into `main`, and published on GitHub (`f463a0f`) | AP-00 to AP-04 (up to `6125b1f`): test isolation, run-option forwarding, sensor/settings hardening, recipe start validation, fill safety, shared sensor readings and hardware start gates, drain safety, Water Cycle completion |
+| AP-05 Stage 1 (integrated, published) | Pure domain logic `domain/recipe/nutrient_plan.py` and `domain/recipe/volume_balance.py` (commit `f463a0f`, fully integrated into `main` and published on GitHub). Integrated as code only: no process, hardware, or MQTT integration |
+| Verified in software | Hardware-free test suite on `main` (`f463a0f`): 1874 passed, **1 failed** (known Recipe Editor test, Section 23); AP-05 Stage 1: 565 tests passed (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
+| **Not** validated on hardware | No hardware validation is documented for AP-00 to AP-05: no MCU_B dosing, no chemical dosing, no real run of the hardened fill/drain/Water Cycle paths. Only the three outputs in Section 4 are confirmed (older validation) |
+| Planned next steps | all pending: AP-05 Stages 2–6 (Stage 2: hardware/profile gates, see Section 22), AP-06 to AP-09 (table below) |
+
+### Work-package overview AP-00 to AP-09
+
+The assignment of changes to work packages (AP-00 to AP-05) is taken from branch names (`feature/ap0x-*`) and the AP references in module and test docstrings; commit titles alone were not used. The roadmap AP-06 to AP-09 is the project's defined scope; no code for it exists yet and nothing in it is implemented.
+
+| AP | Goal | Realized scope | Status | Main components | Open items |
+|---|---|---|---|---|---|
+| AP-00 | Hardware-free tests | Central fail-closed guard blocks GPIO, serial, lock file, writes to `logs/ config/ recipes/ calibration_data/`, and network connects during `pytest` | integrated | `tests/_hardware_guard.py`, `tests/_guard_site/sitecustomize.py`, `tests/conftest.py` | Guard reporting gaps for never-awaited child processes (documented in the module) |
+| AP-01 | Dashboard run options | `RunOptions` chosen in the dashboard are forwarded to the process controller | integrated | `nicegui_dashboard/cds_controller.py` | none known |
+| AP-02A | Sensor and settings hardening | Strict number reading (no bool/NaN/inf/overflow, no masking by fallback), stricter settings validation | integrated | `statemachine/sensor_reading.py`, `services/settings_validation.py` | none known |
+| AP-02B | Safe recipe start | Pure start release for recipe runs (RO sufficient, mixer plausible, tank-empty confirmation with mixer veto) | integrated | `statemachine/start_validation.py`, `process/fill_and_measure.py` | Operator confirmation "tank empty" is not a measurement |
+| AP-02C | Fill safety | Fresh-measurement check right before pump start, runtime RO/mixer checks, pump-off-first target confirmation, final error latch | integrated | `statemachine/fill_and_measure_state_machine.py`, `services/sensor_stamp.py`, `services/mqtt_topic_reader.py` | Freshness window 5 s is not hardware-validated |
+| AP-03A | Shared sensor readings | Strict mixer reading in `process/common.py`; invalid values do not enter the history | integrated | `process/common.py` | none known |
+| AP-03B | Hardware start gates | `BackgroundHardwareProcess` starts only with `hardware_execution_enabled is True`; sensor read errors block in a controlled way | integrated | `process/background_process.py` | none known |
+| AP-04A | Drain safety | One sensor watchdog and one stop sequence for the three drain paths | integrated | `process/drain_safety.py`, `process/drain.py`, `process/manual_drain_jog.py`, `process/tank_cleaning/` | O1, provisional parameters (Section 24) |
+| AP-04 | Water Cycle completion | Final outcome and cleanup are collected; final MQTT statuses derived only after cleanup | integrated | `process/water_cycle.py` | No guaranteed MQTT delivery |
+| AP-05 Stage 1 | Dosing plan and volume accounting (pure logic) | Immutable plan for MCU_B, µL arithmetic, conservative volume accounting | integrated, published | `domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py` | Not wired into any process |
+| AP-05 Stages 2–6 | Further MCU_B dosing steps (Stage 2 = hardware/profile gates, per module docstring); Stages 3–6 are not detailed in the repository | AP-specific implementation not yet started | pending | – | MCU_B identity, calibration, profile, firmware gates |
+| AP-06 | EC control and correction logic | AP-specific implementation not yet started | pending | – | Whole scope |
+| AP-07 | MCU_A integration and pH control | AP-specific implementation not yet started | pending | – | Whole scope |
+| AP-08 | Transfer into the target container | AP-specific implementation not yet started | pending | – | Whole scope |
+| AP-09 | Overall integration, hardware validation, and system tests | AP-specific implementation not yet started | pending | – | All hardware validation items (Section 24) |
 
 ---
 
@@ -18,7 +54,7 @@ This repository contains the Python implementation of the control and visualizat
 RO water → Mixing Tank → Sensor box circulation → Drain
 ```
 
-Chemical dosing and peristaltic pump control are not yet active. These functions will be added after further hardware, sensor, and safety validation. Recipe execution is so far only meaningfully connected to the actual process start for the pure water target value (fill volume, sensor circulation) — see Section 15. The EC/pH/dosing values in the recipe remain purely descriptive, with no consumer in the code.
+Chemical dosing and peristaltic pump control are not yet active. These functions will be added after further hardware, sensor, and safety validation. Recipe execution is so far only meaningfully connected to the actual process start for the pure water target value (fill volume, sensor circulation) — see Section 15. The EC/pH/dosing values in the recipe remain purely descriptive, with no consumer in the process code. Since AP-05 Stage 1 a pure, hardware-free dosing plan and volume accounting exist as domain logic (Section 22); they are not connected to any process or hardware.
 
 The control logic was migrated from individual test scripts into a modular structure. `main.py` is the central entry point for preflight, water cycle, dashboard, calibration, and status checks.
 
@@ -77,8 +113,10 @@ Currently implemented:
 - typed recipe/dosing domain model (`domain/recipe_limits.py`, `domain/recipe_model.py`): central 180 L/185 L tank-volume limits, EC nutrient Solution A/B split (B always calculated as `100 - A`), an immutable, validated `RunConfigSnapshot`, and a `recipes/dashboard_recipes.json` schema migration with atomic/locked writes — see Section 15 and `docs/RECIPE_AND_DOSING_RULES.md`
 - recipe/RunOptions data model hardened: `StoredRecipe` now holds only fachliche Rezeptwerte (a fixed RO correction is no longer a recipe value at all), per-run-only choices (sensor circulation, drain after process) moved to a separate `RunOptions` type that is never persisted and always defaults to off, strict `type(value) is bool`/finite-number/non-integral-float validation closes several silent-type-coercion gaps, recipe-book metadata (`schema_version`/`active_slot`/`favorite.slot`) is now fail-closed validated, and every operational fill target is capped at 185 L (no more 200 L defaults) — see Section 15 and `docs/RECIPE_AND_DOSING_RULES.md`
 - favorites made genuinely persistent and interactive: F1/F2/F3 are now real buttons that activate a favorite slot (never start a process, never touch hardware), the recipe-book metadata contract is fully fail-closed (unknown future schema versions, duplicate slots, out-of-range slots are rejected instead of silently self-healed), Addon 1/Addon 2 were removed from the active recipe model entirely (the real CDS process only has Nutrient Solution A/B — old values are kept for audit under `legacy_recipe_values`), and a running process's status now keeps showing the recipe it was actually started with even if a different favorite is activated while it runs — see Section 15 and `docs/RECIPE_AND_DOSING_RULES.md`
+- hardware-free test isolation (AP-00), strict sensor/settings handling and recipe start validation (AP-02A/B), fill runtime safety (AP-02C), shared sensor readings and strict hardware start gates (AP-03), drain safety for all three drain paths (AP-04A), and Water Cycle outcome/cleanup handling with final MQTT status (AP-04) — software only, see Section 21
+- pure domain logic for an immutable MCU_B nutrient dosing plan and a conservative volume balance (`domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py`, AP-05 Stage 1, integrated in `main` and published on GitHub) — no process, dashboard, or hardware integration, see Section 22
 
-The modular Water Cycle starts correctly on the software side. A full real hardware run after the latest refactor is still outstanding. Manual Drain Jog and Tank Cleaning are likewise not yet validated on real hardware (see Section 17).
+The modular Water Cycle starts correctly on the software side. A full real hardware run after the latest refactor and after the AP-02 to AP-04 hardening is still outstanding. Manual Drain Jog and Tank Cleaning are likewise not yet validated on real hardware (see Sections 17 and 24).
 
 ---
 
@@ -99,6 +137,8 @@ All other entries in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing
 - **Tank Cleaning** additionally drives `mixing_circulation_pump` and `sensor_circulation_pump` – also without a real hardware test yet. The settings file (`config/tank_cleaning_settings.json`) is therefore deliberately set to a reduced **40-liter test volume** instead of the later 200-liter target, so the first hardware test can be run without major water consumption/risk.
 
 Before a new output is used productively: switch it on the real system, confirm the effect visually/physically, only then include it in an automated sequence.
+
+The AP-00 to AP-05 changes (Sections 21 and 22) did not change this table: they are software-verified only. The MCU_B peristaltic outputs (P1–P4) are not part of it and are not released for dosing (Section 24).
 
 ---
 
@@ -142,17 +182,20 @@ cds_control/
 │   ├── process_settings.json
 │   └── tank_cleaning_settings.json
 ├── domain/
-│   ├── recipe/                       # limits.py, calculations.py, field_validators.py, validation.py, models.py
+│   ├── recipe/                       # limits.py, calculations.py, field_validators.py, validation.py, models.py,
+│   │                                 # nutrient_plan.py, volume_balance.py (AP-05 Stage 1, pure logic, not wired in)
 │   ├── recipe_limits.py              # compat wrapper -> domain/recipe/
 │   └── recipe_model.py               # compat wrapper -> domain/recipe/models.py
 ├── statemachine/
 │   ├── fill_and_measure_state_machine.py
-│   └── sensor_reading.py             # pure mixer/RO liter fallback functions
+│   ├── sensor_reading.py             # strict mixer/RO liter reading (AP-02A)
+│   └── start_validation.py           # pure recipe start release / runtime check (AP-02B/C)
 ├── process/
 │   ├── common.py
 │   ├── refill.py
 │   ├── sensor_circulation.py
 │   ├── drain.py
+│   ├── drain_safety.py               # drain sensor watchdog, safe stop sequence (AP-04A)
 │   ├── water_cycle.py
 │   ├── auto_circulation.py
 │   ├── manual_drain_jog.py
@@ -166,6 +209,7 @@ cds_control/
 │   ├── mqtt_publisher.py
 │   ├── mqtt_topic_reader.py          # unified MQTT single-topic reader
 │   ├── process_run_logger.py
+│   ├── sensor_stamp.py               # measurement identity for freshness checks (AP-02C)
 │   ├── settings_validation.py
 │   └── peristaltic/                  # protocol/safety/models/firmware_profiles/prime/session_log/
 │                                      # serial_client/dose_limits/parallel_pump_safety/calibration_*.py
@@ -193,7 +237,7 @@ cds_control/
 │   └── manual_tests/
 ├── recipes/
 │   └── dashboard_recipes.json
-├── tests/
+├── tests/                            # incl. _hardware_guard.py, _guard_site/ (AP-00 hardware isolation)
 ├── logs/
 ├── calibration_data/
 ├── mqtt_sensor_bridge.py
@@ -256,7 +300,7 @@ Further settings files, one per process:
 - Every process settings file (Water Cycle, Fill-and-Measure, calibration, Tank Cleaning) has its **own** `hardware_execution_enabled` switch and confirmation text.
 - `python main.py preflight` must succeed before every hardware run.
 - Node-RED must not block any GPIOs that Python needs for the CDS process.
-- Chemical dosing and peristaltic pump control are not currently active.
+- Chemical dosing and peristaltic pump control are not currently active. The AP-05 Stage 1 dosing plan is pure logic and releases nothing.
 - Sensor values are not blindly trusted as ground truth (filtering, plausibility checks, confirm samples).
 - Actuators are switched off via central safe-shutdown paths (`ActuatorManager.safe_shutdown_all()`); errors during shutdown are logged, not swallowed.
 - Manual calibration drain functions have a safety timeout (`calibration_drain_max_seconds`).
@@ -265,6 +309,8 @@ Further settings files, one per process:
 - Start/stop of Fill-and-Measure, Manual Drain Jog, and Tank Cleaning are atomically guarded by the internal `ProcessController` lock: two concurrent start calls (a dashboard click plus a script started in parallel) can no longer both get through — previously a TOCTOU race between the state check and the actual start.
 - Additionally, a cross-process file lock (`fcntl.flock`, `hardware/actuator_manager.py`, `logs/.hardware.lock`) prevents parallel hardware access by two independent Python *processes* (not just threads within the same process) — e.g. the dashboard plus a directly started calibration or safe-drain script.
 - Emergency Stop is implemented asynchronously (`ProcessController.emergency_stop()`): signalling (state-machine abort, `request_stop()`, actuator shutdown) happens immediately under the lock; waiting for the thread join then runs outside the lock in a worker thread — the dashboard stays responsive for other connected clients in the meantime, instead of freezing for up to ~7s.
+- Since AP-03B, hardware start is released only for `hardware_execution_enabled is True` (strict type, no coercion). Since AP-02B/C, recipe runs need a fail-closed start release and fresh sensor measurements; since AP-04A, all drain paths are bounded by a sensor watchdog; since AP-04, the Water Cycle reports cleanup errors instead of success (Section 21).
+- Switch-off is a software call without physical feedback; this limit is documented, not solved (Section 24).
 
 Default state in the configs:
 
@@ -316,9 +362,12 @@ pytest
 
 Covers locking (`nicegui_dashboard/process_controller.py`, the cross-process
 lock in `hardware/actuator_manager.py`), watchdog/progress checks
-(`process/watchdog.py`), and settings validation (`services/settings_validation.py`,
-including all four real `config/*.json` files) — no GPIO/OPC-UA is touched in
-the process. `requirements-dev.txt` (just `pytest` on top of
+(`process/watchdog.py`), settings validation (`services/settings_validation.py`,
+including all four real `config/*.json` files), and since AP-00 to AP-05 also
+start validation, fill/drain safety, Water Cycle outcome, and the dosing plan/volume
+logic. A central guard (`tests/_hardware_guard.py`) blocks GPIO, serial, network, and
+writes to production data directories, so no GPIO/OPC-UA/MQTT is touched in the
+process. Current result and known failures: Section 23. `requirements-dev.txt` (just `pytest` on top of
 `requirements.txt`) is deliberately kept separate from the production
 `requirements.txt`.
 
@@ -365,7 +414,7 @@ The Water Cycle automatically runs preflight first; if it fails, the process doe
 6. safe shutdown
 ```
 
-> The modular Water Cycle still needs one full real hardware test after the latest refactor.
+> The modular Water Cycle still needs one full real hardware test after the latest refactor. Since AP-04 it collects the final outcome and cleanup errors and sends `WATER_CYCLE_FINISHED` only after a successful cleanup (Section 21); MQTT delivery of status messages is not guaranteed.
 
 ---
 
@@ -463,7 +512,7 @@ The Recipe Editor is organized into four sections: Grunddaten (name/tank/RO wate
 
 Tank volume limits are centrally defined and enforced: `target_ro_water_l` (RO water only) is capped at 180 L, the estimated recipe volume (RO water + calculated EC nutrients) at 185 L. The 200 L physical tank rim capacity is documented but never used as a usable limit — every operational fill target across `config/process_settings.json`/`config/water_cycle_settings.json`/`config/tank_cleaning_settings.json` is now schema-capped at 185 L too. Invalid values are rejected with a concrete message on save, never silently clamped. A fixed RO correction is **not** a recipe value at all and is **not yet implemented** as a real feature — the editor shows a purely informational estimate of how much correction capacity would technically remain (`max_possible_ro_correction_l`); a real, demand-driven EC correction is a planned future feature only.
 
-EC nutrient dosing uses a single total dose (`nutrients_ml_per_100_l`) split between Nutrient Solution A and B by a percentage (`nutrient_a_percent`, default 50 %); B is always calculated as `100 - A`, never edited independently. `nutrient_dosing_enabled` (default off) gates whether a dose is actually calculated anywhere — while off, every calculated amount is forced to 0 ml, including in the estimated volume. A recipe still flagged for legacy review (`legacy_dosing_needs_review`) cannot enable dosing until the editor's "Legacy review completed" switch explicitly clears that flag. The EC setpoint field uses a `0.1` stepper as a UI convenience only — arbitrary in-range values (e.g. `2.35`) are accepted and stored unchanged. No claim is made that real chemical dosing has been tested — this logic is fully implemented and unit-tested as pure domain logic, but no real peristaltic pump is connected yet (see below).
+EC nutrient dosing uses a single total dose (`nutrients_ml_per_100_l`) split between Nutrient Solution A and B by a percentage (`nutrient_a_percent`, default 50 %); B is always calculated as `100 - A`, never edited independently. `nutrient_dosing_enabled` (default off) gates whether a dose is actually calculated anywhere — while off, every calculated amount is forced to 0 ml, including in the estimated volume. A recipe still flagged for legacy review (`legacy_dosing_needs_review`) cannot enable dosing until the editor's "Legacy review completed" switch explicitly clears that flag. The EC setpoint field uses a stepper (`0.05` in `nicegui_dashboard/pages/dashboard/recipe_section.py`; a test still expects `0.1`, see Section 23) as a UI convenience only — arbitrary in-range values (e.g. `2.35`) are accepted and stored unchanged. No claim is made that real chemical dosing has been tested — this logic is fully implemented and unit-tested as pure domain logic, but no real peristaltic pump is connected yet (see below).
 
 **Actually effective** (`nicegui_dashboard/recipe_store/run_config.py::build_run_config()`, called from `ProcessController.start_fill_and_measure()`): `target_ro_water_l` determines the real fill target volume (forces `fill_mode="absolute"`); `sensor_circulation_enabled`, sourced from a fresh `RunOptions` chosen in the Process Control panel's confirmation area (not the recipe, not persisted, always defaults to off, and only reset back to off after a start is actually accepted — a blocked start leaves the choice untouched so the user can correct and retry), determines whether the sensor-box circulation pump is driven during the run. Both are checked against `max_mixer_liters` and the `process_settings.json` schema — a recipe target volume above the mixer's capacity blocks the start with a clear message, instead of starting the process and only aborting mid-run via the watchdog. `RunConfigSnapshot.build(recipe, process_settings, run_options)` is the only place these are combined; everything downstream reads exclusively from that immutable snapshot. `ProcessController` stores the exact snapshot a run was actually started with, and the dashboard's status keeps showing *that* snapshot — not a freshly recomputed one — for as long as the process is running, even if a different favorite is activated in the meantime; only the next run picks up the newly active recipe.
 
@@ -516,10 +565,13 @@ Derived from all calibration sessions so far (zero-normalized, fill phase only, 
 4. Test the modular Water Cycle on real hardware.
 5. Gradually migrate logging from `print()` to `logging` (so far only `actuator_manager.py`, `cds_controller.py`).
 6. ~~Unify the MQTT staleness/payload readers.~~ Done: `services/sensor_snapshot.py` (`SensorSnapshotReader`) and the old `nicegui_dashboard/mqtt_topic_reader.py` (`MqttTopicReader`) were merged into one class in `services/mqtt_topic_reader.py`, with locking, error tracking, and a sentinel-based `get_latest(max_age_seconds=...)` — a deliberate, small, documented behavior change (see the commit message on that change for the exact deltas), not a pure move.
-7. No CI, no linting/mypy despite consistent type annotations (`tests/` with `pytest` for locking/watchdogs/config validation now exists, see Section 9).
+7. No CI, no linting/mypy despite consistent type annotations (a hardware-free `pytest` suite exists, see Sections 9 and 23).
 8. ~~Connect recipe values to Water Cycle settings in a controlled way.~~ Done: `nicegui_dashboard/recipe_store/run_config.py::build_run_config()` connects the two recipe fields that have a real consumer (`target_ro_water_l` → `fill_mode="absolute"`/`target_total_liters`, `sensor_circulation_enabled` → `enable_sensor_circulation`) when starting Fill-and-Measure, including a `max_mixer_liters` bound check. The recipe's EC nutrient dosing fields are now fully typed, calculated, and validated (see Section 15, `docs/RECIPE_AND_DOSING_RULES.md`) and attached as `recipe_run_config_snapshot`, but stay without a hardware consumer until chemical dosing is implemented (item 9 below). pH correction fields are unchanged/out of scope for that work.
 9. **Peristaltic pump control** — firmware-side hardening is complete in the separate `central_dosing_sys_peristaltic` repository (branch `harden-serial-protocol`) and verified on both Arduino MCUs on real hardware: drivers disabled by default, dose/runtime limits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), a machine-readable `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL` protocol (see `docs/SERIAL_PROTOCOL.md` there). `cds_control` now has a standalone, hardware-free-tested Python serial client and terminal CLI for this protocol (`services/peristaltic/`, `scripts/peristaltic_calibration_cli.py` — discover/map/check/stop-all/test/calibrate/pair-test/all-four-test, water-only, max 10 ml per test dose, see `docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md`), but it is deliberately **not** wired into the recipe logic, the NiceGUI dashboard, or the state machine, and **no real peristaltic pumps are connected** — that integration, and real per-pump calibration/verification, remain separate, not-yet-started steps. A design-only plan for splitting the shared firmware into an `MCU_A_PH`/`MCU_B_EC` profile pair also exists at `docs/PERISTALTIC_PROFILE_PLAN.md` (no firmware/behavior changed by it).
 10. **pH dosing bounds not yet enforced** — pH setpoint, pH mixing-time, and pH stock-volume bounds were confirmed against the legacy Node-RED configuration (see `docs/OPEN_RECIPE_DECISIONS.md`) but intentionally not added as hard validation, since pH dosing has no consumer yet and they were outside the explicitly requested rule set. (EC setpoint/mixing-time bounds and the EC adjustment factor bound *are* enforced — see Section 15. Addon 1/Addon 2 bounds no longer apply at all, since Addon 1/Addon 2 were removed from the active recipe model entirely.) Whether/how to enforce the remaining pH bounds is a product decision, not yet made.
+11. **AP-05 Stage 1 integrated but not wired in** — commit `f463a0f` is in `main` and on GitHub; no process, dashboard, or hardware code uses `domain/recipe/nutrient_plan.py` / `volume_balance.py` (Section 22). Stages 2–6 and AP-06 to AP-09 are pending.
+12. **Known test failure** — Recipe Editor step test (Section 23).
+13. **Open safety and hardware questions** (O1, switch-off feedback, level < ~10 L, dry running, provisional drain parameters, kill/SIGTERM limits, `DigitalOutput` cleanup, MQTT delivery, MCU_B identity/calibration gates) — Section 24.
 
 ---
 
@@ -582,17 +634,132 @@ New hardware functions are only added once:
 - and the flow has first been tested with water.
 
 ---
+
+## 21. Work-package results AP-00 to AP-04
+
+All items below are software results, verified by hardware-free tests (Section 23). None of them has been run on the real system.
+
+**AP-00 – Isolated automated tests.** `tests/_hardware_guard.py` is installed from `tests/conftest.py` before collection and, for child processes, through `tests/_guard_site/sitecustomize.py`. It blocks GPIO (`gpiozero` pin factory, `lgpio`), serial devices, network connects (MQTT/OPC-UA), and writes to `logs/`, `config/`, `recipes/`, and `calibration_data/`; the hardware lock file is redirected to a temporary path. Every blocked attempt is recorded and fails the test, even if the caller swallows the exception. No production code was changed for this. Known gap: the exit code of a child process that is never awaited is not seen if its report fails (documented in the module).
+
+**AP-01 – Run options.** `RunOptions` selected in the dashboard are forwarded to the process controller (`nicegui_dashboard/cds_controller.py`).
+
+**AP-02 – Recipe and runtime validation, sensor checks, fill safety.**
+
+- AP-02A: `statemachine/sensor_reading.py` accepts only real finite numbers (no `bool`, NaN, inf, or integers too large for a float); an invalid preferred value is never replaced by a less reliable fallback. `services/settings_validation.py` validates settings more strictly.
+- AP-02B: `statemachine/start_validation.py` is a pure, fail-closed release check for recipe runs. Block reasons: `run_config_invalid`, `sensor_invalid`, `mixer_invalid`, `mixer_implausible`, `mixer_at_target`, `ro_invalid`, `ro_capacity_invalid`, `ro_insufficient`, `tank_not_confirmed`, `empty_veto`. The operator confirmation "mixing tank emptied" is not a measurement; the mixer value is only a veto against a contradiction, because the calibration is not reliable below about 10 L.
+- AP-02C: in recipe-run mode the fill state machine repeats the release check on a new measurement immediately before the pump is switched on, requires a new MQTT message with a later bridge timestamp (`services/sensor_stamp.py`) within 5 s, checks RO and mixer values unfiltered on every tick, switches the pump off first on reaching the target and confirms the target only with the pump off, and latches the first error as final (a concurrent emergency stop cannot be overwritten or followed by another switch-on). The 5 s window is not hardware-validated.
+
+**AP-03 – Hardware start gates and exclusion.**
+
+- AP-03A: `process/common.py` reads the mixer level strictly; the finite check happens before clamping to zero, and invalid readings never enter the history.
+- AP-03B: `BackgroundHardwareProcess` releases hardware only if `hardware_execution_enabled is True` (no `bool()` coercion: strings, `1`, `None`, missing key, or non-dict settings block); an exception while reading the sensor snapshot blocks the start in a controlled way.
+- Mutual exclusion of Fill-and-Measure, Manual Drain Jog, and Tank Cleaning (`ProcessController` lock) and the cross-process `fcntl.flock` lock are older mechanisms (Section 8), not new in AP-03.
+
+**AP-04 – Drain safety, process errors, Water Cycle completion.**
+
+- AP-04A: `process/drain_safety.py` provides, for `process/drain.py`, `process/tank_cleaning/drain_phase.py`, and `process/manual_drain_jog.py`, a `DrainSensorWatchdog` (plausibility, sensor loss, no-progress, unexpected rise on the unfiltered mixer level) and one stop sequence `safe_stop_drain` (transfer pump off, then drain valve off; both always attempted, errors collected). Drain settings are validated before any actuator is touched; the Manual Drain Jog has a binding maximum of 30 s. A failed switch-off is never reported as success.
+- AP-04: `process/water_cycle.py` collects the outcome (`finished`, `aborted`, `interrupted`, `startup_failed`, `error`; default fail-closed `error`) and derives exit code and final status only after the complete cleanup. Each cleanup step is isolated; its exception is recorded, not propagated.
+- Final MQTT statuses: `WATER_CYCLE_FINISHED` is sent only if cleanup had no error; the final status is `SAFE_SHUTDOWN` or `SAFE_SHUTDOWN_FAILED` and carries `cleanup_errors`, `physical_switch_off_confirmed: false`, and `status_publish_failures`.
+- **MQTT delivery is not guaranteed.** QoS 1 with a short `wait_for_publish` timeout (`services/mqtt_publisher.py`). A status publish never raises into the cleanup. Failure handling in `process/water_cycle.py`:
+  - `publish_json() == False` or an exception is counted in `status_publish_failures` and logged, but does not by itself change the exit code.
+  - A `KeyboardInterrupt` during `_publish()` is registered as a cleanup error; the final exit code can therefore become 1.
+  - One corrective final MQTT status is attempted exactly once if and only if the preceding final publish registered a new cleanup error, for example through `KeyboardInterrupt`. With an ordinary `publish_json() == False` or a caught regular exception without a new cleanup error, there is no retry.
+  - `mqtt_publisher.close()` runs after the final status message. An error there can lead to local exit code 1 without being contained in the last published MQTT status.
+
+## 22. AP-05 Stage 1 – dosing plan and volume accounting (pure domain logic)
+
+`domain/recipe/nutrient_plan.py` and `domain/recipe/volume_balance.py` do no I/O: no hardware, no MQTT, no sensor, no file, no clock. Nothing in `process/`, `statemachine/`, or `nicegui_dashboard/` imports them yet. **The existence of a dosing plan is not a release of real MCU_B dosing and is not part of any process.**
+
+- Input is only the validated `RunConfigSnapshot`; totals, A/B split, and volume are recomputed with the existing functions and compared against the snapshot; any contradiction is a `NutrientPlanError` with a machine-readable code.
+- `NutrientDosingPlan` is immutable (frozen dataclasses, read-only mappings, plan hash).
+- Pump roles MCU_B: P1 and P3 for solution A, P2 and P4 for solution B (canonical private tuples, public views read-only).
+- Exact arithmetic in integer microliters. Per solution, the first pump (P1/P2) receives `floor(amount * w1/(w1+w2) + 1/2)`, the second pump (P3/P4) the remainder, so the sum is exact. Weights must be passed explicitly (profile `firmware_ml_per_step`); there is no default weighting and no 50/50 fallback.
+- Bounded chunking: `n = ceil(target / max_chunk)`, equal chunks, no zero chunks, no tiny remainder chunk; reference limit 50 ml (firmware limit, checked by a test); at most 20 000 chunks per pump, otherwise the plan is rejected (memory protection; amounts are never altered).
+- `volume_balance.py` separates four evidence classes that are never mixed: planned, protocol-confirmed (a `DONE` is a protocol event, not proof of delivered volume), sensor-measured (total volume only), and unconfirmed (in flight / uncertain). There is no independent RO flow measurement; the RO share is only an indirect estimate and is never used as a limit.
+- Limits: RO water 180 L (`MAX_RECIPE_RO_WATER_L`), process volume 185 L (`MAX_PROCESS_VOLUME_L`); comparisons are exact (`fractions.Fraction`), capacity is rounded down to whole µL.
+- In-flight and uncertain nutrient amounts block target confirmation, final-volume evaluation, and RO resume; evaluation functions return a reason code instead of raising.
+- Invalid numbers (bool, NaN, inf, huge integers, wrong types) end in controlled errors; the chunk budget prevents excessive allocation.
+- Reference test state: 565 tests passed (`tests/test_nutrient_plan.py` 373, `tests/test_volume_balance.py` 192), independently reviewed.
+- Open for Stage 2: MCU identity, firmware/profile, and calibration gates; transfer into a process.
+
+## 23. Test status and limits
+
+Strategy: `pytest` with the AP-00 guard; all tests are hardware-free. Process, state-machine, and MQTT tests use fakes; GPIO, serial, and network are blocked structurally, not only by convention.
+
+| Run | Result |
+|---|---|
+| Full suite, main worktree (`f463a0f`, 2026-10-14) | 1874 passed, **1 failed** |
+| AP-05 Stage 1 tests only | 565 passed |
+| Full suite, separate worktree `../cds_control_ap05_s1` | 1873 passed, 2 failed, 3 errors (the known failure plus the missing-file effects below) |
+
+- **Known failure:** `tests/test_dashboard_page_recipe_editor.py::test_recipe_editor_number_fields_have_field_appropriate_step` expects an EC setpoint step of `0.1`; `nicegui_dashboard/pages/dashboard/recipe_section.py` sets `0.05`. Which value is intended is not decided; this README does not claim either. It is unrelated to AP-00 to AP-05.
+- **Separate worktree failures (environmental):** the file `recipes/dashboard_recipes.json` is git-ignored runtime data and missing in that worktree. Tests that read the real recipe book (`tests/test_recipe_run_config.py::test_real_active_recipe_merged_onto_real_settings_passes_schema` and two tests in `tests/test_process_locking.py`) fail there because the code tries to create `recipes/` and the AP-00 guard correctly blocks that (`os.mkdir('recipes')`). This is a missing local file, not a product defect; the same file is present in the main worktree.
+- The suite is therefore **not** fully green; no statement "all tests pass" is made. Passing tests do not prove hardware behavior.
+
+## 24. Open safety and hardware questions
+
+| Topic | Description | Assigned to |
+|---|---|---|
+| No physical switch-off feedback | Switch-off is a software call; `physical_switch_off_confirmed` is always `false` | AP-09 |
+| O1 | `safe_stop_drain()` (`process/drain_safety.py`) currently always attempts to switch off the transfer pump first and then close the drain valve, even if `transfer_pump.off()` fails. Whether this behavior is safe when the physical pump state is unknown remains an open hardware decision (O1) and must be validated before the real drain process is released | AP-09 |
+| Level below about 10 L | Level measurement is not validated below about 10 L. A displayed value of 0.0 L is not reliable proof of a completely empty tank | AP-09 |
+| Dry running | Nothing in software can prevent transfer pump dry running; it only bounds the run time on sensor loss/no progress | AP-09 |
+| Provisional drain parameters | Sensor-loss limit 5 s and the defaults for pump flow (16 L/min), timeout buffer (180 s), valve settle time (1 s), and no-progress/rise limits in `DrainSafetyLimits`: not hardware-validated | AP-09 |
+| SIGTERM / kill | Cleanup runs only if the process can execute it; after `SIGKILL` or a hard crash no software cleanup is possible, outputs may stay in their last state | AP-09 |
+| `DigitalOutput` cleanup | `hardware/digital_output.py`: `off()` does nothing if the software state is inactive; `close()` does not reach `device.close()` if `off()` raises. A confirmed software defect must be fixed before any affected hardware release; AP-09 remains responsible for hardware and system validation | software fix first, then AP-09 |
+| MQTT delivery | Status messages are not guaranteed to arrive (Section 21) | accepted limitation |
+| MCU_B identity and calibration | Identity check, firmware/profile match, and per-pump calibration releases are not completed | AP-05 Stage 2 |
+| Chemical dosing | Not released. No chemical dosing before all hardware gates have passed | AP-05 Stage 2 / AP-09 |
+
+The assignment of open items to AP-05 Stage 2 and AP-09 follows the roadmap (AP-09: overall integration, hardware validation, system tests); the individual assignment is the author's reading of that scope.
+
+---
 ---
 
 # Central Dosing System – Python Control Layer (Deutsch)
 
 *Deutsche Version. [English version above](#central-dosing-system--python-control-layer).*
 
-Stand: 17.07.2026
+Stand: 14.10.2026 (siehe [Entwicklungsstand](#entwicklungsstand-2026-10-14))
 Projektstatus: Entwicklungs- und Validierungsphase
 Ziel: sichere, nachvollziehbare und modular erweiterbare Steuerungslogik für den wasserbasierten CDS-Prozess.
 
 > **Sicherheitsstatus in einem Satz:** Hardwareausführung ist im Repository standardmäßig deaktiviert (`hardware_execution_enabled: false`); von den 15 konfigurierten GPIO-Ausgängen sind aktuell nur **drei** real am physischen System validiert (siehe Abschnitt 4). Alle anderen Ausgänge sind softwareseitig ansteuerbar, aber ohne bestätigte reale Wirkung.
+---
+
+## Entwicklungsstand (2026-10-14)
+
+Grundlage: `main` und `origin/main` (GitHub, am 2026-10-14 per `git ls-remote origin` geprüft) stehen beide auf `f463a0f`. Detailergebnisse: Abschnitte 21–24.
+
+| Kategorie | Inhalt |
+|---|---|
+| Implementiert, in `main` integriert und auf GitHub veröffentlicht (`f463a0f`) | AP-00 bis AP-04 (bis `6125b1f`): Testisolierung, Weitergabe der Laufoptionen, Sensor-/Settings-Härtung, Rezeptstartvalidierung, Fill-Sicherheit, gemeinsame Sensorauswertung und Hardware-Start-Gates, Drain-Sicherheit, Water-Cycle-Abschluss |
+| AP-05 Stufe 1 (integriert, veröffentlicht) | Reine Fachlogik `domain/recipe/nutrient_plan.py` und `domain/recipe/volume_balance.py` (Commit `f463a0f`, vollständig in `main` integriert und auf GitHub veröffentlicht). Nur als Code integriert: keine Prozess-, Hardware- oder MQTT-Anbindung |
+| Softwareseitig geprüft | Hardwarefreie Testsuite auf `main` (`f463a0f`): 1874 bestanden, **1 fehlgeschlagen** (bekannter Recipe-Editor-Test, Abschnitt 23); AP-05 Stufe 1: 565 Tests bestanden (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
+| **Nicht** hardwareseitig validiert | Für AP-00 bis AP-05 ist keine Hardwarevalidierung dokumentiert: keine MCU_B-Dosierung, keine chemische Dosierung, kein realer Lauf der gehärteten Fill-/Drain-/Water-Cycle-Pfade. Bestätigt sind nur die drei Ausgänge aus Abschnitt 4 (ältere Validierung) |
+| Geplante nächste Schritte | alle ausstehend: AP-05 Stufen 2–6 (Stufe 2: Hardware-/Profil-Gates, siehe Abschnitt 22), AP-06 bis AP-09 (Tabelle unten) |
+
+### Arbeitspaket-Übersicht AP-00 bis AP-09
+
+Die Zuordnung der Änderungen zu Arbeitspaketen (AP-00 bis AP-05) stammt aus den Branchnamen (`feature/ap0x-*`) und den AP-Verweisen in Modul- und Test-Docstrings; Commit-Titel allein wurden nicht verwendet. Die Roadmap AP-06 bis AP-09 ist der definierte Projektumfang; dafür existiert noch kein Code, nichts davon ist implementiert.
+
+| AP | Ziel | Realisierter Umfang | Status | Wesentliche Komponenten | Offene Punkte |
+|---|---|---|---|---|---|
+| AP-00 | Hardwarefreie Tests | Zentraler fail-closed Guard blockiert in `pytest` GPIO, Seriell, Lock-Datei, Schreibzugriffe auf `logs/ config/ recipes/ calibration_data/` und Netzwerkverbindungen | integriert | `tests/_hardware_guard.py`, `tests/_guard_site/sitecustomize.py`, `tests/conftest.py` | Meldelücken bei nie abgewarteten Kindprozessen (im Modul dokumentiert) |
+| AP-01 | Dashboard-Laufoptionen | Im Dashboard gewählte `RunOptions` werden an den Prozess-Controller weitergegeben | integriert | `nicegui_dashboard/cds_controller.py` | keine bekannt |
+| AP-02A | Sensor- und Settings-Härtung | Strikte Zahlenauswertung (kein bool/NaN/inf/Überlauf, keine Maskierung durch Fallback), strengere Settings-Validierung | integriert | `statemachine/sensor_reading.py`, `services/settings_validation.py` | keine bekannt |
+| AP-02B | Sicherer Rezeptstart | Reine Startfreigabe für Rezeptläufe (RO ausreichend, Mixer plausibel, Bestätigung „Tank leer“ mit Mixer-Veto) | integriert | `statemachine/start_validation.py`, `process/fill_and_measure.py` | Operator-Bestätigung „Tank leer“ ist keine Messung |
+| AP-02C | Fill-Sicherheit | Aktualitätsprüfung unmittelbar vor Pumpe-an, laufende RO-/Mixer-Prüfung, Pumpe-aus-zuerst-Zielbestätigung, endgültiger Fehlerzustand | integriert | `statemachine/fill_and_measure_state_machine.py`, `services/sensor_stamp.py`, `services/mqtt_topic_reader.py` | Aktualitätsfenster 5 s nicht hardwarevalidiert |
+| AP-03A | Gemeinsame Sensorauswertung | Strikte Mixer-Auswertung in `process/common.py`; ungültige Werte gelangen nicht in die Historie | integriert | `process/common.py` | keine bekannt |
+| AP-03B | Hardware-Start-Gates | `BackgroundHardwareProcess` startet nur bei `hardware_execution_enabled is True`; Sensor-Lesefehler blockieren kontrolliert | integriert | `process/background_process.py` | keine bekannt |
+| AP-04A | Drain-Sicherheit | Ein Sensor-Watchdog und eine Stopp-Sequenz für die drei Drain-Pfade | integriert | `process/drain_safety.py`, `process/drain.py`, `process/manual_drain_jog.py`, `process/tank_cleaning/` | O1, vorläufige Parameter (Abschnitt 24) |
+| AP-04 | Water-Cycle-Abschluss | Endergebnis und Cleanup werden gesammelt; finale MQTT-Status erst nach dem Cleanup abgeleitet | integriert | `process/water_cycle.py` | Keine garantierte MQTT-Zustellung |
+| AP-05 Stufe 1 | Dosierplan und Volumenbilanz (reine Logik) | Unveränderlicher Plan für MCU_B, µL-Arithmetik, konservative Volumenbilanz | integriert, veröffentlicht | `domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py` | In keinen Prozess eingebunden |
+| AP-05 Stufen 2–6 | Weitere MCU_B-Dosierschritte (Stufe 2 = Hardware-/Profil-Gates, laut Modul-Docstring); Stufen 3–6 sind im Repository nicht detailliert | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | MCU_B-Identität, Kalibrierung, Profil, Firmware-Gates |
+| AP-06 | EC-Regelung und Korrekturlogik | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
+| AP-07 | MCU_A-Integration und pH-Regelung | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
+| AP-08 | Transfer in den Zielbehälter | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
+| AP-09 | Gesamtintegration, Hardwarevalidierung und Systemtests | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Alle Hardwarevalidierungspunkte (Abschnitt 24) |
 
 ---
 
@@ -604,7 +771,7 @@ Dieses Repository enthält die Python-Implementierung für die Steuerungs- und V
 RO-Wasser → Mixing Tank → Sensorbox-Zirkulation → Drain
 ```
 
-Chemikaliendosierung und Peristaltikpumpensteuerung sind noch nicht aktiv. Diese Funktionen werden erst nach weiterer Hardware-, Sensor- und Sicherheitsvalidierung ergänzt. Die Rezeptausführung ist bisher nur für den reinen Wasser-Zielwert (Füllvolumen, Sensorzirkulation) wirksam mit dem tatsächlichen Prozessstart verbunden (siehe Abschnitt 15) — die EC-/pH-/Dosierwerte im Rezept sind weiterhin rein deskriptiv, ohne Konsument im Code.
+Chemikaliendosierung und Peristaltikpumpensteuerung sind noch nicht aktiv. Diese Funktionen werden erst nach weiterer Hardware-, Sensor- und Sicherheitsvalidierung ergänzt. Die Rezeptausführung ist bisher nur für den reinen Wasser-Zielwert (Füllvolumen, Sensorzirkulation) wirksam mit dem tatsächlichen Prozessstart verbunden (siehe Abschnitt 15) — die EC-/pH-/Dosierwerte im Rezept sind weiterhin rein deskriptiv, ohne Konsument im Prozesscode. Seit AP-05 Stufe 1 existieren ein reiner, hardwarefreier Dosierplan und eine Volumenbilanz als Fachlogik (Abschnitt 22); sie sind mit keinem Prozess und keiner Hardware verbunden.
 
 Die Steuerungslogik wurde von einzelnen Testskripten in eine modulare Struktur überführt. `main.py` ist der zentrale Einstiegspunkt für Preflight, Water-Cycle, Dashboard, Kalibrierung und Statusprüfungen.
 
@@ -663,8 +830,10 @@ Aktuell umgesetzt:
 - typisiertes Rezept-/Dosier-Domänenmodell (`domain/recipe_limits.py`, `domain/recipe_model.py`): zentrale 180-l-/185-l-Tankvolumengrenzen, EC-Nährstofflösung-A/B-Aufteilung (B stets berechnet als `100 - A`), ein unveränderlicher, validierter `RunConfigSnapshot`, sowie eine `recipes/dashboard_recipes.json`-Schema-Migration mit atomarem, gesperrtem Schreiben — siehe Abschnitt 15 und `docs/RECIPE_AND_DOSING_RULES.md`
 - Rezept-/RunOptions-Datenmodell gehärtet: `StoredRecipe` enthält jetzt nur noch fachliche Rezeptwerte (eine feste RO-Korrektur ist kein Rezeptwert mehr), Lauf-spezifische Einstellungen (Sensorzirkulation, Drain nach Prozess) wurden in einen eigenen, nie gespeicherten `RunOptions`-Typ mit Standard „aus“ ausgelagert, strikte `type(value) is bool`-/Endlichkeits-/Nicht-Ganzzahl-Float-Prüfung schließt mehrere stille Typ-Umwandlungslücken, Rezeptbuch-Metadaten (`schema_version`/`active_slot`/`favorite.slot`) werden jetzt fail-closed validiert, und jedes operative Füllziel ist auf 185 l begrenzt (keine 200-l-Defaults mehr) — siehe Abschnitt 15 und `docs/RECIPE_AND_DOSING_RULES.md`
 - Favoriten dauerhaft und interaktiv gemacht: F1/F2/F3 sind jetzt echte Buttons, die einen Favoritenslot aktivieren (starten nie einen Prozess, aktivieren nie Hardware), der Rezeptbuch-Metadatenvertrag ist vollständig fail-closed (unbekannte zukünftige Schema-Versionen, doppelte Slots, Slots außerhalb des gültigen Bereichs werden abgelehnt statt still selbstheilend korrigiert), Addon 1/Addon 2 wurden vollständig aus dem aktiven Rezeptmodell entfernt (der reale CDS-Prozess kennt nur Nährstofflösung A/B — alte Werte bleiben zur Nachvollziehbarkeit unter `legacy_recipe_values` erhalten), und der Status eines laufenden Prozesses zeigt jetzt weiterhin das Rezept, mit dem tatsächlich gestartet wurde, selbst wenn währenddessen ein anderer Favorit aktiviert wird — siehe Abschnitt 15 und `docs/RECIPE_AND_DOSING_RULES.md`
+- hardwarefreie Testisolierung (AP-00), strikte Sensor-/Settings-Auswertung und Rezeptstartvalidierung (AP-02A/B), Fill-Laufzeitsicherheit (AP-02C), gemeinsame Sensorauswertung und strikte Hardware-Start-Gates (AP-03), Drain-Sicherheit für alle drei Drain-Pfade (AP-04A) sowie Water-Cycle-Abschluss-/Cleanup-Behandlung mit finalem MQTT-Status (AP-04) — nur Software, siehe Abschnitt 21
+- reine Fachlogik für einen unveränderlichen MCU_B-Nährstoffdosierplan und eine konservative Volumenbilanz (`domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py`, AP-05 Stufe 1, in `main` integriert und auf GitHub veröffentlicht) — keine Prozess-, Dashboard- oder Hardwareanbindung, siehe Abschnitt 22
 
-Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor steht noch aus. Manual Drain Jog und Tank Cleaning sind ebenfalls noch nicht real mit Hardware validiert (siehe Abschnitt 17).
+Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor und nach der Härtung AP-02 bis AP-04 steht noch aus. Manual Drain Jog und Tank Cleaning sind ebenfalls noch nicht real mit Hardware validiert (siehe Abschnitte 17 und 24).
 
 ---
 
@@ -685,6 +854,8 @@ Alle übrigen Einträge in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `
 - **Tank Cleaning** steuert zusätzlich `mixing_circulation_pump` und `sensor_circulation_pump` an – ebenfalls noch ohne realen Hardwaretest. Die Settings-Datei (`config/tank_cleaning_settings.json`) ist deshalb bewusst auf ein reduziertes **40-Liter-Testvolumen** statt des späteren 200-Liter-Zielwerts gestellt, um den ersten Hardwaretest ohne größeren Wasserverbrauch/-risiko durchzuführen.
 
 Bevor ein neuer Ausgang produktiv verwendet wird: real am System schalten, Wirkung visuell/physisch bestätigen, erst danach in eine automatisierte Sequenz aufnehmen.
+
+Die Änderungen AP-00 bis AP-05 (Abschnitte 21 und 22) haben diese Tabelle nicht verändert: sie sind nur softwareseitig geprüft. Die MCU_B-Peristaltikausgänge (P1–P4) sind nicht Teil der Tabelle und nicht für Dosierung freigegeben (Abschnitt 24).
 
 ---
 
@@ -728,17 +899,20 @@ cds_control/
 │   ├── process_settings.json
 │   └── tank_cleaning_settings.json
 ├── domain/
-│   ├── recipe/                       # limits.py, calculations.py, field_validators.py, validation.py, models.py
+│   ├── recipe/                       # limits.py, calculations.py, field_validators.py, validation.py, models.py,
+│   │                                 # nutrient_plan.py, volume_balance.py (AP-05 Stufe 1, reine Logik, nicht eingebunden)
 │   ├── recipe_limits.py              # Compat-Wrapper -> domain/recipe/
 │   └── recipe_model.py               # Compat-Wrapper -> domain/recipe/models.py
 ├── statemachine/
 │   ├── fill_and_measure_state_machine.py
-│   └── sensor_reading.py             # reine Mixer-/RO-Liter-Fallback-Funktionen
+│   ├── sensor_reading.py             # strikte Mixer-/RO-Liter-Auswertung (AP-02A)
+│   └── start_validation.py           # reine Rezept-Startfreigabe / Laufzeitprüfung (AP-02B/C)
 ├── process/
 │   ├── common.py
 │   ├── refill.py
 │   ├── sensor_circulation.py
 │   ├── drain.py
+│   ├── drain_safety.py               # Drain-Sensor-Watchdog, sichere Stopp-Sequenz (AP-04A)
 │   ├── water_cycle.py
 │   ├── auto_circulation.py
 │   ├── manual_drain_jog.py
@@ -752,6 +926,7 @@ cds_control/
 │   ├── mqtt_publisher.py
 │   ├── mqtt_topic_reader.py          # vereinheitlichter MQTT-Einzeltopic-Reader
 │   ├── process_run_logger.py
+│   ├── sensor_stamp.py               # Messungsidentität für Aktualitätsprüfung (AP-02C)
 │   ├── settings_validation.py
 │   └── peristaltic/                  # protocol/safety/models/firmware_profiles/prime/session_log/
 │                                      # serial_client/dose_limits/parallel_pump_safety/calibration_*.py
@@ -779,7 +954,7 @@ cds_control/
 │   └── manual_tests/
 ├── recipes/
 │   └── dashboard_recipes.json
-├── tests/
+├── tests/                            # inkl. _hardware_guard.py, _guard_site/ (AP-00 Hardware-Isolation)
 ├── logs/
 ├── calibration_data/
 ├── mqtt_sensor_bridge.py
@@ -842,7 +1017,7 @@ Weitere Settings-Dateien, je Prozess eine eigene:
 - Jede Prozess-Settings-Datei (Water-Cycle, Fill-and-Measure, Kalibrierung, Tank Cleaning) hat ihren **eigenen** `hardware_execution_enabled`-Schalter und Bestätigungstext.
 - Vor jedem Hardwarelauf muss `python main.py preflight` erfolgreich sein.
 - Node-RED darf keine GPIOs blockieren, die Python für den CDS-Prozess benötigt.
-- Chemikaliendosierung und Peristaltikpumpensteuerung sind aktuell nicht aktiv.
+- Chemikaliendosierung und Peristaltikpumpensteuerung sind aktuell nicht aktiv. Der AP-05-Stufe-1-Dosierplan ist reine Logik und gibt nichts frei.
 - Sensorwerte werden nicht blind als zuverlässige Wahrheit angenommen (Filterung, Plausibilitätsprüfung, Confirm-Samples).
 - Aktoren werden über zentrale Safe-Shutdown-Pfade ausgeschaltet (`ActuatorManager.safe_shutdown_all()`), Fehler dabei werden geloggt statt verschluckt.
 - Manuelle Kalibrier-Drain-Funktionen besitzen ein Safety-Timeout (`calibration_drain_max_seconds`).
@@ -851,6 +1026,8 @@ Weitere Settings-Dateien, je Prozess eine eigene:
 - Start/Stop von Fill-and-Measure, Manual Drain Jog und Tank Cleaning sind atomar gegen den internen `ProcessController`-Lock abgesichert: zwei gleichzeitige Start-Aufrufe (Dashboard-Klick + parallel gestartetes Skript) können nicht mehr beide durchkommen — vormals ein TOCTOU-Race zwischen Zustandsprüfung und tatsächlichem Start.
 - Zusätzlich verhindert eine prozessübergreifende Datei-Sperre (`fcntl.flock`, `hardware/actuator_manager.py`, `logs/.hardware.lock`) parallele Hardware-Ansteuerung durch zwei unabhängige Python-*Prozesse* (nicht nur Threads im selben Prozess) — z. B. Dashboard plus ein direkt gestartetes Kalibrier- oder Safe-Drain-Skript.
 - Emergency Stop ist asynchron implementiert (`ProcessController.emergency_stop()`): das Signalisieren (State-Machine-Abbruch, `request_stop()`, Aktor-Shutdown) passiert sofort unter Lock, das Warten auf den Thread-Join läuft danach außerhalb des Locks in einem Worker-Thread — das Dashboard bleibt für andere verbundene Clients währenddessen reaktionsfähig, statt bis zu ~7s einzufrieren.
+- Seit AP-03B wird der Hardwarestart nur für `hardware_execution_enabled is True` freigegeben (strikter Typ, keine Umwandlung). Seit AP-02B/C benötigen Rezeptläufe eine fail-closed Startfreigabe und aktuelle Sensormessungen; seit AP-04A sind alle Drain-Pfade durch einen Sensor-Watchdog begrenzt; seit AP-04 meldet der Water-Cycle Cleanup-Fehler statt Erfolg (Abschnitt 21).
+- Abschalten ist ein Softwareaufruf ohne physische Rückmeldung; diese Grenze ist dokumentiert, nicht gelöst (Abschnitt 24).
 
 Standardzustand in den Configs:
 
@@ -902,9 +1079,12 @@ pytest
 
 Deckt Locking (`nicegui_dashboard/process_controller.py`, prozessübergreifende
 Sperre in `hardware/actuator_manager.py`), Watchdog-/Fortschrittsprüfungen
-(`process/watchdog.py`) und Settings-Validierung (`services/settings_validation.py`,
-inklusive aller vier echten `config/*.json`-Dateien) ab — kein GPIO/OPC-UA
-wird dabei angefasst. `requirements-dev.txt` (nur `pytest` zusätzlich zu
+(`process/watchdog.py`), Settings-Validierung (`services/settings_validation.py`,
+inklusive aller vier echten `config/*.json`-Dateien) sowie seit AP-00 bis AP-05
+Startvalidierung, Fill-/Drain-Sicherheit, Water-Cycle-Abschluss und Dosierplan-/Volumenlogik ab.
+Ein zentraler Guard (`tests/_hardware_guard.py`) blockiert GPIO, Seriell, Netzwerk und
+Schreibzugriffe auf Produktivdatenverzeichnisse — es wird also kein GPIO/OPC-UA/MQTT
+angefasst. Aktuelles Ergebnis und bekannte Fehlschläge: Abschnitt 23. `requirements-dev.txt` (nur `pytest` zusätzlich zu
 `requirements.txt`) ist bewusst getrennt von der Produktions-`requirements.txt`.
 
 ---
@@ -950,7 +1130,7 @@ Der Water-Cycle führt automatisch zuerst den Preflight aus; schlägt dieser feh
 6. Safe-Shutdown
 ```
 
-> Der modulare Water-Cycle muss nach dem letzten Refactor noch einmal vollständig real mit Hardware getestet werden.
+> Der modulare Water-Cycle muss nach dem letzten Refactor noch einmal vollständig real mit Hardware getestet werden. Seit AP-04 sammelt er Endergebnis und Cleanup-Fehler und sendet `WATER_CYCLE_FINISHED` nur nach erfolgreichem Cleanup (Abschnitt 21); die MQTT-Zustellung von Statusmeldungen ist nicht garantiert.
 
 ---
 
@@ -1046,7 +1226,7 @@ Der Recipe-Editor ist in vier Bereiche gegliedert: Grunddaten (Name/Tank/RO-Wass
 
 Tankvolumengrenzen sind zentral definiert und werden durchgesetzt: `target_ro_water_l` (reines RO-Wasser) ist auf 180 l begrenzt, das geschätzte Rezeptvolumen (RO-Wasser + berechnete EC-Nährstoffe) auf 185 l. Die 200-l-physische Tankkapazität am Rand ist dokumentiert, wird aber nie als nutzbare Grenze verwendet — auch jedes operative Füllziel in `config/process_settings.json`/`config/water_cycle_settings.json`/`config/tank_cleaning_settings.json` ist jetzt schema-seitig auf 185 l begrenzt. Ungültige Werte werden beim Speichern mit konkreter Meldung abgelehnt, nie stillschweigend geclampt. Eine feste RO-Korrektur ist **kein** Rezeptwert mehr und **noch nicht als echte Funktion implementiert** — der Editor zeigt nur eine rein informative Schätzung, wie viel Korrekturkapazität später technisch noch verfügbar wäre (`max_possible_ro_correction_l`); eine echte, bedarfsabhängige EC-Korrektur ist ausschließlich eine geplante Zukunftsfunktion.
 
-Die EC-Nährstoffdosierung nutzt eine Gesamtdosis (`nutrients_ml_per_100_l`), aufgeteilt zwischen Nährstofflösung A und B über einen Prozentanteil (`nutrient_a_percent`, Standard 50 %); B wird stets als `100 - A` berechnet, nie unabhängig editiert. `nutrient_dosing_enabled` (Standard aus) steuert, ob überhaupt irgendwo eine Dosis berechnet wird — solange aus, werden alle berechneten Mengen auf 0 ml erzwungen, auch im geschätzten Volumen. Ein noch als Legacy-prüfungsbedürftig markiertes Rezept (`legacy_dosing_needs_review`) kann die Dosierung erst aktivieren, nachdem der "Legacy review completed"-Schalter im Editor dieses Flag ausdrücklich aufgehoben hat. Das EC-Sollwert-Feld nutzt eine `0,1`-Schrittweite nur als Bedienhilfe — beliebige Zwischenwerte im gültigen Bereich (z. B. `2,35`) werden unverändert akzeptiert und gespeichert. Es wird nicht behauptet, dass eine echte Chemikaliendosierung bereits getestet wurde — diese Logik ist als reine Domänenlogik vollständig implementiert und getestet, aber es ist noch keine echte Peristaltikpumpe angeschlossen (siehe unten).
+Die EC-Nährstoffdosierung nutzt eine Gesamtdosis (`nutrients_ml_per_100_l`), aufgeteilt zwischen Nährstofflösung A und B über einen Prozentanteil (`nutrient_a_percent`, Standard 50 %); B wird stets als `100 - A` berechnet, nie unabhängig editiert. `nutrient_dosing_enabled` (Standard aus) steuert, ob überhaupt irgendwo eine Dosis berechnet wird — solange aus, werden alle berechneten Mengen auf 0 ml erzwungen, auch im geschätzten Volumen. Ein noch als Legacy-prüfungsbedürftig markiertes Rezept (`legacy_dosing_needs_review`) kann die Dosierung erst aktivieren, nachdem der "Legacy review completed"-Schalter im Editor dieses Flag ausdrücklich aufgehoben hat. Das EC-Sollwert-Feld nutzt eine Schrittweite (`0.05` in `nicegui_dashboard/pages/dashboard/recipe_section.py`; ein Test erwartet noch `0.1`, siehe Abschnitt 23) nur als Bedienhilfe — beliebige Zwischenwerte im gültigen Bereich (z. B. `2,35`) werden unverändert akzeptiert und gespeichert. Es wird nicht behauptet, dass eine echte Chemikaliendosierung bereits getestet wurde — diese Logik ist als reine Domänenlogik vollständig implementiert und getestet, aber es ist noch keine echte Peristaltikpumpe angeschlossen (siehe unten).
 
 **Tatsächlich wirksam** (`nicegui_dashboard/recipe_store/run_config.py::build_run_config()`, aufgerufen von `ProcessController.start_fill_and_measure()`): `target_ro_water_l` bestimmt das reale Füll-Zielvolumen (erzwingt `fill_mode="absolute"`); `sensor_circulation_enabled`, aus einem frisch im Bestätigungsbereich von Process Control gewählten `RunOptions` (nicht aus dem Rezept, nicht gespeichert, startet immer auf „aus" und wird erst nach einem tatsächlich akzeptierten Start wieder auf „aus" zurückgesetzt — ein blockierter Start lässt die Wahl unverändert, damit ein erneuter Versuch möglich ist), bestimmt, ob die Sensorbox-Zirkulationspumpe beim Lauf mit angesteuert wird. Beide werden gegen `max_mixer_liters` und das `process_settings.json`-Schema geprüft — ein Rezept-Zielvolumen über der Mixer-Kapazität blockiert den Start mit klarer Meldung, statt den Prozess zu starten und erst per Watchdog mittendrin abzubrechen. `RunConfigSnapshot.build(recipe, process_settings, run_options)` ist die einzige Stelle, an der diese drei Quellen zusammengeführt werden; alles Nachgelagerte liest ausschließlich aus diesem unveränderlichen Snapshot. `ProcessController` speichert den genauen Snapshot, mit dem ein Lauf tatsächlich gestartet wurde, und der Status im Dashboard zeigt weiterhin genau diesen Snapshot — nicht neu berechnet — solange der Prozess läuft, selbst wenn währenddessen ein anderer Favorit aktiviert wird; erst der nächste Lauf verwendet das neu aktive Rezept.
 
@@ -1099,10 +1279,13 @@ Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fi
 4. Modularen Water-Cycle real mit Hardware testen.
 5. Logging schrittweise von `print()` auf `logging` umstellen (bisher nur `actuator_manager.py`, `cds_controller.py`).
 6. ~~MQTT-Staleness-/Payload-Reader vereinheitlichen.~~ Erledigt: `services/sensor_snapshot.py` (`SensorSnapshotReader`) und das alte `nicegui_dashboard/mqtt_topic_reader.py` (`MqttTopicReader`) wurden zu einer Klasse in `services/mqtt_topic_reader.py` zusammengeführt, mit Locking, Fehler-Tracking und einem Sentinel-basierten `get_latest(max_age_seconds=...)` — eine bewusste, kleine, dokumentierte Verhaltensänderung (siehe die Commit-Nachricht dieser Änderung für die genauen Deltas), kein reines Verschieben.
-7. Kein CI, kein Linting/mypy trotz durchgängiger Typannotationen (`tests/` mit `pytest` für Locking/Watchdogs/Config-Validierung existiert inzwischen, siehe Abschnitt 9).
+7. Kein CI, kein Linting/mypy trotz durchgängiger Typannotationen (eine hardwarefreie `pytest`-Suite existiert, siehe Abschnitte 9 und 23).
 8. ~~Rezeptwerte kontrolliert mit Water-Cycle-Settings verbinden.~~ Erledigt: `nicegui_dashboard/recipe_store/run_config.py::build_run_config()` verbindet die zwei Rezeptfelder mit einem echten Konsumenten (`target_ro_water_l` → `fill_mode="absolute"`/`target_total_liters`, `sensor_circulation_enabled` → `enable_sensor_circulation`) beim Start von Fill-and-Measure, inklusive `max_mixer_liters`-Grenzprüfung. Die EC-Nährstoffdosierfelder des Rezepts sind jetzt vollständig typisiert, berechnet und validiert (siehe Abschnitt 15, `docs/RECIPE_AND_DOSING_RULES.md`) und als `recipe_run_config_snapshot` angehängt, bleiben aber ohne Hardware-Konsument, solange Chemikaliendosierung nicht implementiert ist (Punkt 9 unten). Die pH-Korrekturfelder sind unverändert/außerhalb des Umfangs dieser Arbeit.
 9. **Peristaltikpumpensteuerung** — Firmware-seitige Härtung ist im separaten Repository `central_dosing_sys_peristaltic` (Branch `harden-serial-protocol`) abgeschlossen und auf beiden Arduino-MCUs real verifiziert: Treiber standardmäßig deaktiviert, Dosis-/Laufzeitlimits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), maschinenlesbares `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL`-Protokoll (siehe dortige `docs/SERIAL_PROTOCOL.md`). `cds_control` hat jetzt einen eigenständigen, hardwarefrei getesteten Python-Serial-Client und ein Terminal-CLI dafür (`services/peristaltic/`, `scripts/peristaltic_calibration_cli.py` — discover/map/check/stop-all/test/calibrate/pair-test/all-four-test, ausschließlich Wasser, max. 10 ml pro Testdosis, siehe `docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md`), das aber bewusst **nicht** an Rezeptlogik, NiceGUI-Dashboard oder State Machine angebunden ist, und es sind **noch keine echten Peristaltikpumpen angeschlossen** — diese Anbindung sowie eine reale Pumpen-Kalibrierung/-Verifikation bleiben separate, noch nicht begonnene Schritte. Ein reiner Entwurf für die Aufteilung der gemeinsamen Firmware in ein `MCU_A_PH`/`MCU_B_EC`-Profilpaar liegt außerdem unter `docs/PERISTALTIC_PROFILE_PLAN.md` vor (keine Firmware-/Verhaltensänderung dadurch).
 10. **pH-Dosierungsgrenzen noch nicht durchgesetzt** — pH-Sollwert, pH-Mischzeit und pH-Stockvolumengrenzen wurden gegen die alte Node-RED-Konfiguration bestätigt (siehe `docs/OPEN_RECIPE_DECISIONS.md`), aber bewusst nicht als harte Validierung ergänzt, da die pH-Dosierung noch keinen Konsumenten hat und sie außerhalb des explizit angeforderten Regelsatzes lagen. (EC-Sollwert-/Mischzeitgrenzen und die Grenze des EC-Anpassungsfaktors *sind* durchgesetzt — siehe Abschnitt 15. Addon-1/Addon-2-Grenzen entfallen vollständig, da Addon 1/Addon 2 vollständig aus dem aktiven Rezeptmodell entfernt wurden.) Ob/wie die verbleibenden pH-Grenzen durchgesetzt werden sollen, ist eine noch offene fachliche Entscheidung.
+11. **AP-05 Stufe 1 integriert, aber nicht eingebunden** — Commit `f463a0f` ist in `main` und auf GitHub; kein Prozess-, Dashboard- oder Hardwarecode nutzt `domain/recipe/nutrient_plan.py` / `volume_balance.py` (Abschnitt 22). Stufen 2–6 und AP-06 bis AP-09 sind ausstehend.
+12. **Bekannter Testfehler** — Recipe-Editor-Schrittweitentest (Abschnitt 23).
+13. **Offene Sicherheits- und Hardwarefragen** (O1, Abschaltrückmeldung, Füllstand < ca. 10 L, Trockenlauf, vorläufige Drain-Parameter, Kill-/SIGTERM-Grenzen, `DigitalOutput`-Cleanup, MQTT-Zustellung, MCU_B-Identitäts-/Kalibrierungs-Gates) — Abschnitt 24.
 
 ---
 
@@ -1163,3 +1346,83 @@ Neue Hardwarefunktionen werden nur aufgenommen, wenn:
 - ein Safe-Shutdown vorhanden ist,
 - ein Timeout oder plausibler Abbruchpfad existiert,
 - und der Ablauf zunächst mit Wasser getestet wurde.
+
+---
+
+## 21. Arbeitspaket-Ergebnisse AP-00 bis AP-04
+
+Alle folgenden Punkte sind Softwareergebnisse, abgesichert durch hardwarefreie Tests (Abschnitt 23). Keiner davon wurde am realen System ausgeführt.
+
+**AP-00 – Isolierte automatisierte Tests.** `tests/_hardware_guard.py` wird von `tests/conftest.py` vor der Collection und für Kindprozesse über `tests/_guard_site/sitecustomize.py` installiert. Er blockiert GPIO (`gpiozero`-Pin-Factory, `lgpio`), serielle Geräte, Netzwerkverbindungen (MQTT/OPC-UA) und Schreibzugriffe auf `logs/`, `config/`, `recipes/` und `calibration_data/`; die Hardware-Lock-Datei wird auf einen temporären Pfad umgeleitet. Jeder blockierte Versuch wird protokolliert und lässt den Test scheitern, auch wenn der Aufrufer die Exception verschluckt. Dafür wurde kein Produktivcode geändert. Bekannte Lücke: Der Exit-Code eines nie abgewarteten Kindprozesses wird bei fehlgeschlagener Meldung nicht gesehen (im Modul dokumentiert).
+
+**AP-01 – Laufoptionen.** Im Dashboard gewählte `RunOptions` werden an den Prozess-Controller weitergegeben (`nicegui_dashboard/cds_controller.py`).
+
+**AP-02 – Rezept-/Laufzeitvalidierung, Sensorprüfung, Fill-Sicherheit.**
+
+- AP-02A: `statemachine/sensor_reading.py` akzeptiert nur echte, endliche Zahlen (kein `bool`, NaN, inf, keine für `float` zu großen Ganzzahlen); ein ungültiger bevorzugter Wert wird nie durch einen weniger verlässlichen Fallback ersetzt. `services/settings_validation.py` validiert Settings strenger.
+- AP-02B: `statemachine/start_validation.py` ist eine reine, fail-closed Startfreigabe für Rezeptläufe. Blockgründe: `run_config_invalid`, `sensor_invalid`, `mixer_invalid`, `mixer_implausible`, `mixer_at_target`, `ro_invalid`, `ro_capacity_invalid`, `ro_insufficient`, `tank_not_confirmed`, `empty_veto`. Die Operator-Bestätigung „Mischtank entleert“ ist keine Messung; der Mixerwert dient nur als Veto gegen einen Widerspruch, da die Kalibrierung unterhalb von etwa 10 L nicht belastbar ist.
+- AP-02C: Im Rezeptlauf-Modus wiederholt die Fill-State-Machine die Startfreigabe unmittelbar vor Pumpe-an auf einer neuen Messung, verlangt innerhalb von 5 s eine neue MQTT-Nachricht mit späterem Bridge-Zeitstempel (`services/sensor_stamp.py`), prüft RO- und Mixerwerte in jedem Takt ungefiltert, schaltet beim Erreichen des Ziels die Pumpe zuerst aus und bestätigt das Ziel nur bei ausgeschalteter Pumpe und hält den ersten Fehler endgültig fest (ein paralleler Emergency Stop kann weder überschrieben noch von einem erneuten Einschalten gefolgt werden). Das 5-s-Fenster ist nicht hardwarevalidiert.
+
+**AP-03 – Hardware-Start-Gates und Ausschluss.**
+
+- AP-03A: `process/common.py` liest den Mixerstand strikt; die Endlichkeitsprüfung erfolgt vor dem Begrenzen auf null, ungültige Werte gelangen nie in die Historie.
+- AP-03B: `BackgroundHardwareProcess` gibt Hardware nur frei, wenn `hardware_execution_enabled is True` (keine `bool()`-Umwandlung: Strings, `1`, `None`, fehlender Schlüssel oder Nicht-dict-Settings blockieren); eine Exception beim Lesen des Sensor-Snapshots blockiert den Start kontrolliert.
+- Der gegenseitige Ausschluss von Fill-and-Measure, Manual Drain Jog und Tank Cleaning (`ProcessController`-Lock) und die prozessübergreifende `fcntl.flock`-Sperre sind ältere Mechanismen (Abschnitt 8), nicht neu in AP-03.
+
+**AP-04 – Drain-Sicherheit, Prozessfehler, Water-Cycle-Abschluss.**
+
+- AP-04A: `process/drain_safety.py` liefert für `process/drain.py`, `process/tank_cleaning/drain_phase.py` und `process/manual_drain_jog.py` einen `DrainSensorWatchdog` (Plausibilität, Sensorverlust, kein Fortschritt, unerwarteter Anstieg auf dem ungefilterten Mixerstand) und eine gemeinsame Stopp-Sequenz `safe_stop_drain` (Transferpumpe aus, danach Drain-Ventil aus; beides wird immer versucht, Fehler werden gesammelt). Drain-Settings werden validiert, bevor ein Aktor berührt wird; der Manual Drain Jog hat ein verbindliches Maximum von 30 s. Ein fehlgeschlagenes Abschalten wird nie als Erfolg gemeldet.
+- AP-04: `process/water_cycle.py` sammelt das Ergebnis (`finished`, `aborted`, `interrupted`, `startup_failed`, `error`; Standard fail-closed `error`) und leitet Exit-Code und finalen Status erst nach vollständigem Cleanup ab. Jeder Cleanup-Schritt läuft isoliert; seine Exception wird protokolliert, nicht weitergereicht.
+- Finale MQTT-Status: `WATER_CYCLE_FINISHED` wird nur gesendet, wenn das Cleanup fehlerfrei war; der Endstatus ist `SAFE_SHUTDOWN` oder `SAFE_SHUTDOWN_FAILED` und enthält `cleanup_errors`, `physical_switch_off_confirmed: false` und `status_publish_failures`.
+- **MQTT-Zustellung ist nicht garantiert.** QoS 1 mit kurzem `wait_for_publish`-Timeout (`services/mqtt_publisher.py`). Ein Status-Publish wirft nie in das Cleanup hinein. Fehlerbehandlung in `process/water_cycle.py`:
+  - `publish_json() == False` oder eine Exception wird in `status_publish_failures` gezählt und protokolliert, ändert aber für sich genommen nicht den Exit-Code.
+  - Ein `KeyboardInterrupt` während `_publish()` wird als Cleanup-Fehler registriert; der finale Exit-Code kann dadurch 1 werden.
+  - Ein korrigierender finaler MQTT-Status wird genau dann einmalig versucht, wenn der vorherige finale Publish einen neuen Cleanup-Fehler registriert hat, beispielsweise durch `KeyboardInterrupt`. Bei einem gewöhnlichen `publish_json() == False` oder einer abgefangenen regulären Exception ohne neuen Cleanup-Fehler erfolgt kein Retry.
+  - `mqtt_publisher.close()` erfolgt nach der finalen Statusmeldung. Ein Fehler dabei kann lokal zu Exit-Code 1 führen, ohne im zuletzt veröffentlichten MQTT-Status enthalten zu sein.
+
+## 22. AP-05 Stufe 1 – Dosierplan und Volumenbilanz (reine Fachlogik)
+
+`domain/recipe/nutrient_plan.py` und `domain/recipe/volume_balance.py` führen kein I/O aus: keine Hardware, kein MQTT, kein Sensor, keine Datei, keine Uhr. Nichts in `process/`, `statemachine/` oder `nicegui_dashboard/` importiert sie bisher. **Die Existenz eines Dosierplans ist keine Freigabe realer MCU_B-Dosierung und nicht Teil eines Prozesses.**
+
+- Eingabe ist ausschließlich der validierte `RunConfigSnapshot`; Summen, A/B-Aufteilung und Volumen werden mit den vorhandenen Funktionen nachgerechnet und gegen den Snapshot abgeglichen; jeder Widerspruch ist ein `NutrientPlanError` mit maschinenlesbarem Code.
+- `NutrientDosingPlan` ist unveränderlich (frozen Dataclasses, schreibgeschützte Mappings, Plan-Hash).
+- Pumpenrollen MCU_B: P1 und P3 für Lösung A, P2 und P4 für Lösung B (kanonische private Tupel, öffentliche Sichten schreibgeschützt).
+- Exakte Arithmetik in ganzzahligen Mikrolitern. Je Lösung erhält die erste Pumpe (P1/P2) `floor(Menge * w1/(w1+w2) + 1/2)`, die zweite (P3/P4) den Rest; die Summe ist damit exakt. Gewichte müssen ausdrücklich übergeben werden (Profil `firmware_ml_per_step`); es gibt keine Standardgewichtung und keinen 50/50-Fallback.
+- Begrenztes Chunking: `n = ceil(Ziel / max_chunk)`, gleich große Chunks, keine Null-Chunks, kein winziger Restchunk; Referenzlimit 50 ml (Firmware-Limit, per Test geprüft); höchstens 20 000 Chunks je Pumpe, sonst wird der Plan abgelehnt (Speicherschutz; Mengen werden nie verändert).
+- `volume_balance.py` trennt vier Evidenzklassen, die nie vermischt werden: geplant, protokollbestätigt (ein `DONE` ist ein Protokollereignis, kein Nachweis der geförderten Menge), sensorgemessen (nur Gesamtvolumen) und unbestätigt (in flight / unsicher). Es gibt keine unabhängige RO-Durchflussmessung; der RO-Anteil ist nur indirekt schätzbar und wird nie als Grenzwert verwendet.
+- Grenzen: RO-Wasser 180 L (`MAX_RECIPE_RO_WATER_L`), Prozessvolumen 185 L (`MAX_PROCESS_VOLUME_L`); Vergleiche sind exakt (`fractions.Fraction`), die Kapazität wird auf ganze µL abgerundet.
+- In-flight- und unsichere Nährstoffmengen sperren Zielbestätigung, Endvolumenbewertung und RO-Wiederaufnahme; Bewertungsfunktionen liefern einen Fehlergrund statt zu werfen.
+- Ungültige Zahlen (bool, NaN, inf, riesige Ganzzahlen, falsche Typen) enden in kontrollierten Fehlern; das Chunk-Budget verhindert übermäßige Speicherallokation.
+- Referenz-Teststand: 565 Tests bestanden (`tests/test_nutrient_plan.py` 373, `tests/test_volume_balance.py` 192), unabhängig geprüft.
+- Offen für Stufe 2: MCU-Identitäts-, Firmware-/Profil- und Kalibrierungs-Gates; Übernahme in einen Prozess.
+
+## 23. Teststatus und Grenzen
+
+Strategie: `pytest` mit dem AP-00-Guard; alle Tests sind hardwarefrei. Prozess-, State-Machine- und MQTT-Tests verwenden Fakes; GPIO, Seriell und Netzwerk sind strukturell blockiert, nicht nur per Konvention.
+
+| Lauf | Ergebnis |
+|---|---|
+| Vollständige Suite, Haupt-Worktree (`f463a0f`, 2026-10-14) | 1874 bestanden, **1 fehlgeschlagen** |
+| Nur AP-05-Stufe-1-Tests | 565 bestanden |
+| Vollständige Suite, separater Worktree `../cds_control_ap05_s1` | 1873 bestanden, 2 fehlgeschlagen, 3 Fehler (der bekannte Fehlschlag plus die Folgen der fehlenden Datei, siehe unten) |
+
+- **Bekannter Fehlschlag:** `tests/test_dashboard_page_recipe_editor.py::test_recipe_editor_number_fields_have_field_appropriate_step` erwartet für den EC-Sollwert die Schrittweite `0.1`; `nicegui_dashboard/pages/dashboard/recipe_section.py` setzt `0.05`. Welcher Wert gewollt ist, ist nicht entschieden; diese README behauptet keinen von beiden. Kein Bezug zu AP-00 bis AP-05.
+- **Fehler im separaten Worktree (umgebungsbedingt):** Die Datei `recipes/dashboard_recipes.json` ist gitignorierte Laufzeitdatei und fehlt in diesem Worktree. Tests, die das echte Rezeptbuch lesen (`tests/test_recipe_run_config.py::test_real_active_recipe_merged_onto_real_settings_passes_schema` und zwei Tests in `tests/test_process_locking.py`), scheitern dort, weil der Code `recipes/` anlegen will und der AP-00-Guard dies korrekt blockiert (`os.mkdir('recipes')`). Das ist eine fehlende lokale Datei, kein Produktfehler; im Haupt-Worktree ist die Datei vorhanden.
+- Die Suite ist daher **nicht** vollständig grün; die Aussage „alle Tests erfolgreich“ wird nicht getroffen. Bestandene Tests belegen kein Hardwareverhalten.
+
+## 24. Offene Sicherheits- und Hardwarefragen
+
+| Thema | Beschreibung | Zugeordnet zu |
+|---|---|---|
+| Keine physische Abschaltrückmeldung | Abschalten ist ein Softwareaufruf; `physical_switch_off_confirmed` ist immer `false` | AP-09 |
+| O1 | `safe_stop_drain()` (`process/drain_safety.py`) versucht derzeit immer, zuerst die Transferpumpe abzuschalten und anschließend das Drain-Ventil zu schließen, auch wenn `transfer_pump.off()` fehlschlägt. Ob dieses Verhalten bei unbekanntem physischem Pumpenzustand sicher ist, bleibt eine offene Hardwareentscheidung (O1) und muss vor der Freigabe des realen Drain-Prozesses validiert werden | AP-09 |
+| Füllstand unter etwa 10 L | Die Füllstandsmessung ist unter etwa 10 L nicht validiert. Ein angezeigter Wert von 0,0 L ist kein zuverlässiger Nachweis für einen vollständig leeren Tank | AP-09 |
+| Trockenlauf | Software kann Trockenlauf der Transferpumpe nicht verhindern; sie begrenzt nur die Laufzeit bei Sensorverlust/fehlendem Fortschritt | AP-09 |
+| Vorläufige Drain-Parameter | Sensorverlust-Grenze 5 s sowie die Standardwerte für Pumpenförderrate (16 L/min), Timeout-Puffer (180 s), Ventil-Settle-Zeit (1 s) und Fortschritts-/Anstiegsgrenzen in `DrainSafetyLimits`: nicht hardwarevalidiert | AP-09 |
+| SIGTERM / Kill | Cleanup läuft nur, wenn der Prozess es ausführen kann; nach `SIGKILL` oder hartem Absturz ist keine Software-Bereinigung möglich, Ausgänge können im letzten Zustand bleiben | AP-09 |
+| `DigitalOutput`-Cleanup | `hardware/digital_output.py`: `off()` tut nichts, wenn der Softwarezustand „inaktiv“ ist; `close()` erreicht `device.close()` nicht, wenn `off()` eine Exception wirft. Ein nachgewiesener Softwarefehler muss vor einer betroffenen Hardwarefreigabe korrigiert werden; AP-09 bleibt für Hardware- und Systemvalidierung zuständig | zuerst Softwarekorrektur, dann AP-09 |
+| MQTT-Zustellung | Statusmeldungen sind nicht garantiert zugestellt (Abschnitt 21) | akzeptierte Einschränkung |
+| MCU_B-Identität und Kalibrierung | Identitätsprüfung, Firmware-/Profil-Abgleich und Freigaben der Einzelpumpenkalibrierung sind nicht abgeschlossen | AP-05 Stufe 2 |
+| Chemische Dosierung | Nicht freigegeben. Keine chemische Dosierung, bevor alle Hardware-Gates bestanden sind | AP-05 Stufe 2 / AP-09 |
+
+Die Zuordnung offener Punkte zu AP-05 Stufe 2 und AP-09 folgt der Roadmap (AP-09: Gesamtintegration, Hardwarevalidierung, Systemtests); die einzelne Zuordnung ist die Lesart des Autors.
