@@ -46,27 +46,68 @@ def validate_fill_start(
     settings: Any, sensor_snapshot: Any
 ) -> tuple[bool, str | None]:
     """Prueft die Startfreigabe. Rueckgabe: (True, None) oder (False, Meldung)."""
+    ok, message, _reason = validate_fill_start_with_reason(settings, sensor_snapshot)
+    return ok, message
+
+
+def validate_fill_start_with_reason(
+    settings: Any, sensor_snapshot: Any
+) -> tuple[bool, str | None, str | None]:
+    """Wie validate_fill_start, zusaetzlich mit maschinenlesbarem Grund-Code."""
     try:
-        return _validate(settings, sensor_snapshot)
+        return _validate(settings, sensor_snapshot, runtime=False, mixer_filtered_l=None)
     except Exception as exc:  # fail-closed: nie unkontrolliert durchreichen
-        return False, f"Start blockiert: Startpruefung fehlgeschlagen ({type(exc).__name__}: {exc})."
+        return (
+            False,
+            f"Start blockiert: Startpruefung fehlgeschlagen ({type(exc).__name__}: {exc}).",
+            "validation_exception",
+        )
 
 
-def _block(message: str) -> tuple[bool, str]:
-    return False, f"Start blockiert: {message}"
+def validate_fill_runtime(
+    settings: Any, sensor_snapshot: Any, mixer_filtered_l: float | None
+) -> tuple[bool, str | None, str | None]:
+    """Laufende Pruefung waehrend/nach der Befuellung (Pumpe an oder gerade aus).
+
+    Gleiche Regeln wie die Startfreigabe (Bestaetigung, Zielkonsistenz,
+    Sensor-/RO-Plausibilitaet, Kapazitaet, RO-Bedarf plus Reserve), aber ohne
+    Leere-Veto und ohne "Ziel schon erreicht" - beides gilt nur vor dem
+    Pumpenstart. Sicherheitsgrenzen nutzen den ungefilterten Mixerwert; fuer
+    den RO-Bedarf gilt min(ungefiltert, gefiltert), sofern der gefilterte Wert
+    gueltig ist.
+    """
+    try:
+        ok, message, reason = _validate(
+            settings, sensor_snapshot, runtime=True, mixer_filtered_l=mixer_filtered_l
+        )
+        if message:
+            message = message.replace("Start blockiert:", "Lauf abgebrochen:", 1)
+        return ok, message, reason
+    except Exception as exc:
+        return (
+            False,
+            f"Lauf blockiert: Laufpruefung fehlgeschlagen ({type(exc).__name__}: {exc}).",
+            "validation_exception",
+        )
 
 
-def _validate(settings: Any, sensor_snapshot: Any) -> tuple[bool, str | None]:
+def _block(reason: str, message: str) -> tuple[bool, str, str]:
+    return False, f"Start blockiert: {message}", reason
+
+
+def _validate(
+    settings: Any, sensor_snapshot: Any, *, runtime: bool, mixer_filtered_l: float | None
+) -> tuple[bool, str | None, str | None]:
     if not isinstance(settings, dict):
-        return _block("Prozesseinstellungen fehlen oder sind ungueltig.")
+        return _block("run_config_invalid", "Prozesseinstellungen fehlen oder sind ungueltig.")
 
     run_snapshot = settings.get("recipe_run_config_snapshot")
     if not isinstance(run_snapshot, dict):
-        return _block("Rezept-RunConfig (recipe_run_config_snapshot) fehlt oder ist ungueltig.")
+        return _block("run_config_invalid", "Rezept-RunConfig (recipe_run_config_snapshot) fehlt oder ist ungueltig.")
 
     # 1. Betreiberbestaetigung (strikt: nur echtes True)
     if run_snapshot.get("tank_emptied_confirmed") is not True:
-        return _block(
+        return _block("tank_not_confirmed",
             "Die Entleerung des Mischtanks wurde fuer diesen Lauf nicht bestaetigt."
         )
 
@@ -79,89 +120,94 @@ def _validate(settings: Any, sensor_snapshot: Any) -> tuple[bool, str | None]:
     reserve = finite_number(settings.get("min_ro_liters_required"))
 
     if settings.get("fill_mode") != "absolute":
-        return _block("Fuellmodus ist nicht 'absolute'; der Rezeptlauf erwartet einen absoluten Fuellstand.")
+        return _block("run_config_invalid", "Fuellmodus ist nicht 'absolute'; der Rezeptlauf erwartet einen absoluten Fuellstand.")
     if None in (target_total, target_ro, estimated_volume, max_mixer):
-        return _block("Zielmengen der RunConfig fehlen oder sind keine endlichen Zahlen.")
+        return _block("run_config_invalid", "Zielmengen der RunConfig fehlen oder sind keine endlichen Zahlen.")
     if reserve is None or reserve < 0.0:
-        return _block("min_ro_liters_required fehlt oder ist ungueltig.")
+        return _block("run_config_invalid", "min_ro_liters_required fehlt oder ist ungueltig.")
     if target_total <= 0.0:
-        return _block("Rezept-Fuellziel muss groesser als 0 L sein.")
+        return _block("run_config_invalid", "Rezept-Fuellziel muss groesser als 0 L sein.")
     if abs(target_total - target_ro) > _TOLERANCE_L:
-        return _block(
+        return _block("run_config_invalid",
             f"Widerspruechliche Zielmengen: Fuellziel {target_total:.2f} L "
             f"entspricht nicht der Rezept-RO-Menge {target_ro:.2f} L."
         )
     if target_ro > MAX_RECIPE_RO_WATER_L + _TOLERANCE_L:
-        return _block(
+        return _block("run_config_invalid",
             f"Rezept-RO-Menge {target_ro:.2f} L ueberschreitet das Maximum von {MAX_RECIPE_RO_WATER_L:.0f} L."
         )
     if estimated_volume + _TOLERANCE_L < target_ro or estimated_volume > MAX_PROCESS_VOLUME_L + _TOLERANCE_L:
-        return _block(
+        return _block("run_config_invalid",
             f"Geschaetztes Prozessvolumen {estimated_volume:.2f} L ist widerspruechlich "
             f"oder ueberschreitet {MAX_PROCESS_VOLUME_L:.0f} L."
         )
     if operative_max_mixer is None or operative_max_mixer <= 0.0 or operative_max_mixer > MAX_PROCESS_VOLUME_L + _TOLERANCE_L:
-        return _block(
+        return _block("run_config_invalid",
             f"max_mixer_liters der Einstellungen fehlt oder ist ungueltig (erlaubt: 0 bis {MAX_PROCESS_VOLUME_L:.0f} L)."
         )
     if max_mixer is not None and abs(operative_max_mixer - max_mixer) > _TOLERANCE_L:
-        return _block(
+        return _block("run_config_invalid",
             f"Widerspruechliche Mixergrenze: Einstellungen {operative_max_mixer:.2f} L, "
             f"Rezept-RunConfig {max_mixer:.2f} L."
         )
     if max_mixer > MAX_PROCESS_VOLUME_L + _TOLERANCE_L or max_mixer + _TOLERANCE_L < estimated_volume:
-        return _block(
+        return _block("run_config_invalid",
             f"max_mixer_liters ({max_mixer:.2f} L) ist ungueltig oder kleiner als das Prozessvolumen."
         )
 
     # 2. Sensor-Snapshot
     if not isinstance(sensor_snapshot, dict) or not sensor_snapshot:
-        return _block("Kein gueltiger Sensor-Snapshot vorhanden.")
+        return _block("sensor_invalid", "Kein gueltiger Sensor-Snapshot vorhanden.")
 
     # 3./4./5./6. Mixerfuellstand
     mixer_l = mixer_liters_from_snapshot(sensor_snapshot, settings)
     if mixer_l is None:
-        return _block("Mixerfuellstand fehlt oder ist kein endlicher Zahlenwert.")
+        return _block("mixer_invalid", "Mixerfuellstand fehlt oder ist kein endlicher Zahlenwert.")
     if mixer_l < 0.0:
-        return _block(f"Mixerfuellstand {mixer_l:.2f} L ist negativ und damit unplausibel.")
+        return _block("mixer_implausible", f"Mixerfuellstand {mixer_l:.2f} L ist negativ und damit unplausibel.")
     if mixer_l > MAX_PROCESS_VOLUME_L:
-        return _block(
+        return _block("mixer_implausible",
             f"Mixerfuellstand {mixer_l:.2f} L liegt ueber der Prozessgrenze von {MAX_PROCESS_VOLUME_L:.0f} L."
         )
-    if mixer_l > MIXER_EMPTY_VETO_L:
-        return _block(
+    if not runtime and mixer_l > MIXER_EMPTY_VETO_L:
+        return _block("empty_veto",
             f"Mixerfuellstand {mixer_l:.2f} L liegt ueber {MIXER_EMPTY_VETO_L:.1f} L; der Mischtank "
             "ist offenbar nicht entleert. Hinweis: Die Sensorik ist unterhalb von ca. 10 L nicht belastbar."
         )
-    if mixer_l >= target_total:
-        return _block(
+    if not runtime and mixer_l >= target_total:
+        return _block("mixer_at_target",
             f"Mixerfuellstand {mixer_l:.2f} L liegt bereits auf oder ueber dem Rezeptziel {target_total:.2f} L."
         )
 
     # 7./8. RO-Fuellstand und gemeldete Kapazitaet
     ro_l = ro_liters_from_snapshot(sensor_snapshot)
     if ro_l is None:
-        return _block("RO-Fuellstand fehlt oder ist kein endlicher Zahlenwert.")
+        return _block("ro_invalid", "RO-Fuellstand fehlt oder ist kein endlicher Zahlenwert.")
     if ro_l < 0.0:
-        return _block(f"RO-Fuellstand {ro_l:.2f} L ist negativ und damit unplausibel.")
+        return _block("ro_invalid", f"RO-Fuellstand {ro_l:.2f} L ist negativ und damit unplausibel.")
 
     capacity = finite_number(_section(sensor_snapshot, "ro").get("configured_max_liters"))
     if capacity is None or capacity <= 0.0:
-        return _block("RO-Kapazitaet (configured_max_liters) fehlt oder ist ungueltig.")
+        return _block("ro_capacity_invalid", "RO-Kapazitaet (configured_max_liters) fehlt oder ist ungueltig.")
     if abs(capacity - RO_TANK_CAPACITY_L) > _TOLERANCE_L:
-        return _block(
+        return _block("ro_capacity_invalid",
             f"Gemeldete RO-Kapazitaet {capacity:.1f} L widerspricht der erwarteten "
             f"CDS-Kapazitaet von {RO_TANK_CAPACITY_L:.0f} L."
         )
     if ro_l > capacity:
-        return _block(f"RO-Fuellstand {ro_l:.2f} L uebersteigt die RO-Kapazitaet {capacity:.0f} L.")
+        return _block("ro_invalid", f"RO-Fuellstand {ro_l:.2f} L uebersteigt die RO-Kapazitaet {capacity:.0f} L.")
 
     # 9. RO-Bedarf inklusive Reserve
-    needed = required_ro_liters(target_total, mixer_l)
+    mixer_for_need = mixer_l
+    if runtime:
+        filtered = finite_number(mixer_filtered_l)
+        if filtered is not None:
+            mixer_for_need = min(mixer_l, filtered)
+    needed = required_ro_liters(target_total, mixer_for_need)
     if not math.isfinite(needed) or ro_l < needed + reserve:
-        return _block(
+        return _block("ro_insufficient",
             f"Unzureichender RO-Vorrat: verfuegbar {ro_l:.2f} L, benoetigt {needed:.2f} L "
             f"plus Reserve {reserve:.2f} L = {needed + reserve:.2f} L."
         )
 
-    return True, None
+    return True, None, None

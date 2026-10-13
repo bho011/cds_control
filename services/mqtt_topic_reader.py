@@ -30,6 +30,8 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
+from services.sensor_stamp import RX_META_KEY
+
 # Eindeutiger Sentinel, unterscheidbar von None und jedem float - ein
 # einfacher None-Default könnte "Parameter weggelassen" und "explizit None
 # übergeben" nicht auseinanderhalten (siehe Modularisierungs-Plan Phase 3).
@@ -58,6 +60,11 @@ class MqttTopicReader:
 
         self._latest_payload: dict[str, Any] | None = None
         self._latest_received_at: float | None = None
+        # Counts every successfully parsed message (never reset, not even by
+        # clear()), so two reads of the SAME message can be told apart from two
+        # different messages. Not a physical-measurement proof (a bridge
+        # republishing a frozen OPC-UA value still produces new messages).
+        self._rx_seq = 0
         self._error: str | None = None
         self._lock = threading.Lock()
         self._message_event = threading.Event()
@@ -84,6 +91,7 @@ class MqttTopicReader:
             with self._lock:
                 self._latest_payload = payload
                 self._latest_received_at = time.monotonic()
+                self._rx_seq += 1
                 self._error = None
 
             self._message_event.set()
@@ -117,6 +125,26 @@ class MqttTopicReader:
                     return None
 
             return dict(self._latest_payload)
+
+    def get_latest_stamped(self, max_age_seconds: float | None = _UNSET) -> dict[str, Any] | None:
+        """Like get_latest(), but the returned copy additionally carries
+        RX_META_KEY = {"seq": <receive counter of this message>}. Only for
+        consumers that must tell different messages apart; get_latest() and
+        its payload contract stay unchanged. None for stale/missing/non-dict."""
+        if max_age_seconds is _UNSET:
+            max_age_seconds = self.max_age_seconds
+
+        with self._lock:
+            if self._latest_payload is None or self._latest_received_at is None:
+                return None
+            if not isinstance(self._latest_payload, dict):
+                return None
+            if max_age_seconds is not None:
+                if time.monotonic() - self._latest_received_at > max_age_seconds:
+                    return None
+            stamped = dict(self._latest_payload)
+            stamped[RX_META_KEY] = {"seq": self._rx_seq}
+            return stamped
 
     def get_error(self) -> str | None:
         with self._lock:

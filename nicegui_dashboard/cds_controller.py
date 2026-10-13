@@ -47,7 +47,7 @@ class CdsController:
         self.process_reader_error: str | None = None
 
         self.process_controller = ProcessController(
-            get_sensor_snapshot=lambda: self.sensor_reader.get_latest(
+            get_sensor_snapshot=lambda: self.sensor_reader.get_latest_stamped(
                 max_age_seconds=5.0
             )
         )

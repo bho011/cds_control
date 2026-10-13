@@ -203,6 +203,7 @@ class FillAndMeasureController(BackgroundHardwareProcess):
                 sensor_circulation_pump=sensor_circulation_pump,
                 get_sensor_snapshot=self.get_sensor_snapshot,
                 settings=settings,
+                recipe_run=True,
             )
 
             with self._lock:
@@ -357,15 +358,9 @@ class FillAndMeasureController(BackgroundHardwareProcess):
         snapshot = self.get_sensor_snapshot()
         actuator_status = self._actuators.status_payload()
 
-        mixer_liters_filtered = None
-
-        if snapshot is not None:
-            try:
-                mixer_liters_filtered = self.state_machine._filtered_mixer_liters(
-                    snapshot
-                )
-            except Exception:
-                mixer_liters_filtered = None
+        # Cached value of the state machine: logging must never feed the
+        # moving average a second time (AP-02C).
+        mixer_liters_filtered = self.state_machine.last_filtered_mixer_liters
 
         self.process_logger.write_step(
             state=self.state_machine.state.name,
