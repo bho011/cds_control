@@ -10,6 +10,14 @@ from typing import Any
 from domain.recipe_limits import MAX_PROCESS_VOLUME_L
 from services.settings_validation import SettingField, validate_settings
 from services.system_config import get_mixer_level_calibration
+# AP-02A helpers (statemachine/sensor_reading.py is not modified here).
+# ro_liters_from_snapshot is identical for both paths and re-exported as is.
+from statemachine.sensor_reading import (
+    _mean,
+    _section,
+    finite_number,
+    ro_liters_from_snapshot,
+)
 
 
 SETTINGS_PATH = Path("config/water_cycle_settings.json")
@@ -132,39 +140,44 @@ def make_level_history(settings: dict):
 
 
 def mixer_liters_from_snapshot(snapshot: dict[str, Any], settings: dict) -> float | None:
-    mixer = snapshot.get("mixer") or {}
+    """Mixer liters from a snapshot; None if the reading is unusable.
 
+    Strict number handling comes from statemachine/sensor_reading.py (AP-02A).
+    Not reused as a whole on purpose: this path reads the system calibration at
+    call time and has no per-process factor/offset override.
+    """
+    mixer = _section(snapshot, "mixer")
+
+    # An invalid preferred value is not masked by a less reliable fallback.
     value = mixer.get("volume_liters_calc")
     if value is not None:
-        return float(value)
+        return finite_number(value)
 
     raw_liters = mixer.get("volume_liters_raw")
     if raw_liters is not None:
-        calibration = get_mixer_level_calibration()
-        factor = float(calibration["factor"])
-        offset = float(calibration["offset"])
-        return max(0.0, (float(raw_liters) * factor) + offset)
+        raw = finite_number(raw_liters)
+        try:
+            calibration = get_mixer_level_calibration()
+            factor = finite_number(calibration["factor"])
+            offset = finite_number(calibration["offset"])
+        except (KeyError, TypeError):
+            return None
+        if raw is None or factor is None or offset is None:
+            return None
+        # Finite check BEFORE the zero clamp: max(0.0, -inf) would turn an
+        # overflow into a plausible-looking 0.0.
+        calibrated = finite_number((raw * factor) + offset)
+        if calibrated is None:
+            return None
+        return max(0.0, calibrated)
 
     level_percent = mixer.get("level_percent")
     if level_percent is not None:
-        max_liters = float(settings["max_mixer_liters"])
-        return (float(level_percent) / 100.0) * max_liters
-
-    return None
-
-
-def ro_liters_from_snapshot(snapshot: dict[str, Any]) -> float | None:
-    ro = snapshot.get("ro") or {}
-
-    value = ro.get("volume_liters_calc")
-    if value is not None:
-        return float(value)
-
-    level_percent = ro.get("level_percent")
-    configured_max = ro.get("configured_max_liters")
-
-    if level_percent is not None and configured_max is not None:
-        return (float(level_percent) / 100.0) * float(configured_max)
+        percent = finite_number(level_percent)
+        max_liters = finite_number(settings.get("max_mixer_liters")) if isinstance(settings, dict) else None
+        if percent is None or max_liters is None:
+            return None
+        return finite_number((percent / 100.0) * max_liters)
 
     return None
 
@@ -172,14 +185,15 @@ def ro_liters_from_snapshot(snapshot: dict[str, Any]) -> float | None:
 def read_metrics(sensor_reader, settings, level_history) -> Metrics:
     snapshot = sensor_reader.get_latest(max_age_seconds=5.0)
 
-    if snapshot is None:
+    if not isinstance(snapshot, dict):
         return Metrics(snapshot={}, mixer_liters_filtered=None, ro_liters=None)
 
     mixer_liters = mixer_liters_from_snapshot(snapshot, settings)
 
+    # Only valid readings enter the history; an invalid one must not poison it.
     if mixer_liters is not None:
         level_history.append(mixer_liters)
-        mixer_filtered = sum(level_history) / len(level_history)
+        mixer_filtered = _mean(level_history)
     else:
         mixer_filtered = None
 
