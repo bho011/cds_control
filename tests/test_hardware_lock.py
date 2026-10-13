@@ -4,14 +4,12 @@ hardware/actuator_manager.py::ActuatorManager. ActuatorManager.__init__()
 itself never touches gpiozero (only .add() does), so constructing instances
 here is safe without any real pin ever being claimed.
 
-Note: the second test acquires the REAL lock path
-(hardware/actuator_manager.py::LOCK_PATH), the same one the live dashboard/
-water_cycle.py/calibration_mixing_tank.py use. If a real hardware process
-happens to be actively running at the exact moment this test runs, the
-"second lock must fail" assertions could see a lock held by that unrelated
-process instead of the one this test created - that is the mechanism working
-correctly, not a test bug, but it does mean this test is not perfectly
-isolated from the live system's state.
+AP-00: Diese Tests benutzen AUSSCHLIESSLICH eine temporaere Test-Sperrdatei
+(autouse-Fixture in tests/conftest.py setzt hardware.actuator_manager.LOCK_PATH
+und die Umgebungsvariable CDS_TEST_HARDWARE_LOCK_PATH, die auch der
+Subprozess ueber die Test-Isolation uebernimmt). Die produktive Sperrdatei
+logs/.hardware.lock wird weder geoeffnet noch gesperrt; die Sperrsemantik
+(prozessuebergreifend, exklusiv, nicht-blockierend) ist unveraendert.
 """
 
 from __future__ import annotations
@@ -21,12 +19,24 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
+import hardware.actuator_manager as actuator_manager
 from hardware.actuator_manager import ActuatorManager, HardwareLockError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+PRODUCTION_LOCK = REPO_ROOT / "logs" / ".hardware.lock"
 
 
-def test_second_in_process_lock_attempt_is_rejected():
+@pytest.fixture
+def lock_path(tmp_path) -> Path:
+    path = actuator_manager.LOCK_PATH  # bereits durch die autouse-Fixture auf tmp_path gesetzt
+    assert path.parent == tmp_path
+    assert path != PRODUCTION_LOCK
+    return path
+
+
+def test_second_in_process_lock_attempt_is_rejected(lock_path):
     first = ActuatorManager(active_low=True)
     try:
         try:
@@ -40,9 +50,13 @@ def test_second_in_process_lock_attempt_is_rejected():
     # After release, a new instance must succeed again.
     second = ActuatorManager(active_low=True)
     second.close_all()
+    assert lock_path.exists()
 
 
-def test_lock_is_enforced_against_a_real_separate_process():
+def test_lock_is_enforced_against_a_real_separate_process(lock_path):
+    # Der Kindprozess bekommt die Test-Sperrdatei ueber die geerbte Umgebung
+    # (CDS_TEST_HARDWARE_LOCK_PATH) + sitecustomize-Guard; zur Sicherheit
+    # wird sie hier zusaetzlich ausdruecklich gesetzt und im Kind geprueft.
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -50,16 +64,21 @@ def test_lock_is_enforced_against_a_real_separate_process():
             (
                 "import sys, time; "
                 "sys.path.insert(0, '.'); "
-                "from hardware.actuator_manager import ActuatorManager; "
-                "am = ActuatorManager(active_low=True); "
+                "from hardware import actuator_manager as m; "
+                f"assert str(m.LOCK_PATH) == {str(lock_path)!r}, m.LOCK_PATH; "
+                "am = m.ActuatorManager(active_low=True); "
+                "print('LOCKED', flush=True); "
                 "time.sleep(3)"
             ),
         ],
         cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        text=True,
     )
 
     try:
-        time.sleep(1.0)  # let the subprocess acquire the lock first
+        # Warten, bis das Kind die Sperre tatsaechlich haelt (statt fixem sleep).
+        assert proc.stdout.readline().strip() == "LOCKED"
         try:
             ActuatorManager(active_low=True)
             assert False, "lock should have been held by the subprocess"
