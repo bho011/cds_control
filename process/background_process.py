@@ -93,12 +93,26 @@ class BackgroundHardwareProcess:
         process must not start, or None if it is safe to proceed.
         """
 
-        if not bool(settings.get("hardware_execution_enabled", False)):
-            self._last_error = "hardware_execution_enabled is false."
+        # Strict: only the real boolean True releases hardware. bool("false")
+        # is True, so no type coercion; anything else (missing key, 0/1,
+        # strings, None, a non-dict settings object) blocks the start.
+        if not isinstance(settings, dict) or settings.get("hardware_execution_enabled") is not True:
+            self._last_error = "hardware_execution_enabled is not strictly true."
             self._last_message = f"{self.label} locked by hardware safety setting."
             return self._last_message
 
-        if self.get_sensor_snapshot() is None:
+        # A failing sensor reader blocks the start in a controlled way
+        # instead of raising out of start().
+        try:
+            snapshot = self.get_sensor_snapshot()
+        except Exception as exc:
+            self._last_message = (
+                f"{self.label} locked: sensor snapshot could not be read ({type(exc).__name__}: {exc})."
+            )
+            self._last_error = self._last_message
+            return self._last_message
+
+        if snapshot is None:
             self._last_error = "No current sensor snapshot available."
             self._last_message = f"{self.label} locked: no current sensor snapshot."
             return self._last_message
