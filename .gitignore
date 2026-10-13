@@ -39,3 +39,6 @@ recipes/dashboard_recipes.json
 calibration_data/*.bak
 calibration_data/*_before_*.json
 config/*.bak
+
+# Lokale VS-Code-Konfiguration
+.vscode/
