@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Any
 
+from domain.recipe_model import RunOptions
 from nicegui_dashboard.process_controller import ProcessController
 from preflight_check import run_preflight_report
 from services.mqtt_topic_reader import MqttTopicReader
@@ -94,8 +95,14 @@ class CdsController:
             self.process_reader_error = f"Process MQTT reader start failed: {exc}"
             self._record_error(self.process_reader_error, exc)
 
-    def start_fill_and_measure(self, confirmation_text: str) -> dict[str, Any]:
-        return self.process_controller.start_fill_and_measure(confirmation_text)
+    def start_fill_and_measure(
+        self, confirmation_text: str, run_options: RunOptions | None = None
+    ) -> dict[str, Any]:
+        # run_options is passed through unchanged (no coercion); omitting it
+        # keeps the fail-closed default (everything off) in ProcessController.
+        return self.process_controller.start_fill_and_measure(
+            confirmation_text, run_options
+        )
 
     def acknowledge_error(self) -> dict[str, Any]:
         result = self.process_controller.acknowledge_error()
