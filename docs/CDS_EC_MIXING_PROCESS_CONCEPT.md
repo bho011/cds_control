@@ -6,6 +6,41 @@
 
 ---
 
+## Nachtrag 2026-10-14 – Verbindlicher Umfang AP-07 (Scope-Entscheidung)
+
+Dieser Nachtrag ersetzt keinen Abschnitt dieses Dokuments. Die Abschnitte 1 (MCU-A), 11, 12 und 14 beschreiben den **ursprünglichen, umfangreicheren Konzeptstand** und bleiben als **historischer Plan** unverändert erhalten. Wo sie vom Nachtrag abweichen, gilt der Nachtrag.
+
+**Entscheidung:** AP-07 wird für die AP2-Projektarbeit bewusst reduziert. Die automatische pH-Korrektur über MCU_A war eine Erweiterung der eigenen ursprünglichen Konzeption und keine verbindliche Projektanforderung.
+
+**Verbindlicher Umfang AP-07:**
+
+- pH-Messwerte aus der bestehenden Sensorintegration nutzen,
+- pH-Istwert gegen den Rezept-Sollwert bewerten (umgesetzt mit AP-06, `statemachine/measurement_evaluation.py`),
+- bei Abweichung außerhalb der konfigurierten Toleranz (`ph_tolerance` in den Prozesseinstellungen) den Prozess kontrolliert beenden, alle Aktoren abschalten und einen Bedienereingriff erzwingen (State `ERROR`, Quittierung über `acknowledge_error`),
+- Fehler und Bewertungsstatus im vorhandenen Dashboard und im Prozesslog (`evaluation_status`, `evaluation_details`) darstellen.
+
+**pH-Zulässigkeitsband (Ausnahme, bewusst entschieden):** Statt einer symmetrischen Toleranz um den Rezept-Sollwert kann für pH ein Band `ph_min`/`ph_max` in den Prozesseinstellungen gesetzt werden (festgelegt: 5,0 bis 6,5, Optimum 6,0 entsprechend dem Rezept-Sollwert; beide Grenzen gelten noch als zulässig). Regeln, alle fail-closed: beide Grenzen sind Pflicht, `0 <= ph_min < ph_max <= 14`, `ph_tolerance` darf nicht zusätzlich gesetzt sein, ein fehlender oder unplausibler Istwert führt zu `ERROR`. Der Rezept-Sollwert wird dann nur angezeigt und entscheidet nicht. Ohne `ph_min`/`ph_max` und ohne `ph_tolerance` bleibt pH `NOT_EVALUATED`. Das Band ist eine reine Bewertung, keine Regelung und keine Dosierung.
+
+**Ausdrücklich nicht Bestandteil von AP2 (spätere Erweiterung außerhalb des AP2-Umfangs):**
+
+- automatische Säure-/Base-Dosierung über MCU_A,
+- MCU_A-Kalibrierung,
+- pH-Korrekturschleifen (schrittweise Dosierung, Mischpause, erneute Messung).
+
+Diese Punkte sind nicht verworfen, werden aber im AP2-Umfang weder entwickelt noch als vorhanden dargestellt.
+
+**Abgrenzung der drei Zustände (nicht austauschbar):**
+
+| Zustand | Bedeutung | Status im Code | Prozessfolge |
+|---|---|---|---|
+| `ERROR` (Bewertungsstatus `FAILED`) | Istwert außerhalb der Toleranz, oder konfigurierte Toleranz ungültig, oder Sollwert/Istwert fehlt bzw. ist unplausibel (fail-closed) | umgesetzt (`FillAndMeasureState.ERROR`, Grund-Codes z. B. `ph_out_of_tolerance`, `tolerance_invalid`, `setpoint_invalid`, `measurement_implausible`) | Fehler wird verriegelt, Aktoren aus, Bedienerquittierung erforderlich; keine Korrektur, kein automatischer Drain |
+| `MANUAL_HOLD` | Konzeptzustand für geordnete manuelle Bearbeitung mit späterer Wiederaufnahme (Abschnitte 11 und 14) | **nicht implementiert**, kein Code, kein Test | Wird nicht durch `ERROR` ersetzt oder vorgetäuscht; `ERROR` ist ein Abbruch ohne Wiederaufnahme im laufenden Prozess |
+| `NOT_EVALUATED` | Für EC und/oder pH ist **keine** Toleranz konfiguriert; die Größe wird nicht bewertet. Es gibt bewusst keine Standardtoleranz | umgesetzt (`STATUS_NOT_EVALUATED`) | Prozess endet regulär (`FINISHED`), die Sollwerterfüllung gilt aber **nicht** als bestätigt; das Dashboard zeigt „Sollwerterfüllung nicht bestätigt“. Kein Fehler, kein Stopp |
+
+Folge für den Betrieb: Ohne gesetzte `ph_tolerance` erfolgt keine pH-Abschaltung. Die Wirksamkeit der pH-Überwachung hängt davon ab, dass die Toleranz fachlich festgelegt und in den Prozesseinstellungen gesetzt wird (siehe Abschnitt 15, Punkt 7 für EC; für pH analog offen).
+
+---
+
 ## 1. Bewusste Scope-Entscheidungen
 
 ### Vorläufig nicht Bestandteil

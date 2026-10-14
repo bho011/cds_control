@@ -402,6 +402,103 @@ def test_partially_configured_tolerance_is_not_confirmed() -> None:
     assert sm.final_evaluation_status == "NOT_EVALUATED"
 
 
+def _band_settings(**overrides):
+    values = {
+        "ec_tolerance_ms_cm": 0.1,
+        "ph_min": 6.0,
+        "ph_max": 7.0,
+        "recipe_run_config_snapshot": {"target_ec_ms_cm": 1.5, "target_ph": 6.0},
+    }
+    values.update(overrides)
+    return _base_settings(**values)
+
+
+@pytest.mark.parametrize("ph", [6.0, 6.5, 7.0])
+def test_ph_band_inside_including_edges_finishes(ph) -> None:
+    sm, _ = _run_to_measure(_band_settings(), ec=1.5, ph=ph)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation["pH"]["status"] == "ok"
+    assert sm.final_evaluation["pH"]["ph_min"] == 6.0
+    assert sm.final_evaluation["pH"]["ph_max"] == 7.0
+    assert sm.final_evaluation_status == "OK"
+
+
+@pytest.mark.parametrize("ph", [5.99, 7.01, 0.0, 14.0])
+def test_ph_band_outside_errors_with_pumps_off(ph) -> None:
+    sm, pump = _run_to_measure(_band_settings(), ec=1.5, ph=ph)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "ph_out_of_tolerance"
+    assert sm.final_evaluation_status == "FAILED"
+    assert sm.final_evaluation["pH"]["status"] == "out_of_tolerance"
+    assert pump.is_on is False
+
+
+def test_ph_band_ignores_recipe_target_for_decision() -> None:
+    # Sollwert 6.0 liegt am unteren Rand; 6.9 ist trotzdem zulaessig.
+    sm, _ = _run_to_measure(_band_settings(), ec=1.5, ph=6.9)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation["pH"]["target"] == 6.0
+
+
+def test_ph_band_without_ec_tolerance_is_not_confirmed() -> None:
+    settings = _band_settings()
+    del settings["ec_tolerance_ms_cm"]
+    sm, _ = _run_to_measure(settings, ec=9.9, ph=6.5)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation["EC"]["status"] == "NOT_EVALUATED"
+    assert sm.final_evaluation["pH"]["status"] == "ok"
+    assert sm.final_evaluation_status == "NOT_EVALUATED"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"ph_min": None},
+        {"ph_max": "7.0"},
+        {"ph_min": True},
+        {"ph_min": float("nan")},
+        {"ph_max": float("inf")},
+        {"ph_min": 7.0, "ph_max": 6.0},
+        {"ph_min": 6.5, "ph_max": 6.5},
+        {"ph_min": -0.1},
+        {"ph_max": 14.1},
+    ],
+)
+def test_invalid_ph_band_errors(overrides) -> None:
+    sm, pump = _run_to_measure(_band_settings(**overrides), ec=1.5, ph=6.5)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "tolerance_invalid"
+    assert pump.is_on is False
+
+
+@pytest.mark.parametrize("missing", ["ph_min", "ph_max"])
+def test_incomplete_ph_band_errors(missing) -> None:
+    settings = _band_settings()
+    del settings[missing]
+    sm, _ = _run_to_measure(settings, ec=1.5, ph=6.5)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "tolerance_invalid"
+
+
+def test_ph_band_together_with_ph_tolerance_errors() -> None:
+    sm, _ = _run_to_measure(_band_settings(ph_tolerance=0.5), ec=1.5, ph=6.5)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "tolerance_invalid"
+
+
+@pytest.mark.parametrize("water_values", [{"ec_ms_cm": 1.5}, {"ec_ms_cm": 1.5, "ph": None}, {"ec_ms_cm": 1.5, "ph": 15.0}, {"ec_ms_cm": 1.5, "ph": float("nan")}])
+def test_ph_band_missing_or_implausible_actual_errors(water_values) -> None:
+    sm, _ = _run_to_measure(_band_settings(), water_values=water_values)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "measurement_implausible"
+
+
+def test_ph_band_skipped_outside_recipe_run() -> None:
+    sm, _ = _run_to_measure(_band_settings(), ec=1.5, ph=2.0, recipe_run=False)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation is None
+
+
 def test_evaluation_skipped_outside_recipe_run() -> None:
     sm, _ = _run_to_measure(_base_settings(ec_tolerance_ms_cm=0.1), ec=9.9, recipe_run=False)
     assert sm.state == FillAndMeasureState.FINISHED

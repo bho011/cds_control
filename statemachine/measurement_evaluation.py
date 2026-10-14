@@ -9,6 +9,10 @@ bewertet (NOT_EVALUATED, keine bestaetigte Sollwerterfuellung); ist sie gesetzt,
 Istwert, ist das Ergebnis ein Fehler (fail-closed). Es wird nichts korrigiert
 oder geraten.
 
+Fuer pH gibt es alternativ ein Zulaessigkeitsband (ph_min/ph_max, Grenzen
+eingeschlossen, beide Pflicht, nicht zusammen mit ph_tolerance): der Rezept-
+Sollwert ist dann nur Anzeige. EC bleibt unveraendert Soll +/- Toleranz.
+
 Die einzigen festen Grenzen sind physikalisch: EC >= 0 und 0 <= pH <= 14.
 """
 
@@ -20,6 +24,9 @@ from statemachine.sensor_reading import _section, finite_number
 
 PH_PHYSICAL_MIN = 0.0
 PH_PHYSICAL_MAX = 14.0
+
+PH_MIN_KEY = "ph_min"
+PH_MAX_KEY = "ph_max"
 
 STATUS_NOT_EVALUATED = "NOT_EVALUATED"
 STATUS_OK = "OK"
@@ -49,6 +56,51 @@ def _plausible(name: str, value: float) -> bool:
     return PH_PHYSICAL_MIN <= value <= PH_PHYSICAL_MAX
 
 
+def _evaluate_ph_band(
+    settings: dict[str, Any], run_snapshot: Any, water: Any, details: dict[str, Any]
+) -> tuple[str, str] | None:
+    """pH-Zulaessigkeitsband ph_min..ph_max (Grenzen eingeschlossen) statt
+    symmetrischer Toleranz um den Rezept-Sollwert. Rueckgabe None = bewertet
+    (Eintrag in details), sonst (Meldung, Grund-Code) eines Fehlers. Beide
+    Grenzen sind Pflicht, ph_tolerance darf nicht zusaetzlich gesetzt sein
+    (mehrdeutig). Der Rezept-Sollwert ist nur Anzeige und entscheidet nicht."""
+    if "ph_tolerance" in settings:
+        return (
+            f"pH-Band ({PH_MIN_KEY}/{PH_MAX_KEY}) und ph_tolerance duerfen nicht gleichzeitig gesetzt sein.",
+            "tolerance_invalid",
+        )
+    low = finite_number(settings.get(PH_MIN_KEY))
+    high = finite_number(settings.get(PH_MAX_KEY))
+    if (
+        low is None
+        or high is None
+        or not (_plausible("pH", low) and _plausible("pH", high))
+        or low >= high
+    ):
+        return (
+            f"pH-Band ({PH_MIN_KEY}/{PH_MAX_KEY}) ist unvollstaendig oder ungueltig.",
+            "tolerance_invalid",
+        )
+
+    actual = finite_number(water.get("ph"))
+    if actual is None or not _plausible("pH", actual):
+        return f"pH-Istwert fehlt oder ist unplausibel ({water.get('ph')!r}).", "measurement_implausible"
+
+    entry: dict[str, Any] = {
+        "ph_min": low,
+        "ph_max": high,
+        "actual": actual,
+        "status": "ok" if low <= actual <= high else "out_of_tolerance",
+    }
+    target = finite_number(run_snapshot.get("target_ph"))
+    if target is not None:
+        entry["target"] = target
+    details["pH"] = entry
+    if entry["status"] != "ok":
+        return f"pH ausserhalb des Bands: Ist {actual}, erlaubt {low} bis {high}.", "ph_out_of_tolerance"
+    return None
+
+
 def evaluate_final_values(
     settings: Any, sensor_snapshot: Any
 ) -> tuple[bool, str | None, str | None, dict[str, Any]]:
@@ -71,6 +123,12 @@ def _evaluate(settings: Any, sensor_snapshot: Any) -> tuple[bool, str | None, st
     details: dict[str, Any] = {}
 
     for name, tolerance_key, target_key, value_key, unit in _QUANTITIES:
+        if name == "pH" and (PH_MIN_KEY in settings or PH_MAX_KEY in settings):
+            failure = _evaluate_ph_band(settings, run_snapshot, water, details)
+            if failure is not None:
+                return (False, *failure, details)
+            continue
+
         if tolerance_key not in settings:
             details[name] = {"status": STATUS_NOT_EVALUATED}
             continue
