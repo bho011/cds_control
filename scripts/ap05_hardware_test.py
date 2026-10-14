@@ -52,7 +52,6 @@ if str(REPO_ROOT) not in sys.path:
 
 MAX_ON_SECONDS = 10.0
 RUNTIME_TOLERANCE_S = 0.5          # Messtoleranz ueber 3 s, danach FAILED
-VALVE_SETTLE_S = 1.0               # wie valve_settle_seconds in config/water_cycle_settings.json
 PUMP_DOSE_ML = 1.0                 # ca. 1,6 s bei 120 rpm / 8 Mikroschritten
 MCU_MAX_ESTIMATED_S = 2.0          # Schaetzung darueber -> Schritt gesperrt
 MIN_CIRCULATION_LITERS = 15.0      # Trockenlaufschutz; unter ca. 10 L ist der Fuellstand nicht belastbar
@@ -82,8 +81,8 @@ class Step:
 
 
 STEPS: tuple[Step, ...] = (
-    Step("1_ro_prefill", "RO-Vorbefuellung", "ro", ("supply_valve_6", "mixer_refill_pump"),
-         "RO-Ventil 6 oeffnen, RO-Pumpe max. 3 s. Wasserweg RO -> Mixing Tank frei, Tank nicht voll."),
+    Step("1_ro_prefill", "RO-Vorbefuellung", "ro", ("mixer_refill_pump",),
+         "RO-Refill-Pumpe max. 3 s (ohne Ventil, wie im Prozess). Schlauch RO -> Mixing Tank frei, Tank nicht voll."),
     Step("2a_mixing_circulation", "Zirkulation", "gpio", ("mixing_circulation_pump",),
          "Mixing-Zirkulationspumpe max. 3 s. Tank muss genug Wasser haben (Trockenlauf).",
          needs_level_l=MIN_CIRCULATION_LITERS),
@@ -94,8 +93,8 @@ STEPS: tuple[Step, ...] = (
            f"MCU_B {pump} ({EXPECTED_MCU_B_ROLES[pump]}): DOSE {PUMP_DOSE_ML} ml WASSER, Saugschlauch in Wasser, "
            "Druckleitung in den Tank. Software-Watchdog 3 s.", pump=pump)
       for letter, pump in zip("abcd", ("P1", "P2", "P3", "P4"))),
-    Step("4_ro_refill", "RO-Nachbefuellung", "ro", ("supply_valve_6", "mixer_refill_pump"),
-         "RO-Ventil 6 oeffnen, RO-Pumpe max. 3 s (wie Schritt 1)."),
+    Step("4_ro_refill", "RO-Nachbefuellung", "ro", ("mixer_refill_pump",),
+         "RO-Refill-Pumpe max. 3 s (wie Schritt 1, ohne Ventil)."),
     Step("5a_post_mix", "Nachmischen", "gpio", ("mixing_circulation_pump", "sensor_circulation_pump"),
          "Mixing- und Sensorzirkulation gemeinsam max. 3 s.", needs_level_l=MIN_CIRCULATION_LITERS),
     Step("5b_sensor_check", "Sensorwerte", "sensor_check", (),
@@ -290,24 +289,6 @@ class Runner:
         runtimes = self._timed_gpio(step, step.devices, MAX_ON_SECONDS)
         self._check_runtimes(runtimes, step.devices)
 
-    def _run_ro(self, step: Step) -> None:
-        valve, pump = step.devices
-        valve_out = self.actuators.get(valve)
-        valve_out.on()
-        t_valve = self.env.now().isoformat(timespec="milliseconds")
-        self._row(step, "output_on", device=valve, gpio_or_port=f"GPIO{valve_out.gpio_pin}", requested_state="ON", command_sent=True,
-                  t_on=t_valve, evidence_level="COMMAND_SENT",
-                  software_feedback=f"software_state_is_active={valve_out.is_active} (kein elektrischer Readback)")
-        try:
-            self.env.sleep(VALVE_SETTLE_S)
-            runtimes = self._timed_gpio(step, (pump,), MAX_ON_SECONDS)
-        finally:
-            valve_out.off()
-            self._row(step, "output_off", device=valve, gpio_or_port=f"GPIO{valve_out.gpio_pin}", requested_state="OFF", command_sent=True,
-                      t_on=t_valve, t_off=self.env.now().isoformat(timespec="milliseconds"), evidence_level="COMMAND_SENT",
-                      software_feedback=f"software_state_is_active={valve_out.is_active} (kein elektrischer Readback)")
-        self._check_runtimes(runtimes, (pump,))
-
     def _ensure_mcu_client(self, step: Step) -> Any:
         if self.client is not None:
             return self.client
@@ -425,7 +406,7 @@ class Runner:
         if answer != f"go {step.step_id}":
             raise AbortRun(f"Freigabe nicht erteilt (Eingabe: {answer!r})")
         try:
-            outcome = {"gpio": self._run_gpio, "ro": self._run_ro, "mcu": self._run_mcu, "sensor_check": self._run_sensor_check}[step.kind](step)
+            outcome = {"gpio": self._run_gpio, "ro": self._run_gpio, "mcu": self._run_mcu, "sensor_check": self._run_sensor_check}[step.kind](step)
         except StepFailed as exc:
             self._row(step, "step_result", result=FAILED, error_or_reason=str(exc), sensors=self._sensors())
             self.say(f"FEHLER: {exc}")
@@ -531,7 +512,7 @@ def run(env: Env, log_dir: Path, min_circulation_liters: float = MIN_CIRCULATION
             log.row(step_id=prepare.step_id, phase=prepare.phase, event="mcu_config", error_or_reason=f"{type(exc).__name__}: {exc}")
         runner.actuators = env.actuators_factory()
         from gpio_config import OUTPUTS
-        for name, key in (("mixer_refill_pump", "mixer_refill_pump"), ("supply_valve_6", "test_supply_valve_6"),
+        for name, key in (("mixer_refill_pump", "mixer_refill_pump"),
                           ("mixing_circulation_pump", "mixing_circulation_pump"), ("sensor_circulation_pump", "sensor_circulation_pump")):
             runner.actuators.add(name, OUTPUTS[key])
         if runner.mcu is not None:

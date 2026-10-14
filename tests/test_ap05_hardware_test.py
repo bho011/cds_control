@@ -175,7 +175,9 @@ def test_happy_path_logs_everything_and_shuts_down(tmp_path):
     assert set(t.CSV_FIELDS) == set(rows[0].keys())
     assert {r["run_id"] for r in rows} == {summary["run_id"]}
     assert all(r["git_commit"] == "abc1234+dirty" and r["timestamp"].endswith("+02:00") for r in rows)
-    gpio_off = [r for r in rows if r["event"] == "output_off" and r["device"] != "supply_valve_6"]
+    gpio_off = [r for r in rows if r["event"] == "output_off"]
+    assert {r["device"] for r in gpio_off} == {"mixer_refill_pump", "mixing_circulation_pump", "sensor_circulation_pump"}
+    assert "supply_valve_6" not in actuators.outputs
     assert gpio_off and all(0 < float(r["runtime_s"]) <= t.MAX_ON_SECONDS + 0.1 for r in gpio_off)
     assert {r["device"] for r in rows if r["event"] == "dose_command"} == {f"MCU_B/P{i}" for i in range(1, 5)}
     assert [c for c in client.sent if c.startswith("DOSE")] == [f"DOSE P{i} 1.000" for i in range(1, 5)]
