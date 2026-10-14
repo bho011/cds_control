@@ -11,11 +11,8 @@ from nicegui_dashboard.components.status_widgets import create_actuator_row, cre
 
 
 def build_status_actuators() -> dict[str, Any]:
-    with ui.card().classes("panel"):
+    with ui.card().classes("panel grid-status"):
         ui.label("System Status").classes("panel-title")
-        ui.label("Communication and process modules").classes(
-            "panel-subtitle"
-        )
 
         mqtt_bridge_row = create_status_row(
             "MQTT Sensor Bridge",
@@ -34,19 +31,19 @@ def build_status_actuators() -> dict[str, Any]:
             "max. 30 seconds old",
         )
 
-    with ui.card().classes("panel"):
+    with ui.card().classes("panel grid-actuators"):
         ui.label("Actuators / Outputs").classes("panel-title")
 
         # Dict key == the process_data key holding that actuator's state -
         # lets refresh_status_actuators() update all of them in one loop
         # instead of 11 near-identical lines.
         actuator_rows = {
-            "mixer_refill_pump": create_actuator_row("Mixer Refill Pump"),
-            "supply_valve_6": create_actuator_row("Supply Valve 6"),
-            "drain_valve_0": create_actuator_row("Drain Valve 0"),
+            "mixer_refill_pump": create_actuator_row("Mixer Refill"),
+            "supply_valve_6": create_actuator_row("Supply V6"),
+            "drain_valve_0": create_actuator_row("Drain V0"),
             "transfer_pump": create_actuator_row("Transfer Pump"),
-            "mixing_circulation_pump": create_actuator_row("Mixing Circulation Pump"),
-            "sensor_circulation_pump": create_actuator_row("Sensor Circulation Pump"),
+            "mixing_circulation_pump": create_actuator_row("Mixing Circ."),
+            "sensor_circulation_pump": create_actuator_row("Sensor Circ."),
             "valve_1": create_actuator_row("Valve 1"),
             "valve_2": create_actuator_row("Valve 2"),
             "valve_3": create_actuator_row("Valve 3"),

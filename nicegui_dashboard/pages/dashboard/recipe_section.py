@@ -78,28 +78,32 @@ def build_recipe_section(recipe_state: dict[str, Any]) -> tuple[RecipeCardWidget
             "panel-subtitle"
         )
 
-        recipe_name_label = ui.label("Recipe: -").classes("recipe-name")
-        recipe_summary_label = ui.label("-").classes("recipe-summary")
-        recipe_dosing_label = ui.label("-").classes("recipe-detail")
-        recipe_process_label = ui.label("-").classes("recipe-detail")
-        recipe_volume_label = ui.label("-").classes("recipe-detail")
+        # Links die Rezeptwerte, rechts Favoriten und Aktionen (Layout: dashboard.css "recipe-body").
+        with ui.element("div").classes("recipe-body"):
+            with ui.column().classes("recipe-info"):
+                recipe_name_label = ui.label("Recipe: -").classes("recipe-name")
+                recipe_summary_label = ui.label("-").classes("recipe-summary")
+                recipe_dosing_label = ui.label("-").classes("recipe-detail")
+                recipe_process_label = ui.label("-").classes("recipe-detail")
+                recipe_volume_label = ui.label("-").classes("recipe-detail")
 
-        with ui.row().classes("recipe-favorites-row"):
-            favorite_badges = {
-                1: ui.button("F1").classes("recipe-favorite-badge"),
-                2: ui.button("F2").classes("recipe-favorite-badge"),
-                3: ui.button("F3").classes("recipe-favorite-badge"),
-            }
-            for _badge in favorite_badges.values():
-                _badge.props("flat no-caps")
+            with ui.column().classes("recipe-actions"):
+                with ui.row().classes("recipe-favorites-row"):
+                    favorite_badges = {
+                        1: ui.button("F1").classes("recipe-favorite-badge"),
+                        2: ui.button("F2").classes("recipe-favorite-badge"),
+                        3: ui.button("F3").classes("recipe-favorite-badge"),
+                    }
+                    for _badge in favorite_badges.values():
+                        _badge.props("flat no-caps")
 
-        with ui.row().classes("w-full gap-3 mt-3"):
-            edit_recipe_button = ui.button("Edit Recipe").classes(
-                "flex-1 font-bold"
-            ).props("color=primary")
-            apply_recipe_button = ui.button("Reload Active Recipe").classes(
-                "flex-1 font-bold"
-            ).props("color=secondary outline")
+                with ui.row().classes("w-full gap-3 no-wrap"):
+                    edit_recipe_button = ui.button("Edit Recipe").classes(
+                        "flex-1 font-bold"
+                    ).props("color=primary")
+                    apply_recipe_button = ui.button("Reload Active Recipe").classes(
+                        "flex-1 font-bold"
+                    ).props("color=secondary outline")
 
         with ui.dialog() as recipe_dialog, ui.card().classes("recipe-dialog-card"):
             ui.label("Recipe Editor").classes("panel-title")

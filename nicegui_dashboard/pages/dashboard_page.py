@@ -1,9 +1,10 @@
+from datetime import datetime
 from typing import Any
 
 from nicegui import ui
 
 from nicegui_dashboard.cds_controller import CdsController
-from nicegui_dashboard.components.formatting import fmt
+from nicegui_dashboard.components.formatting import fmt, format_clock
 from nicegui_dashboard.pages.dashboard.maintenance_section import (
     build_maintenance,
     handle_run_preflight,
@@ -16,8 +17,10 @@ from nicegui_dashboard.pages.dashboard.prime_section import (
 )
 from nicegui_dashboard.pages.dashboard.process_control_section import (
     build_process_control,
+    build_target_transfer,
     format_dosing_status,
     format_evaluation_status,
+    format_transfer_status,
     refresh_process_control,
     wire_process_control_handlers,
 )
@@ -35,7 +38,7 @@ from nicegui_dashboard.recipe_store import RecipeBookCorruptedError, default_rec
 
 
 def create_dashboard_page(controller: CdsController) -> None:
-    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=control2">')
+    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=control3">')
 
     recipe_state: dict[str, Any] = {}
     recipe_form_state: dict[str, Any] = {}
@@ -50,58 +53,59 @@ def create_dashboard_page(controller: CdsController) -> None:
         recipe_state["book"] = default_recipe_book()
         recipe_state["load_error"] = str(exc)
 
-    with ui.column().classes("dashboard-root gap-5"):
-        with ui.row().classes("w-full items-start justify-between"):
-            with ui.row().classes("items-center gap-4"):
-                ui.image("/static/logo.jpg").classes("w-16 h-16 rounded-xl")
+    with ui.column().classes("dashboard-root"):
+        with ui.row().classes("dash-header w-full items-center justify-between"):
+            with ui.row().classes("items-center gap-3"):
+                ui.image("/static/logo.jpg").classes("dash-logo rounded-lg")
                 with ui.column().classes("gap-0"):
                     ui.label("Central Dosing System Dashboard").classes("headline")
-                    ui.label(
-                        "NiceGUI HMI – live sensor values via Python core on Raspberry Pi."
-                    ).classes("subtitle")
+                    ui.label("vGREENS - DRIVEN BY PURPOSE. POWERED BY DATA.").classes("subtitle")
 
-            with ui.row().classes("gap-2 items-center"):
+            with ui.row().classes("gap-3 items-center"):
+                with ui.column().classes("gap-0 items-end"):
+                    header_clock_label = ui.label(format_clock(datetime.now())).classes("header-clock")
+                    header_update_label = ui.label("Update: -").classes("header-update")
                 dev_info_button = ui.button("Maintenance").classes(
                     "dev-info-button"
                 ).props("outline color=grey-5 icon=terminal")
 
-        with ui.element("div").classes("layout-grid w-full"):
-            with ui.column().classes("gap-3 w-full area-left"):
-                status_actuators_widgets = build_status_actuators()
-                maintenance_widgets = build_maintenance()
+        # Ein Raster fuer alle Karten (Bereiche per Klasse, siehe dashboard.css "dash-grid"):
+        #   status | process state | process control | sensor values
+        #   actuators | transfer   |  (Process Control und Sensor/Tanks laufen ueber alle Zeilen)
+        #   recipe (ueber Spalte 1 und 2)
+        with ui.element("div").classes("dash-grid"):
+            status_actuators_widgets = build_status_actuators()
 
-                prime_widgets = build_prime_dialog()
+            with ui.card().classes("panel process-state-panel grid-process-state"):
+                ui.label("Current Process State").classes("panel-title")
 
-            with ui.element("div").classes("content-grid w-full"):
-                with ui.column().classes("gap-5 w-full area-main"):
-                    with ui.card().classes("panel process-state-panel"):
-                        ui.label("Current Process State").classes("panel-title")
-                        #ui.label("Live process state from MQTT and local controller").classes(
-                        #    "panel-subtitle"
-                        #)
+                with ui.column().classes("process-display process-display-large"):
+                    ui.label("Current state").classes("process-label")
+                    process_state_label = ui.label("-").classes("process-state")
+                    control_message_label = ui.label("Ready").classes("process-message")
+                    process_error_label = ui.label("").classes("error-text")
+                    control_error_label = ui.label("").classes("error-text")
+                    dosing_label = ui.label("Dosierung: -").classes("process-message")
+                    dosing_progress = ui.linear_progress(value=0.0, show_value=False).classes("w-full")
+                    dosing_error_label = ui.label("").classes("error-text")
 
-                        with ui.column().classes("process-display process-display-large"):
-                            ui.label("Current state").classes("process-label")
-                            process_state_label = ui.label("-").classes("process-state")
-                            control_message_label = ui.label("Ready").classes("process-message")
-                            process_error_label = ui.label("").classes("error-text")
-                            control_error_label = ui.label("").classes("error-text")
-                            dosing_label = ui.label("Dosierung: -").classes("process-message")
-                            dosing_progress = ui.linear_progress(value=0.0).classes("w-full")
-                            dosing_error_label = ui.label("").classes("error-text")
+                process_timestamp_label = ui.label("Process timestamp: -").classes("hidden")
+                process_source_label = ui.label("Source: -").classes("hidden")
+                control_state_label = ui.label("Controller state: -").classes("hidden")
 
-                        process_timestamp_label = ui.label("Process timestamp: -").classes("hidden")
-                        process_source_label = ui.label("Source: -").classes("hidden")
-                        control_state_label = ui.label("Controller state: -").classes("hidden")
+            transfer_widgets = build_target_transfer()
+            card_widgets, editor_widgets = build_recipe_section(recipe_state)
 
-                    card_widgets, editor_widgets = build_recipe_section(recipe_state)
+            with ui.column().classes("grid-side"):
+                process_control_widgets = build_process_control(transfer_widgets)
 
-                with ui.column().classes("gap-5 w-full area-side"):
-                    process_control_widgets = build_process_control()
+            with ui.column().classes("grid-data"):
+                sensor_tanks_widgets = build_sensor_tanks()
 
-                with ui.column().classes("gap-5 w-full area-data"):
-                    sensor_tanks_widgets = build_sensor_tanks()
-    
+        # Dialoge liegen ausserhalb des Rasters (kein Layout-Platz).
+        maintenance_widgets = build_maintenance()
+        prime_widgets = build_prime_dialog()
+
     add_log = make_add_log(maintenance_widgets["log_box"])
 
     if recipe_state.get("load_error"):
@@ -122,7 +126,10 @@ def create_dashboard_page(controller: CdsController) -> None:
         process_data = controller.get_process_status()
         control_data = controller.get_process_control_status()
 
-        maintenance_widgets["last_update_badge"].set_text(f"Update: {fmt(sensor_data['timestamp'])}")
+        update_text = f"Update: {fmt(sensor_data['timestamp'])}"
+        maintenance_widgets["last_update_badge"].set_text(update_text)
+        header_update_label.set_text(update_text)
+        header_clock_label.set_text(format_clock(datetime.now()))
 
         refresh_status_actuators(status_actuators_widgets, sensor_data, process_data)
         refresh_sensor_tanks(sensor_tanks_widgets, sensor_data)
@@ -148,6 +155,10 @@ def create_dashboard_page(controller: CdsController) -> None:
         evaluation_text = format_evaluation_status(control_data.get("final_evaluation"))
         control_message_label.set_text(f"{control_message} | {evaluation_text}" if evaluation_text else control_message)
         control_error_label.set_text(f"Error: {control_data['error']}" if control_data.get("error") else "")
+        transfer_data = control_data.get("target_transfer") or {}
+        if transfer_data.get("pump_off_failed"):
+            # Kritisch und dauerhaft sichtbar, bis quittiert (kein Pumpenstillstand bestaetigt).
+            control_error_label.set_text(format_transfer_status(transfer_data))
 
         dosing_text, dosing_value, dosing_error = format_dosing_status(control_data.get("dosing"))
         dosing_label.set_text(dosing_text)
@@ -192,6 +203,8 @@ def create_dashboard_page(controller: CdsController) -> None:
             add_log(f"[MANUAL DRAIN] running {manual_drain_elapsed:.1f}/{manual_drain_max:.0f} s")
         elif tank_cleaning_active:
             add_log(f"[TANK CLEANING] {tank_cleaning_phase} {tank_cleaning_elapsed:.0f}s")
+        elif (control_data.get("target_transfer") or {}).get("is_active"):
+            add_log(f"[TRANSFER] {format_transfer_status(control_data.get('target_transfer'))}")
         elif prime_active:
             add_log(
                 f"[PRIME] {prime_status.get('current_controller')}/{prime_status.get('current_pump')} "

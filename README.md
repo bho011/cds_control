@@ -6,7 +6,7 @@ Status: 2026-10-14 (see [Development status](#development-status-2026-10-14))
 Project status: development and validation phase
 Goal: safe, traceable, and modularly extensible control logic for the water-based CDS process.
 
-> **Safety status in one sentence:** Hardware execution is disabled by default in this repository (`hardware_execution_enabled: false`); of the 15 configured GPIO outputs, only **three** are currently validated on the real physical system (see Section 4). All other outputs are software-addressable but without confirmed real-world effect.
+> **Safety status in one sentence:** Hardware execution is disabled by default in this repository (`hardware_execution_enabled: false`); the plant owner has confirmed that all CDS hardware components were function-tested individually and work (repeated on 2026-10-14; Section 4). What is still outstanding are the **integrated process runs** (Water Cycle, Tank Cleaning, AP-08 transfer, dosing), not the individual components.
 
 ---
 
@@ -19,7 +19,7 @@ Basis: `main` and `origin/main` (GitHub, verified with `git ls-remote origin` on
 | Implemented, integrated into `main`, and published on GitHub (`f463a0f`) | AP-00 to AP-04 (up to `6125b1f`): test isolation, run-option forwarding, sensor/settings hardening, recipe start validation, fill safety, shared sensor readings and hardware start gates, drain safety, Water Cycle completion |
 | AP-05 Stage 1 (integrated, published) | Pure domain logic `domain/recipe/nutrient_plan.py` and `domain/recipe/volume_balance.py` (commit `f463a0f`, fully integrated into `main` and published on GitHub). Integrated as code only: no process, hardware, or MQTT integration |
 | Verified in software | Hardware-free test suite on `main` (`f463a0f`): 1874 passed, **1 failed** (known Recipe Editor test, Section 23); AP-05 Stage 1: 565 tests passed (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
-| **Not** validated on hardware | No hardware validation is documented for AP-00 to AP-05: no MCU_B dosing, no chemical dosing, no real run of the hardened fill/drain/Water Cycle paths. Only the three outputs in Section 4 are confirmed (older validation) |
+| Integrated runs **not** yet validated | Individual components are function-tested (Section 4). For AP-00 to AP-05 no integrated hardware validation is documented: no MCU_B dosing, no chemical dosing, no real run of the hardened fill/drain/Water Cycle paths, no integrated AP-08 transfer |
 | Planned next steps | all pending: AP-05 Stages 2–6 (Stage 2: hardware/profile gates, see Section 22), AP-06 to AP-09 (table below) |
 
 ### Work-package overview AP-00 to AP-09
@@ -41,7 +41,7 @@ The assignment of changes to work packages (AP-00 to AP-05) is taken from branch
 | AP-05 Stages 2–6 | Further MCU_B dosing steps (Stage 2 = hardware/profile gates, per module docstring); Stages 3–6 are not detailed in the repository | AP-specific implementation not yet started | pending | – | MCU_B identity, calibration, profile, firmware gates |
 | AP-06 | EC control and correction logic | AP-specific implementation not yet started | pending | – | Whole scope |
 | AP-07 | MCU_A integration and pH control | AP-specific implementation not yet started | pending | – | Whole scope |
-| AP-08 | Transfer into the target container | AP-specific implementation not yet started | pending | – | Whole scope |
+| AP-08 | Transfer into the target container | Controlled transfer of the Mixing Tank content into exactly one Solution Tank (1-4): operator-selected tank, read-off tank level and capacity confirmation checked against the 300 L nominal volume and the mixer amount at transfer start, separate acknowledgement for `NOT_EVALUATED`, release bound to the last finished mixing run and consumed only by a successfully completed transfer (retry after stop/failure with a new release, fresh read-off level and fresh mixer measurement), valve open, settle, stop re-check, then pump; pump off before valve close (failed pump-off: valve stays open, critical error, physical emergency stop required); first plausible 0 L ends the transfer; drain-style source monitoring; Emergency Stop, process interlock, dashboard status and process log. Software only, integrated hardware run pending | implemented (hardware-free tests; components individually function-tested) | `process/target_transfer.py`, `process/drain_safety.py`, `nicegui_dashboard/process_controller.py` | No target tank sensors: no overflow protection, safety reserve rests on the operator confirmation; first supervised water test (Section 24) |
 | AP-09 | Overall integration, hardware validation, and system tests | AP-specific implementation not yet started | pending | – | All hardware validation items (Section 24) |
 
 ---
@@ -116,13 +116,17 @@ Currently implemented:
 - hardware-free test isolation (AP-00), strict sensor/settings handling and recipe start validation (AP-02A/B), fill runtime safety (AP-02C), shared sensor readings and strict hardware start gates (AP-03), drain safety for all three drain paths (AP-04A), and Water Cycle outcome/cleanup handling with final MQTT status (AP-04) — software only, see Section 21
 - pure domain logic for an immutable MCU_B nutrient dosing plan and a conservative volume balance (`domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py`, AP-05 Stage 1, integrated in `main` and published on GitHub) — no process, dashboard, or hardware integration, see Section 22
 
-The modular Water Cycle starts correctly on the software side. A full real hardware run after the latest refactor and after the AP-02 to AP-04 hardening is still outstanding. Manual Drain Jog and Tank Cleaning are likewise not yet validated on real hardware (see Sections 17 and 24).
+The modular Water Cycle starts correctly on the software side. A full real hardware run after the latest refactor and after the AP-02 to AP-04 hardening is still outstanding. For Manual Drain Jog and Tank Cleaning the components are function-tested individually, but their integrated runs are likewise not yet validated (see Sections 17 and 24).
 
 ---
 
 ## 4. Hardware validation status (important!)
 
-Only the following outputs have been tested on the real physical system with confirmed effect:
+**Individual component function tests:** the plant owner confirms that all CDS hardware components (transfer pump, target valves 1-4, further valves and pumps, existing sensors, and peristaltic components) were each tested individually and found functional; the function test was repeated on 2026-10-14. This is a statement about the individual components, not about integrated process sequences. The software documents it as a confirmation by the plant owner; no test protocol is stored in the repository.
+
+**Not covered by this:** integrated process runs (Water Cycle, Tank Cleaning, Manual Drain, AP-08 target transfer, dosing) have not yet been run on the real plant after the AP-02 to AP-08 changes.
+
+The following outputs were additionally validated earlier within real process runs:
 
 | Function              | Config key              | GPIO (BCM) | Physical pin | Status              |
 |------------------------|------------------------|:----------:|:---------------:|----------------------|
@@ -130,11 +134,11 @@ Only the following outputs have been tested on the real physical system with con
 | Supply/Test Valve 6     | `test_supply_valve_6`  | 6          | 31               | validated            |
 | Drain Valve 0           | `valve_0_drain`        | 21         | 40               | validated            |
 
-All other entries in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing_circulation_pump`, `sensor_circulation_pump`, `valve_1`–`valve_9`) are addressable in code but **not** confirmed by a real hardware test. In particular:
+All other entries in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing_circulation_pump`, `sensor_circulation_pump`, `valve_1`–`valve_9`) are covered by the individual function test above, but have **not** been validated within an integrated process run documented here. In particular:
 
-- **Transfer Pump** (`transfer_pump`, GPIO26) is already used in `calibration_mixing_tank.py`, `main_safe_drain.py`, and now also in `process/tank_cleaning/`, but its electrical wiring is, per the project status, not yet conclusively confirmed.
+- **Transfer Pump** (`transfer_pump`, GPIO26) is used in `calibration_mixing_tank.py`, `main_safe_drain.py`, `process/tank_cleaning/`, and the AP-08 transfer. It is switched through a GPIO-controlled contactor without feedback; the individual function test is confirmed, the integrated AP-08 sequence is still pending.
 - **Valve 5** is noted in a `gpio_config.py` comment as not reliably sealing.
-- **Tank Cleaning** additionally drives `mixing_circulation_pump` and `sensor_circulation_pump` – also without a real hardware test yet. The settings file (`config/tank_cleaning_settings.json`) is therefore deliberately set to a reduced **40-liter test volume** instead of the later 200-liter target, so the first hardware test can be run without major water consumption/risk.
+- **Tank Cleaning** additionally drives `mixing_circulation_pump` and `sensor_circulation_pump` – individually function-tested, integrated run pending. The settings file (`config/tank_cleaning_settings.json`) is therefore deliberately set to a reduced **40-liter test volume** instead of the later 200-liter target, so the first hardware test can be run without major water consumption/risk.
 
 Before a new output is used productively: switch it on the real system, confirm the effect visually/physically, only then include it in an automated sequence.
 
@@ -701,8 +705,8 @@ Strategy: `pytest` with the AP-00 guard; all tests are hardware-free. Process, s
 | Topic | Description | Assigned to |
 |---|---|---|
 | No physical switch-off feedback | Switch-off is a software call; `physical_switch_off_confirmed` is always `false` | AP-09 |
-| O1 | `safe_stop_drain()` (`process/drain_safety.py`) currently always attempts to switch off the transfer pump first and then close the drain valve, even if `transfer_pump.off()` fails. Whether this behavior is safe when the physical pump state is unknown remains an open hardware decision (O1) and must be validated before the real drain process is released | AP-09 |
-| Level below about 10 L | Level measurement is not validated below about 10 L. A displayed value of 0.0 L is not reliable proof of a completely empty tank | AP-09 |
+| O1 | Drain paths: `safe_stop_drain()` (`process/drain_safety.py`) still attempts to close the drain valve after a failed `transfer_pump.off()`. **AP-08 transfer decides differently:** if `pump.off()` fails, the target valve is deliberately **not** closed (not against a possibly running pump), the actuators stay held, the error is critical, the operator must press the physical emergency stop (independent of the Raspberry Pi, not software-controllable), and no further transfer is possible until the fault is fixed and acknowledged (Reset / Ack). Without contactor feedback software cannot prove that the pump stopped. O1 for the drain paths remains an open decision | AP-09 |
+| Level below about 10 L | The mixer calibration is fitted only from about 10 L. Plant owner confirmation (AP-08): when draining, the first displayed 0 L means the Mixing Tank is actually empty; afterwards the values may fluctuate again. The transfer therefore ends on the first fresh, valid 0 L value that fits the drain course (previous plausible value already at or below 10 L); a transfer start below 10 L is blocked. The generic drain paths are unchanged and still require several empty samples | AP-09 |
 | Dry running | Nothing in software can prevent transfer pump dry running; it only bounds the run time on sensor loss/no progress | AP-09 |
 | Provisional drain parameters | Sensor-loss limit 5 s and the defaults for pump flow (16 L/min), timeout buffer (180 s), valve settle time (1 s), and no-progress/rise limits in `DrainSafetyLimits`: not hardware-validated | AP-09 |
 | SIGTERM / kill | Cleanup runs only if the process can execute it; after `SIGKILL` or a hard crash no software cleanup is possible, outputs may stay in their last state | AP-09 |
@@ -710,6 +714,8 @@ Strategy: `pytest` with the AP-00 guard; all tests are hardware-free. Process, s
 | MQTT delivery | Status messages are not guaranteed to arrive (Section 21) | accepted limitation |
 | MCU_B identity and calibration | Identity check, firmware/profile match, and per-pump calibration releases are not completed | AP-05 Stage 2 |
 | Chemical dosing | Not released. No chemical dosing before all hardware gates have passed | AP-05 Stage 2 / AP-09 |
+| Target tank overflow (AP-08) | The four Solution Tanks (300 L nominal, manually readable level scale) have no sensors. The software only checks the operator's read-off level against the 300 L nominal volume and the mixer amount at transfer start; it defines no safety reserve and does not include the mixer sensor uncertainty. Both rest on the explicit operator confirmation and supervision. An automatic overflow protection is not possible at present and remains a documented later extension | later extension |
+| Transfer sequence (AP-08) | `valve_1`-`valve_4` and `transfer_pump` are function-tested individually (plant owner). The integrated AP-08 sequence (valve, settle, pump, monitoring, stop) has not yet been run on the real plant; pump rate (16 L/min) and the transfer timeout derive from the provisional drain parameters. A transfer that was stopped or failed does not consume the mixing run's release (new release, new read-off level and new mixer measurement required; after a fault or emergency stop only after acknowledgement); only a successfully completed transfer does | AP-09 |
 
 The assignment of open items to AP-05 Stage 2 and AP-09 follows the roadmap (AP-09: overall integration, hardware validation, system tests); the individual assignment is the author's reading of that scope.
 
@@ -724,7 +730,7 @@ Stand: 14.10.2026 (siehe [Entwicklungsstand](#entwicklungsstand-2026-10-14))
 Projektstatus: Entwicklungs- und Validierungsphase
 Ziel: sichere, nachvollziehbare und modular erweiterbare Steuerungslogik für den wasserbasierten CDS-Prozess.
 
-> **Sicherheitsstatus in einem Satz:** Hardwareausführung ist im Repository standardmäßig deaktiviert (`hardware_execution_enabled: false`); von den 15 konfigurierten GPIO-Ausgängen sind aktuell nur **drei** real am physischen System validiert (siehe Abschnitt 4). Alle anderen Ausgänge sind softwareseitig ansteuerbar, aber ohne bestätigte reale Wirkung.
+> **Sicherheitsstatus in einem Satz:** Hardwareausführung ist im Repository standardmäßig deaktiviert (`hardware_execution_enabled: false`); der Anlagenverantwortliche hat bestätigt, dass sämtliche CDS-Hardwarekomponenten bereits einzeln getestet wurden und funktionsfähig sind (heute, 14.10.2026, erneut geprüft; Abschnitt 4). Ausstehend sind die **integrierten Prozessläufe** (Water Cycle, Tank Cleaning, AP-08-Transfer, Dosierung), nicht die einzelnen Komponenten.
 ---
 
 ## Entwicklungsstand (2026-10-14)
@@ -736,7 +742,7 @@ Grundlage: `main` und `origin/main` (GitHub, am 2026-10-14 per `git ls-remote or
 | Implementiert, in `main` integriert und auf GitHub veröffentlicht (`f463a0f`) | AP-00 bis AP-04 (bis `6125b1f`): Testisolierung, Weitergabe der Laufoptionen, Sensor-/Settings-Härtung, Rezeptstartvalidierung, Fill-Sicherheit, gemeinsame Sensorauswertung und Hardware-Start-Gates, Drain-Sicherheit, Water-Cycle-Abschluss |
 | AP-05 Stufe 1 (integriert, veröffentlicht) | Reine Fachlogik `domain/recipe/nutrient_plan.py` und `domain/recipe/volume_balance.py` (Commit `f463a0f`, vollständig in `main` integriert und auf GitHub veröffentlicht). Nur als Code integriert: keine Prozess-, Hardware- oder MQTT-Anbindung |
 | Softwareseitig geprüft | Hardwarefreie Testsuite auf `main` (`f463a0f`): 1874 bestanden, **1 fehlgeschlagen** (bekannter Recipe-Editor-Test, Abschnitt 23); AP-05 Stufe 1: 565 Tests bestanden (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
-| **Nicht** hardwareseitig validiert | Für AP-00 bis AP-05 ist keine Hardwarevalidierung dokumentiert: keine MCU_B-Dosierung, keine chemische Dosierung, kein realer Lauf der gehärteten Fill-/Drain-/Water-Cycle-Pfade. Bestätigt sind nur die drei Ausgänge aus Abschnitt 4 (ältere Validierung) |
+| Integrierte Läufe **nicht** validiert | Die Einzelkomponenten sind funktionsgeprüft (Abschnitt 4). Für AP-00 bis AP-05 ist keine integrierte Hardwarevalidierung dokumentiert: keine MCU_B-Dosierung, keine chemische Dosierung, kein realer Lauf der gehärteten Fill-/Drain-/Water-Cycle-Pfade, kein integrierter AP-08-Transfer |
 | Geplante nächste Schritte | alle ausstehend: AP-05 Stufen 2–6 (Stufe 2: Hardware-/Profil-Gates, siehe Abschnitt 22), AP-06 bis AP-09 (Tabelle unten) |
 
 ### Arbeitspaket-Übersicht AP-00 bis AP-09
@@ -758,7 +764,7 @@ Die Zuordnung der Änderungen zu Arbeitspaketen (AP-00 bis AP-05) stammt aus den
 | AP-05 Stufen 2–6 | Weitere MCU_B-Dosierschritte (Stufe 2 = Hardware-/Profil-Gates, laut Modul-Docstring); Stufen 3–6 sind im Repository nicht detailliert | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | MCU_B-Identität, Kalibrierung, Profil, Firmware-Gates |
 | AP-06 | EC-Regelung und Korrekturlogik | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
 | AP-07 | MCU_A-Integration und pH-Regelung | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
-| AP-08 | Transfer in den Zielbehälter | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
+| AP-08 | Transfer in den Zielbehälter | Kontrollierter Transfer des Mixing-Tank-Inhalts in genau einen Solution Tank (1-4): vom Bediener gewählter Tank, abgelesener Füllstand und Kapazitätsbestätigung, geprüft gegen das 300-L-Nennvolumen und die beim Transferstart erfasste Mixer-Menge, gesonderte Bestätigung bei `NOT_EVALUATED`, Freigabe an den zuletzt abgeschlossenen Mischlauf gebunden und nur durch einen erfolgreich abgeschlossenen Transfer verbraucht (Wiederholung nach Stopp/Fehler mit neuer Freigabe, neu abgelesenem Füllstand und neuer Mixer-Messung), Ventil auf, Settle, Stop-Recheck, dann Pumpe; Pumpe aus vor Ventil zu (Pumpe-aus fehlgeschlagen: Ventil bleibt offen, kritischer Fehler, physischer Not-Aus nötig); erste plausible 0 L beendet den Transfer; Quellseiten-Überwachung wie beim Drain; Emergency Stop, Prozessverriegelung, Dashboard-Status und Prozesslog. Nur Software, integrierter Hardwarelauf steht aus | umgesetzt (hardwarefreie Tests; Komponenten einzeln funktionsgeprüft) | `process/target_transfer.py`, `process/drain_safety.py`, `nicegui_dashboard/process_controller.py` | Keine Zieltank-Sensoren: keine Überlaufsicherung, Sicherheitsreserve liegt in der Bedienerbestätigung; erster begleiteter Wassertest (Abschnitt 24) |
 | AP-09 | Gesamtintegration, Hardwarevalidierung und Systemtests | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Alle Hardwarevalidierungspunkte (Abschnitt 24) |
 
 ---
@@ -833,13 +839,17 @@ Aktuell umgesetzt:
 - hardwarefreie Testisolierung (AP-00), strikte Sensor-/Settings-Auswertung und Rezeptstartvalidierung (AP-02A/B), Fill-Laufzeitsicherheit (AP-02C), gemeinsame Sensorauswertung und strikte Hardware-Start-Gates (AP-03), Drain-Sicherheit für alle drei Drain-Pfade (AP-04A) sowie Water-Cycle-Abschluss-/Cleanup-Behandlung mit finalem MQTT-Status (AP-04) — nur Software, siehe Abschnitt 21
 - reine Fachlogik für einen unveränderlichen MCU_B-Nährstoffdosierplan und eine konservative Volumenbilanz (`domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py`, AP-05 Stufe 1, in `main` integriert und auf GitHub veröffentlicht) — keine Prozess-, Dashboard- oder Hardwareanbindung, siehe Abschnitt 22
 
-Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor und nach der Härtung AP-02 bis AP-04 steht noch aus. Manual Drain Jog und Tank Cleaning sind ebenfalls noch nicht real mit Hardware validiert (siehe Abschnitte 17 und 24).
+Der modulare Water-Cycle startet softwareseitig korrekt. Ein vollständiger realer Hardwarelauf nach dem letzten Refactor und nach der Härtung AP-02 bis AP-04 steht noch aus. Bei Manual Drain Jog und Tank Cleaning sind die Komponenten einzeln funktionsgeprüft, die integrierten Läufe aber ebenfalls noch nicht validiert (siehe Abschnitte 17 und 24).
 
 ---
 
 ## 4. Hardware-Validierungsstatus (wichtig!)
 
-Nur die folgenden Ausgänge wurden real am physischen System getestet und ihre Wirkung bestätigt:
+**Funktionsprüfung der Einzelkomponenten:** Der Anlagenverantwortliche bestätigt, dass sämtliche CDS-Hardwarekomponenten (Transferpumpe, Zielventile 1–4, weitere Ventile und Pumpen, vorhandene Sensorik und Peristaltik-Komponenten) jeweils einzeln getestet und als funktionsfähig bestätigt wurden; die Funktionsprüfung wurde am 14.10.2026 erneut durchgeführt. Das ist eine Aussage über die einzelnen Komponenten, nicht über integrierte Prozessabläufe. Die Dokumentation hält das als Bestätigung des Anlagenverantwortlichen fest; ein Prüfprotokoll liegt nicht im Repository.
+
+**Davon nicht abgedeckt:** Integrierte Prozessläufe (Water Cycle, Tank Cleaning, Manual Drain, AP-08-Zieltanktransfer, Dosierung) wurden nach den Änderungen AP-02 bis AP-08 noch nicht an der realen Anlage durchgeführt.
+
+Folgende Ausgänge wurden zusätzlich bereits früher innerhalb realer Prozessläufe validiert:
 
 | Funktion              | Config-Key             | GPIO (BCM) | Physischer Pin | Status              |
 |------------------------|------------------------|:----------:|:---------------:|----------------------|
@@ -847,11 +857,11 @@ Nur die folgenden Ausgänge wurden real am physischen System getestet und ihre W
 | Supply/Test Valve 6     | `test_supply_valve_6`  | 6          | 31               | validiert            |
 | Drain Valve 0           | `valve_0_drain`        | 21         | 40               | validiert            |
 
-Alle übrigen Einträge in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing_circulation_pump`, `sensor_circulation_pump`, `valve_1`–`valve_9`) sind im Code ansteuerbar, aber **nicht** durch einen realen Hardwaretest bestätigt. Insbesondere:
+Alle übrigen Einträge in `gpio_config.py` (`contactor_0/5`, `transfer_pump`, `mixing_circulation_pump`, `sensor_circulation_pump`, `valve_1`–`valve_9`) sind durch die obige Einzelfunktionsprüfung abgedeckt, aber **nicht** innerhalb eines hier dokumentierten integrierten Prozesslaufs validiert. Insbesondere:
 
-- **Transfer Pump** (`transfer_pump`, GPIO26) wird bereits in `calibration_mixing_tank.py`, `main_safe_drain.py` und jetzt auch in `process/tank_cleaning/` verwendet, ihre elektrische Anbindung ist aber laut Projektstand noch nicht abschließend geklärt.
+- **Transfer Pump** (`transfer_pump`, GPIO26) wird in `calibration_mixing_tank.py`, `main_safe_drain.py`, `process/tank_cleaning/` und im AP-08-Transfer verwendet. Sie wird über einen GPIO-gesteuerten Contactor ohne Rückmeldung geschaltet; die Einzelfunktionsprüfung ist bestätigt, der integrierte AP-08-Ablauf steht noch aus.
 - **Valve 5** ist laut Kommentar in `gpio_config.py` nicht zuverlässig dicht.
-- **Tank Cleaning** steuert zusätzlich `mixing_circulation_pump` und `sensor_circulation_pump` an – ebenfalls noch ohne realen Hardwaretest. Die Settings-Datei (`config/tank_cleaning_settings.json`) ist deshalb bewusst auf ein reduziertes **40-Liter-Testvolumen** statt des späteren 200-Liter-Zielwerts gestellt, um den ersten Hardwaretest ohne größeren Wasserverbrauch/-risiko durchzuführen.
+- **Tank Cleaning** steuert zusätzlich `mixing_circulation_pump` und `sensor_circulation_pump` an – einzeln funktionsgeprüft, integrierter Lauf steht aus. Die Settings-Datei (`config/tank_cleaning_settings.json`) ist deshalb bewusst auf ein reduziertes **40-Liter-Testvolumen** statt des späteren 200-Liter-Zielwerts gestellt, um den ersten Hardwaretest ohne größeren Wasserverbrauch/-risiko durchzuführen.
 
 Bevor ein neuer Ausgang produktiv verwendet wird: real am System schalten, Wirkung visuell/physisch bestätigen, erst danach in eine automatisierte Sequenz aufnehmen.
 
@@ -1415,8 +1425,8 @@ Strategie: `pytest` mit dem AP-00-Guard; alle Tests sind hardwarefrei. Prozess-,
 | Thema | Beschreibung | Zugeordnet zu |
 |---|---|---|
 | Keine physische Abschaltrückmeldung | Abschalten ist ein Softwareaufruf; `physical_switch_off_confirmed` ist immer `false` | AP-09 |
-| O1 | `safe_stop_drain()` (`process/drain_safety.py`) versucht derzeit immer, zuerst die Transferpumpe abzuschalten und anschließend das Drain-Ventil zu schließen, auch wenn `transfer_pump.off()` fehlschlägt. Ob dieses Verhalten bei unbekanntem physischem Pumpenzustand sicher ist, bleibt eine offene Hardwareentscheidung (O1) und muss vor der Freigabe des realen Drain-Prozesses validiert werden | AP-09 |
-| Füllstand unter etwa 10 L | Die Füllstandsmessung ist unter etwa 10 L nicht validiert. Ein angezeigter Wert von 0,0 L ist kein zuverlässiger Nachweis für einen vollständig leeren Tank | AP-09 |
+| O1 | Drain-Pfade: `safe_stop_drain()` (`process/drain_safety.py`) versucht nach einem fehlgeschlagenen `transfer_pump.off()` weiterhin, das Drain-Ventil zu schließen. **Der AP-08-Transfer entscheidet anders:** Schlägt `pump.off()` fehl, wird das Zielventil bewusst **nicht** geschlossen (nicht gegen eine möglicherweise laufende Pumpe), die Aktoren bleiben gehalten, der Fehler ist kritisch, der Bediener muss den physischen Not-Aus betätigen (unabhängig vom Raspberry Pi, softwareseitig nicht ansteuerbar), und bis zur Behebung und Quittierung (Reset / Ack) ist kein weiterer Transfer möglich. Ohne Contactor-Rückmeldung kann die Software keinen Pumpenstillstand beweisen. O1 für die Drain-Pfade bleibt eine offene Entscheidung | AP-09 |
+| Füllstand unter etwa 10 L | Die Mixer-Kalibrierung ist nur ab etwa 10 L gefittet. Bestätigung des Anlagenverantwortlichen (AP-08): Beim Entleeren bedeutet der erste angezeigte Wert von 0 L, dass der Mixing Tank tatsächlich leer ist; danach können die Werte wieder schwanken. Der Transfer endet deshalb mit dem ersten frischen, gültigen 0-L-Wert, der zum Entleerverlauf passt (vorheriger plausibler Wert bereits bei höchstens 10 L); ein Transferstart unter 10 L wird blockiert. Die allgemeinen Drain-Pfade sind unverändert und verlangen weiterhin mehrere Leer-Samples | AP-09 |
 | Trockenlauf | Software kann Trockenlauf der Transferpumpe nicht verhindern; sie begrenzt nur die Laufzeit bei Sensorverlust/fehlendem Fortschritt | AP-09 |
 | Vorläufige Drain-Parameter | Sensorverlust-Grenze 5 s sowie die Standardwerte für Pumpenförderrate (16 L/min), Timeout-Puffer (180 s), Ventil-Settle-Zeit (1 s) und Fortschritts-/Anstiegsgrenzen in `DrainSafetyLimits`: nicht hardwarevalidiert | AP-09 |
 | SIGTERM / Kill | Cleanup läuft nur, wenn der Prozess es ausführen kann; nach `SIGKILL` oder hartem Absturz ist keine Software-Bereinigung möglich, Ausgänge können im letzten Zustand bleiben | AP-09 |
@@ -1424,5 +1434,7 @@ Strategie: `pytest` mit dem AP-00-Guard; alle Tests sind hardwarefrei. Prozess-,
 | MQTT-Zustellung | Statusmeldungen sind nicht garantiert zugestellt (Abschnitt 21) | akzeptierte Einschränkung |
 | MCU_B-Identität und Kalibrierung | Identitätsprüfung, Firmware-/Profil-Abgleich und Freigaben der Einzelpumpenkalibrierung sind nicht abgeschlossen | AP-05 Stufe 2 |
 | Chemische Dosierung | Nicht freigegeben. Keine chemische Dosierung, bevor alle Hardware-Gates bestanden sind | AP-05 Stufe 2 / AP-09 |
+| Zieltank-Überlauf (AP-08) | Die vier Solution Tanks (300 L Nennvolumen, manuell ablesbare Füllstandsskala) haben keine Sensoren. Die Software prüft nur den vom Bediener abgelesenen Füllstand gegen das 300-L-Nennvolumen und die Mixer-Menge beim Transferstart; sie legt keine Sicherheitsreserve fest und berücksichtigt die Unsicherheit des Mixer-Sensors nicht. Beides liegt in der ausdrücklichen Bedienerbestätigung und Beaufsichtigung. Ein automatischer Überlaufschutz ist derzeit nicht möglich und bleibt eine dokumentierte spätere Erweiterung | spätere Erweiterung |
+| Transferablauf (AP-08) | `valve_1` bis `valve_4` und `transfer_pump` sind einzeln funktionsgeprüft (Anlagenverantwortlicher). Der integrierte AP-08-Ablauf (Ventil, Settle, Pumpe, Überwachung, Stopp) wurde noch nicht an der realen Anlage durchgeführt; Pumpenförderrate (16 L/min) und Transfer-Timeout folgen den vorläufigen Drain-Parametern. Ein gestoppter oder fehlgeschlagener Transfer verbraucht die Freigabe des Mischlaufs nicht (neue Freigabe, neu abgelesener Füllstand und neue Mixer-Messung nötig; nach Störung oder Emergency Stop erst nach Quittierung); nur ein erfolgreich abgeschlossener Transfer verbraucht sie | AP-09 |
 
 Die Zuordnung offener Punkte zu AP-05 Stufe 2 und AP-09 folgt der Roadmap (AP-09: Gesamtintegration, Hardwarevalidierung, Systemtests); die einzelne Zuordnung ist die Lesart des Autors.

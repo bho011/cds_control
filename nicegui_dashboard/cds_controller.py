@@ -130,6 +130,12 @@ class CdsController:
     def stop_tank_cleaning(self) -> dict[str, Any]:
         return self.process_controller.stop_tank_cleaning()
 
+    def start_target_transfer(self, confirmation_text: str, request: Any) -> dict[str, Any]:
+        return self.process_controller.start_target_transfer(confirmation_text, request)
+
+    def stop_target_transfer(self) -> dict[str, Any]:
+        return self.process_controller.stop_target_transfer()
+
     def start_prime(self, pumps: dict[str, list[str]]) -> dict[str, Any]:
         return self.process_controller.start_prime(pumps)
 

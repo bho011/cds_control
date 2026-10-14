@@ -1,4 +1,4 @@
-"""Process-Control-Panel: Start/Reset/Emergency-Stop, Manual Drain Jog, Tank Cleaning."""
+"""Process-Control-Panel: Start/Reset/Emergency-Stop, Manual Drain Jog, Tank Cleaning; eigene Card fuer den Zieltanktransfer."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from nicegui import ui
 
 from domain.recipe_model import RunOptions
 from nicegui_dashboard.components.formatting import fmt
+from process.target_transfer import TARGET_TANK_NOMINAL_LITERS, TransferRequest
 
 
 @dataclass
@@ -26,6 +27,18 @@ class ProcessControlWidgets:
     tank_cleaning_progress: ui.linear_progress
     tank_cleaning_start_button: ui.button
     tank_cleaning_stop_button: ui.button
+    transfer_release_label: ui.label
+    transfer_status_label: ui.label
+    transfer_chip_label: ui.label
+    transfer_tank_select: ui.select
+    transfer_level_input: ui.number
+    transfer_capacity_confirm_switch: ui.switch
+    transfer_not_evaluated_switch: ui.switch
+    transfer_start_button: ui.button
+    transfer_stop_button: ui.button
+    # Kennung des Mischlaufs, die zuletzt ANGEZEIGT wurde: die Bedienerfreigabe gilt
+    # genau fuer diesen angezeigten Lauf, nicht fuer einen inzwischen neueren.
+    transfer_state: dict
     hardware_enabled_label: ui.label
     fill_settings_label: ui.label
     required_text_label: ui.label
@@ -54,6 +67,74 @@ def format_evaluation_status(evaluation: dict[str, Any] | None) -> str:
     if status == "NOT_EVALUATED":
         text += " (Sollwerterfuellung nicht bestaetigt)"
     return text
+
+
+def format_transfer_release(release: dict[str, Any] | None) -> str:
+    """Anzeige, ob und wofuer eine Transferfreigabe moeglich ist. NOT_EVALUATED wird
+    ausdruecklich NICHT als Qualitaetsnachweis dargestellt."""
+    if not release:
+        return "Keine Freigabe: kein Mischlauf bekannt."
+    if not release.get("available"):
+        return f"Keine Freigabe: {release.get('reason') or 'unbekannter Grund'}"
+    run_id = str(release.get("run_id") or "")[:8]
+    status = release.get("evaluation_status")
+    if status == "NOT_EVALUATED":
+        return (
+            f"Freigabe: Mischlauf {run_id} · EC/pH: NOT_EVALUATED, "
+            "Sollwerte NICHT bestaetigt, kein Qualitaetsnachweis"
+        )
+    return f"Freigabe: Mischlauf {run_id} abgeschlossen · EC/pH: {status}"
+
+
+def format_transfer_chip(transfer: dict[str, Any] | None, release: dict[str, Any] | None) -> tuple[str, str]:
+    """(Text, Art) fuer die Status-Marke der Transfer-Card. Art: idle | ready | warn | run | crit."""
+    transfer = transfer or {}
+    release = release or {}
+    if transfer.get("pump_off_failed") or transfer.get("fault_latched") or transfer.get("phase") == "ERROR":
+        return "Störung", "crit"
+    if transfer.get("is_active"):
+        return "Läuft", "run"
+    phase = transfer.get("phase")
+    if phase == "FINISHED":
+        return "Abgeschlossen", "ready"
+    if phase == "STOPPED":
+        return "Gestoppt", "warn"
+    if release.get("available"):
+        if release.get("evaluation_status") == "NOT_EVALUATED":
+            return "Freigabe mit Bestätigung", "warn"
+        return "Freigabe möglich", "ready"
+    return "Bereit", "idle"
+
+
+def format_transfer_status(transfer: dict[str, Any] | None) -> str:
+    """Eine Zeile Transferstatus/-ergebnis fuer das vorhandene Process-Control-Panel."""
+    if not transfer:
+        return "Target Transfer: bereit"
+    phase = str(transfer.get("phase") or "IDLE")
+    if transfer.get("pump_off_failed"):
+        return (
+            "KRITISCH: Transferpumpe liess sich NICHT abschalten - Stillstand nicht bestaetigt. "
+            "PHYSISCHEN NOT-AUS BETAETIGEN. Zielventil wurde nicht geschlossen. "
+            "Kein weiterer Transfer bis zur Quittierung (Reset / Ack)."
+        )
+    if phase == "IDLE":
+        # Die Controller-Meldung ("Target Transfer ready.", "Transfer blockiert: ...") traegt den
+        # Namen schon selbst; kein zweites Praefix davorsetzen.
+        return str(transfer.get("last_message") or "Target Transfer: bereit")
+    parts = [f"Target Transfer: {phase}", f"Tank {transfer.get('target_tank')}"]
+    if transfer.get("current_mixer_liters") is not None:
+        parts.append(f"Mixer {fmt(transfer.get('current_mixer_liters'), 'L')}")
+    if transfer.get("transferred_liters_sensor_calc") is not None:
+        parts.append(f"gefoerdert (Sensorrechnung) {fmt(transfer.get('transferred_liters_sensor_calc'), 'L')}")
+    if transfer.get("is_active"):
+        parts.append(f"{float(transfer.get('elapsed_seconds') or 0.0):.0f}/{float(transfer.get('max_seconds') or 0.0):.0f} s")
+    if transfer.get("stop_reason") and not transfer.get("is_active"):
+        parts.append(f"Grund: {transfer['stop_reason']}")
+    if transfer.get("last_error"):
+        parts.append(f"FEHLER: {transfer['last_error']}")
+    if transfer.get("fault_latched") and not transfer.get("is_active"):
+        parts.append("Stoerung - vor erneutem Transfer quittieren (Reset / Ack)")
+    return " | ".join(parts)
 
 
 def format_dosing_status(dosing: dict[str, Any] | None) -> tuple[str, float, str]:
@@ -95,44 +176,130 @@ def format_dosing_status(dosing: dict[str, Any] | None) -> tuple[str, float, str
     return " | ".join(parts), progress, error
 
 
-def build_process_control() -> ProcessControlWidgets:
-    with ui.card().classes("panel process-control-panel"):
+@dataclass
+class TransferWidgets:
+    transfer_release_label: ui.label
+    transfer_status_label: ui.label
+    transfer_chip_label: ui.label
+    transfer_tank_select: ui.select
+    transfer_level_input: ui.number
+    transfer_capacity_confirm_switch: ui.switch
+    transfer_not_evaluated_switch: ui.switch
+    transfer_start_button: ui.button
+    transfer_stop_button: ui.button
+    # Kennung des Mischlaufs, die zuletzt ANGEZEIGT wurde: die Bedienerfreigabe gilt
+    # genau fuer diesen angezeigten Lauf, nicht fuer einen inzwischen neueren.
+    transfer_state: dict
+
+
+_TRANSFER_INFO = (
+    "Keine automatische Überlaufsicherung: die Zieltanks haben keine Sensoren. Füllstand an der Skala "
+    "ablesen. Sicherheitsreserve und Messungenauigkeit des Mixer-Sensors (unter ca. 10 L nicht "
+    "belastbar) liegen in Ihrer Bestätigung. Die Freigabe gilt nur für den angezeigten Mischlauf und "
+    "bis zum erfolgreichen Abschluss. Nach Abbruch oder Fehler ist eine Wiederholung mit neuer "
+    "Freigabe und neu abgelesenem Füllstand möglich, nach einer Störung erst nach Quittierung "
+    "(Reset / Ack). Zusätzlich ist der Sicherheitsschalter im Process-Control-Panel nötig."
+)
+
+
+def info_icon(text: str) -> ui.icon:
+    """Kleines Info-Symbol; die lange Erklaerung steht nur im Tooltip."""
+    return ui.icon("info", size="16px").classes("info-icon").tooltip(text)
+
+
+def build_target_transfer() -> TransferWidgets:
+    """Eigene Card fuer den Transfer in einen Solution Tank (Raster-Bereich 'transfer')."""
+    with ui.card().classes("panel grid-transfer"):
+        with ui.row().classes("transfer-head w-full items-center no-wrap"):
+            ui.label("Transfer in Solution Tank").classes("panel-title")
+            info_icon(_TRANSFER_INFO)
+            transfer_chip_label = ui.label("Bereit").classes("transfer-chip chip-idle")
+
+        with ui.column().classes("transfer-status-box w-full"):
+            transfer_release_label = ui.label("Keine Freigabe: kein Mischlauf bekannt.").classes("transfer-line")
+            transfer_status_label = ui.label("Target Transfer: bereit").classes("transfer-line")
+
+        with ui.element("div").classes("transfer-form"):
+            transfer_tank_select = ui.select(
+                {1: "Tank 1 (Valve 1)", 2: "Tank 2 (Valve 2)", 3: "Tank 3 (Valve 3)", 4: "Tank 4 (Valve 4)"},
+                value=None,
+                label="Zieltank",
+            ).classes("transfer-field transfer-tank").props("outlined dense dark options-dark")
+            transfer_level_input = ui.number(
+                "Füllstand Zieltank (L)",
+                placeholder=f"0 bis {TARGET_TANK_NOMINAL_LITERS:g}",
+                value=None,
+                min=0,
+                max=TARGET_TANK_NOMINAL_LITERS,
+                step=0.5,
+            ).classes("transfer-field transfer-level").props("outlined dense dark")
+            transfer_capacity_confirm_switch = ui.switch(
+                "Freie Kapazität inkl. Reserve bestätigt",
+                value=False,
+            ).classes("transfer-switch transfer-capacity").props("dense")
+            transfer_start_button = ui.button("Start Transfer").classes("transfer-start font-bold").props("color=info")
+            transfer_not_evaluated_switch = ui.switch(
+                "NOT_EVALUATED zur Kenntnis genommen (nur dann nötig, kein Qualitätsnachweis)",
+                value=False,
+            ).classes("transfer-switch transfer-ack").props("dense")
+            transfer_stop_button = ui.button("Stop").classes("transfer-stop font-bold").props("color=negative outline")
+
+        with ui.row().classes("transfer-foot items-center no-wrap"):
+            ui.label("Kein Überlaufschutz: Füllstand an der Skala ablesen, Beaufsichtigung nötig.").classes(
+                "confirmation-help"
+            )
+
+    return TransferWidgets(
+        transfer_release_label=transfer_release_label,
+        transfer_status_label=transfer_status_label,
+        transfer_chip_label=transfer_chip_label,
+        transfer_tank_select=transfer_tank_select,
+        transfer_level_input=transfer_level_input,
+        transfer_capacity_confirm_switch=transfer_capacity_confirm_switch,
+        transfer_not_evaluated_switch=transfer_not_evaluated_switch,
+        transfer_start_button=transfer_start_button,
+        transfer_stop_button=transfer_stop_button,
+        transfer_state={"run_id": None},
+    )
+
+
+def build_process_control(transfer: TransferWidgets) -> ProcessControlWidgets:
+    with ui.card().classes("panel process-control-panel grid-side-card"):
         ui.label("Process Control").classes("panel-title")
-        #ui.label("Start, reset, emergency stop and maintenance actions").classes(
-        #    "panel-subtitle"
-        #)
 
         ui.label("Safety Confirmation").classes("control-section-title")
-        safety_confirm_switch = ui.switch(
-            "Ich bestätige die Sicherheitsfreigabe für diesen Start.",
-            value=False,
-        ).classes("text-slate-200 mt-2")
+        with ui.row().classes("switch-row items-center no-wrap"):
+            safety_confirm_switch = ui.switch(
+                "Sicherheitsfreigabe für diesen Start",
+                value=False,
+            ).classes("text-slate-200").props("dense")
+            info_icon(
+                "Gilt nur für den nächsten Startversuch (Prozess, Tank Cleaning oder Transfer) und wird "
+                "nach jedem Versuch zurückgesetzt. GPIOs werden nur initialisiert, wenn die Bestätigung "
+                "gesetzt ist und hardware_execution_enabled=true."
+            )
 
-        ui.label(
-            "Gilt nur für den nächsten Startversuch (Prozess oder Tank Cleaning) und wird nach "
-            "jedem Versuch zurückgesetzt. GPIOs werden nur initialisiert, wenn die Bestätigung "
-            "gesetzt ist und hardware_execution_enabled=true."
-        ).classes("confirmation-help")
+        with ui.row().classes("switch-row items-center no-wrap"):
+            run_sensor_circulation_switch = ui.switch(
+                "Sensorzirkulation für diesen Lauf", value=False
+            ).classes("text-slate-200").props("dense")
+            info_icon(
+                "Pro Lauf gewählt, nicht im Rezept gespeichert, startet immer auf aus. "
+                "Steuert die echte Sensorbox-Zirkulationspumpe."
+            )
 
-        run_sensor_circulation_switch = ui.switch(
-            "Sensor circulation for this run", value=False
-        ).classes("text-slate-200 mt-2")
-        ui.label(
-            "Per-run choice, not saved with the recipe - always resets to off. "
-            "Drives the real sensor-circulation pump."
-        ).classes("confirmation-help")
+        with ui.row().classes("switch-row items-center no-wrap"):
+            tank_emptied_confirm_switch = ui.switch(
+                "Mischtank für diesen Lauf entleert",
+                value=False,
+            ).classes("text-slate-200").props("dense")
+            info_icon(
+                "Betreiberbestätigung, keine Sensormessung: Der Füllstandssensor kann Leere unterhalb "
+                "von ca. 10 L nicht nachweisen. Gilt nur für den nächsten Startversuch und wird nach "
+                "jedem Versuch (auch nach einem blockierten) zurückgesetzt."
+            )
 
-        tank_emptied_confirm_switch = ui.switch(
-            "Ich bestätige, dass der Mischtank für diesen Rezeptlauf entleert wurde.",
-            value=False,
-        ).classes("text-slate-200 mt-2")
-        ui.label(
-            "Eigene Betreiberbestätigung, keine automatische Sensormessung: Der Füllstandssensor "
-            "kann Leere unterhalb von ca. 10 L nicht nachweisen. Gilt nur für den nächsten "
-            "Startversuch und wird nach jedem Versuch (auch nach einem blockierten) zurückgesetzt."
-        ).classes("confirmation-help")
-
-        with ui.row().classes("w-full gap-3 mt-3"):
+        with ui.row().classes("w-full gap-3 no-wrap"):
             start_button = ui.button("Start Process").classes(
                 "flex-1 font-bold"
             ).props("color=positive")
@@ -141,7 +308,7 @@ def build_process_control() -> ProcessControlWidgets:
             ).props("color=primary")
 
         stop_button = ui.button("Emergency Stop").classes(
-            "w-full font-bold mt-3"
+            "w-full font-bold emergency-stop"
         ).props("color=negative")
 
         ui.separator().classes("control-separator")
@@ -150,14 +317,14 @@ def build_process_control() -> ProcessControlWidgets:
         manual_drain_status_label = ui.label("Manual Drain Jog: ready").classes(
             "manual-drain-status"
         )
-        manual_drain_progress = ui.linear_progress(value=0.0).classes(
+        manual_drain_progress = ui.linear_progress(value=0.0, show_value=False).classes(
             "manual-drain-progress w-full"
         )
         manual_drain_button = ui.button("Hold to Drain – max. 30 s").classes(
             "manual-drain-button w-full font-bold"
         ).props("color=warning")
         ui.label(
-            "Press and hold. Release stops immediately. Server-side watchdog stops after 30 seconds."
+            "Gedrückt halten. Loslassen stoppt sofort, Server-Watchdog nach 30 s."
         ).classes("confirmation-help")
 
         ui.separator().classes("control-separator")
@@ -166,22 +333,22 @@ def build_process_control() -> ProcessControlWidgets:
         tank_cleaning_status_label = ui.label(
             "Tank Cleaning: ready"
         ).classes("manual-drain-status")
-        tank_cleaning_progress = ui.linear_progress(value=0.0).classes(
+        tank_cleaning_progress = ui.linear_progress(value=0.0, show_value=False).classes(
             "manual-drain-progress w-full"
         )
-        with ui.row().classes("w-full gap-3"):
+        with ui.row().classes("w-full gap-3 no-wrap"):
             tank_cleaning_start_button = ui.button(
-                "Start Tank Cleaning"
+                "Start Cleaning"
             ).classes("flex-1 font-bold").props("color=info")
             tank_cleaning_stop_button = ui.button("Stop").classes(
                 "flex-1 font-bold"
             ).props("color=negative outline")
         ui.label(
-            "Fills the Mixing Tank with RO water (target from settings), "
-            "circulates for a fixed hold time, then drains automatically. "
-            "Runs unattended - use Stop or Emergency Stop to abort. "
-            "Uses the safety confirmation switch above."
+            "Füllt mit RO-Wasser, zirkuliert, entleert automatisch. Läuft unbeaufsichtigt, "
+            "Abbruch mit Stop oder Emergency Stop."
         ).classes("confirmation-help")
+
+        ui.separator().classes("control-separator")
 
         hardware_enabled_label = ui.label(
             "hardware_execution_enabled: -"
@@ -207,6 +374,16 @@ def build_process_control() -> ProcessControlWidgets:
         tank_cleaning_progress=tank_cleaning_progress,
         tank_cleaning_start_button=tank_cleaning_start_button,
         tank_cleaning_stop_button=tank_cleaning_stop_button,
+        transfer_release_label=transfer.transfer_release_label,
+        transfer_status_label=transfer.transfer_status_label,
+        transfer_chip_label=transfer.transfer_chip_label,
+        transfer_tank_select=transfer.transfer_tank_select,
+        transfer_level_input=transfer.transfer_level_input,
+        transfer_capacity_confirm_switch=transfer.transfer_capacity_confirm_switch,
+        transfer_not_evaluated_switch=transfer.transfer_not_evaluated_switch,
+        transfer_start_button=transfer.transfer_start_button,
+        transfer_stop_button=transfer.transfer_stop_button,
+        transfer_state=transfer.transfer_state,
         hardware_enabled_label=hardware_enabled_label,
         fill_settings_label=fill_settings_label,
         required_text_label=required_text_label,
@@ -346,6 +523,58 @@ def handle_tank_cleaning_stop(controller: Any, add_log: Callable[[str], None]) -
     add_log(f"[TANK CLEANING] {result['message']}")
 
 
+def handle_transfer_start(
+    controller: Any, widgets: ProcessControlWidgets, add_log: Callable[[str], None]
+) -> None:
+    # Alle Bestaetigungen gelten fuer genau diesen Versuch und werden sofort zurueckgesetzt,
+    # egal wie der Versuch ausgeht. Rohwerte, kein bool()/float()-Cast: die Pruefung liegt
+    # strikt im Controller (fail-closed).
+    safety_confirmed = _consume_safety_confirmation(widgets)
+    capacity_confirmed = widgets.transfer_capacity_confirm_switch.value
+    widgets.transfer_capacity_confirm_switch.value = False
+    not_evaluated_ack = widgets.transfer_not_evaluated_switch.value
+    widgets.transfer_not_evaluated_switch.value = False
+    tank = widgets.transfer_tank_select.value
+    level = widgets.transfer_level_input.value
+    run_id = widgets.transfer_state.get("run_id")
+
+    if not safety_confirmed:
+        message = "Transfer blocked: safety confirmation is not set."
+        ui.notify(message, color="negative")
+        add_log(f"[BLOCKED] {message}")
+        return
+    if not run_id:
+        message = "Transfer blocked: kein freigabefaehiger Mischlauf angezeigt."
+        ui.notify(message, color="negative")
+        add_log(f"[BLOCKED] {message}")
+        return
+
+    control_data = controller.get_process_control_status()
+    entered_text = str(control_data["required_confirmation_text"]).strip()
+    request = TransferRequest(
+        run_id=run_id,
+        tank=tank,
+        target_level_liters=level,
+        capacity_confirmed=capacity_confirmed,
+        not_evaluated_acknowledged=not_evaluated_ack,
+    )
+    result = controller.start_target_transfer(entered_text, request)
+
+    if result["success"]:
+        ui.notify(result["message"], color="positive")
+        add_log(f"[TRANSFER] {result['message']}")
+        widgets.transfer_tank_select.value = None
+        widgets.transfer_level_input.value = None
+    else:
+        ui.notify(result["message"], color="negative")
+        add_log(f"[BLOCKED] {result['message']}")
+
+
+def handle_transfer_stop(controller: Any, add_log: Callable[[str], None]) -> None:
+    result = controller.stop_target_transfer()
+    add_log(f"[TRANSFER] {result['message']}")
+
+
 def wire_process_control_handlers(
     controller: Any, widgets: ProcessControlWidgets, add_log: Callable[[str], None]
 ) -> None:
@@ -356,6 +585,8 @@ def wire_process_control_handlers(
         lambda: handle_tank_cleaning_start(controller, widgets, add_log)
     )
     widgets.tank_cleaning_stop_button.on_click(lambda: handle_tank_cleaning_stop(controller, add_log))
+    widgets.transfer_start_button.on_click(lambda: handle_transfer_start(controller, widgets, add_log))
+    widgets.transfer_stop_button.on_click(lambda: handle_transfer_stop(controller, add_log))
 
     widgets.manual_drain_button.on("mousedown", lambda _: handle_manual_drain_start(controller, add_log))
     widgets.manual_drain_button.on("mouseup", lambda _: handle_manual_drain_stop(controller, add_log))
@@ -454,23 +685,58 @@ def refresh_process_control(
             f"Tank Cleaning: {tank_cleaning_status.get('last_message', 'ready')}"
         )
 
+    transfer_status = control_data.get("target_transfer") or {}
+    transfer_release = control_data.get("transfer_release") or {}
+    transfer_active = bool(transfer_status.get("is_active", False))
+
+    # Die Freigabe gilt fuer den jetzt angezeigten Mischlauf (nur wenn freigabefaehig).
+    widgets.transfer_state["run_id"] = (
+        transfer_release.get("run_id") if transfer_release.get("available") else None
+    )
+    widgets.transfer_release_label.set_text(format_transfer_release(transfer_release))
+    chip_text, chip_kind = format_transfer_chip(transfer_status, transfer_release)
+    widgets.transfer_chip_label.set_text(chip_text)
+    widgets.transfer_chip_label.classes(
+        remove="chip-idle chip-ready chip-warn chip-run chip-crit", add=f"chip-{chip_kind}"
+    )
+    widgets.transfer_status_label.set_text(format_transfer_status(transfer_status))
+
+    if (
+        transfer_active
+        or control_data["is_running"]
+        or manual_drain_active
+        or tank_cleaning_active
+        or prime_active
+        or not hardware_enabled
+        or not transfer_release.get("available")
+    ):
+        widgets.transfer_start_button.disable()
+    else:
+        widgets.transfer_start_button.enable()
+
+    if transfer_active:
+        widgets.transfer_stop_button.enable()
+    else:
+        widgets.transfer_stop_button.disable()
+
     if (
         control_data["is_running"]
         or manual_drain_active
         or tank_cleaning_active
         or prime_active
+        or transfer_active
         or not hardware_enabled
     ):
         widgets.start_button.disable()
     else:
         widgets.start_button.enable()
 
-    if control_data["is_running"] or manual_drain_active or tank_cleaning_active or prime_active:
+    if control_data["is_running"] or manual_drain_active or tank_cleaning_active or prime_active or transfer_active:
         widgets.reset_button.disable()
     else:
         widgets.reset_button.enable()
 
-    if control_data["is_running"] or tank_cleaning_active or prime_active or not hardware_enabled:
+    if control_data["is_running"] or tank_cleaning_active or prime_active or transfer_active or not hardware_enabled:
         widgets.manual_drain_button.disable()
     else:
         widgets.manual_drain_button.enable()
@@ -480,6 +746,7 @@ def refresh_process_control(
         or manual_drain_active
         or tank_cleaning_active
         or prime_active
+        or transfer_active
         or not tank_cleaning_hardware_enabled
     ):
         widgets.tank_cleaning_start_button.disable()

@@ -81,8 +81,9 @@ def create_tank_gauge(title: str, max_percent: int = 120) -> dict[str, Any]:
                             "show": False,
                         },
                         "axisLabel": {
-                            "color": "#94a3b8",
-                            "fontSize": 10,
+                            # Bei kompakten Karten ueberlagern die Skalenzahlen den Zeiger; der Wert
+                            # steht ohnehin gross darunter.
+                            "show": False,
                         },
                         "pointer": {
                             "show": True,

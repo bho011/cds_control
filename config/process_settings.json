@@ -18,5 +18,11 @@
   "hardware_execution_enabled": true,
   "required_confirmation_text": "confirmed",
   "ph_min": 5.0,
-  "ph_max": 6.5
+  "ph_max": 6.5,
+  "transfer_pump_liters_per_minute": 16.0,
+  "drain_timeout_buffer_seconds": 180.0,
+  "empty_threshold_liters": 0.3,
+  "empty_confirm_samples": 5,
+  "no_drain_progress_warning_seconds": 60.0,
+  "valve_settle_seconds": 1.0
 }

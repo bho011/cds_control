@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+
+_WEEKDAYS = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
 
 def fmt(value: Any, unit: str = "", decimals: int = 2) -> str:
@@ -50,3 +53,8 @@ def int_or_zero(value: Any) -> int:
 
 def yes_no(value: Any) -> str:
     return "yes" if value is True else "no"
+
+
+def format_clock(now: datetime) -> str:
+    """Kopfzeilen-Datum mit Uhrzeit, z. B. "Do, 15.10.2026 · 11:42:07"."""
+    return f"{_WEEKDAYS[now.weekday()]}, {now:%d.%m.%Y} · {now:%H:%M:%S}"

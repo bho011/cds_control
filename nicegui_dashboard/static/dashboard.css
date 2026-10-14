@@ -1018,3 +1018,326 @@ body {
     min-width: 0;
     width: 100%;
 }
+
+
+/* =========================================================
+   DASHBOARD GRID v2 (AP-08 Layout)
+   Eine Rasterflaeche fuer alle Karten, ab 1700 px breit alles ohne
+   Scrollen auf einem Full-HD-Bildschirm (100 %). Darunter 2 bzw. 1 Spalte.
+
+   Bereiche:  status | cps | side | data
+              act    | trans | side | data
+              recipe | recipe | side | data
+   ========================================================= */
+
+.dashboard-root {
+    padding: 10px 16px !important;
+    gap: 10px !important;
+    align-items: stretch !important;
+}
+
+.dash-header { min-height: 44px; }
+.dash-logo { width: 34px !important; height: 34px !important; }
+.dashboard-root .headline { font-size: 20px; letter-spacing: -0.02em; }
+.dashboard-root .subtitle { font-size: 12px; margin-top: 2px; }
+.header-clock { color: #e5eefb; font-size: 13px; font-weight: 700; line-height: 1.2; }
+.header-update { color: #93a4ba; font-size: 12px; line-height: 1.2; }
+
+.dash-grid {
+    display: grid;
+    width: 100%;
+    gap: 12px;
+    align-items: stretch;
+    min-height: calc(100vh - 100px);
+    grid-template-columns: 270px minmax(0, 1fr) 390px 330px;
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+        "status cps side data"
+        "act trans side data"
+        "recipe recipe side data";
+}
+
+.dash-grid > * { min-width: 0; }
+.grid-status { grid-area: status; }
+.grid-process-state { grid-area: cps; }
+.grid-actuators { grid-area: act; }
+.grid-transfer { grid-area: trans; }
+.dash-grid > .recipe-panel { grid-area: recipe; }
+.grid-side { grid-area: side; display: flex; flex-direction: column; gap: 12px; }
+.grid-data { grid-area: data; display: flex; flex-direction: column; gap: 12px; }
+.grid-side > .panel { flex: 1; }
+.grid-data > .tank-panel { flex: 1; }
+
+.dash-grid .panel {
+    padding: 12px 14px;
+    border-radius: 12px;
+    gap: 8px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+}
+.dash-grid .panel-title { font-size: 17px; margin: 0; }
+.dash-grid .panel-subtitle { font-size: 12px; margin: 0; }
+
+/* System Status */
+.grid-status { justify-content: space-between; }
+.grid-status .status-row { flex: 1; padding: 8px 10px; gap: 10px; border-radius: 8px; }
+.grid-status .status-subtitle { display: none; }
+.grid-status .status-title { font-size: 14px; }
+.grid-status .status-value { font-size: 13px; }
+.grid-status .status-dot { width: 10px; height: 10px; }
+
+/* Actuators: zwei Spalten, Zeilen fuellen die Hoehe */
+.grid-actuators {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto;
+    grid-auto-rows: 1fr;
+    gap: 6px !important;
+}
+.grid-actuators > .panel-title { grid-column: 1 / -1; margin-bottom: 2px; }
+.grid-actuators .actuator-row { width: auto; padding: 6px 10px; gap: 8px; border-radius: 8px; flex-wrap: nowrap; }
+.grid-actuators .actuator-title { font-size: 13.5px; }
+.grid-actuators .actuator-badge { min-width: 36px; padding: 2px 8px; font-size: 11px; }
+
+/* Current Process State */
+.grid-process-state { display: flex; flex-direction: column; }
+.grid-process-state .process-display {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    padding: 12px 22px;
+    border-radius: 10px;
+    justify-content: center;
+    gap: 6px;
+}
+.grid-process-state .process-state {
+    font-size: clamp(60px, 5.6vw, 104px);
+    margin-top: 0;
+    letter-spacing: -0.03em;
+}
+.grid-process-state .process-message { font-size: 19px; font-weight: 700; }
+
+/* Transfer */
+.grid-transfer { display: flex; flex-direction: column; gap: 12px !important; }
+.transfer-head { gap: 10px; }
+.info-icon { color: #9fb0c6; cursor: help; }
+.transfer-chip {
+    margin-left: auto;
+    border: 1px solid;
+    border-radius: 999px;
+    padding: 2px 11px;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.chip-idle { color: #9fb0c6; border-color: rgba(148, 163, 184, 0.35); }
+.chip-ready { color: #86efac; border-color: rgba(134, 239, 172, 0.5); background: rgba(34, 197, 94, 0.12); }
+.chip-warn { color: #fbbf24; border-color: rgba(251, 191, 36, 0.5); background: rgba(251, 191, 36, 0.1); }
+.chip-run { color: #7dd3fc; border-color: rgba(125, 211, 252, 0.5); background: rgba(56, 189, 248, 0.12); }
+.chip-crit { color: #fecaca; border-color: #f87171; background: rgba(220, 38, 38, 0.3); }
+
+.transfer-status-box {
+    flex: 1;
+    justify-content: center;
+    gap: 6px;
+    background: rgba(8, 16, 29, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+.transfer-line { font-size: 15px; font-weight: 600; color: #e8f0fc; }
+
+.transfer-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 150px 100px;
+    gap: 12px 14px;
+    align-items: center;
+}
+.transfer-tank { grid-column: 1; grid-row: 1; }
+.transfer-level { grid-column: 2; grid-row: 1; }
+.transfer-capacity { grid-column: 3 / -1; grid-row: 1; }
+.transfer-ack { grid-column: 1 / 3; grid-row: 2; }
+.transfer-start { grid-column: 3; grid-row: 2; }
+.transfer-stop { grid-column: 4; grid-row: 2; }
+.transfer-switch .q-toggle__label { font-size: 13.5px; line-height: 1.3; color: #e8f0fc; }
+
+/* Formularfelder: dunkler Grund, helle Schrift, klare Linie */
+.transfer-field.q-field--outlined .q-field__control { background: #0b1424; color: #f1f5f9; }
+.transfer-field .q-field__native,
+.transfer-field .q-field__input,
+.transfer-field .q-field__prefix,
+.transfer-field .q-field__suffix,
+.transfer-field .q-select__dropdown-icon { color: #f1f5f9 !important; font-weight: 600; }
+.transfer-field .q-field__label { color: #9fb0c6 !important; }
+.transfer-field.q-field--outlined .q-field__control:before { border-color: #3d4d68; }
+.transfer-field.q-field--outlined.q-field--focused .q-field__control:after { border-color: #38bdf8; }
+.transfer-field.q-field--focused .q-field__label { color: #7dd3fc !important; }
+
+/* Aufklappmenues (Select) dunkel mit heller Schrift, auch in anderen Dialogen */
+.q-menu {
+    background: #14213a !important;
+    color: #e8f0fc !important;
+    border: 1px solid #3d4d68;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55) !important;
+}
+.q-menu .q-item { color: #e8f0fc; }
+.q-menu .q-item--active { color: #7dd3fc; background: rgba(56, 189, 248, 0.18); font-weight: 700; }
+.q-menu .q-item.q-manual-focusable--focused,
+.q-menu .q-item:hover { background: #1e3350; }
+
+/* Process Control kompakt */
+.grid-side-card { justify-content: space-between; }
+.grid-side-card .switch-row { gap: 8px; }
+.grid-side-card .q-toggle__label { font-size: 14px; }
+.grid-side-card .control-section-title { margin: 2px 0 4px; font-size: 11.5px; }
+.grid-side-card .control-separator { margin: 4px 0; }
+.grid-side-card .q-btn { min-height: 40px; }
+.grid-side-card .manual-drain-button { min-height: 40px; }
+.grid-side-card .confirmation-help { font-size: 12px; margin: 0; }
+.grid-side-card .manual-drain-progress { margin-bottom: 4px; }
+.grid-side-card .manual-drain-status { margin-bottom: 4px; }
+.grid-side-card .warn-text { margin-top: 0; font-size: 12.5px; }
+
+/* Recipe: links Werte, rechts Favoriten und Aktionen */
+.dash-grid > .recipe-panel .recipe-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    gap: 18px;
+    align-items: center;
+}
+.recipe-info { gap: 2px; min-width: 0; }
+.recipe-actions { gap: 8px; width: 100%; }
+.recipe-actions .recipe-favorites-row { margin-top: 0; flex-wrap: nowrap; }
+.recipe-panel .recipe-name { font-size: 18px; margin-top: 0; }
+.recipe-panel .recipe-summary { margin-top: 2px; font-size: 13.5px; }
+.recipe-panel .recipe-detail { margin-top: 0; font-size: 13px; }
+.recipe-panel .recipe-favorite-badge { border-radius: 6px; }
+.recipe-panel .q-btn { min-height: 40px; }
+
+/* Sensor Values / Tanks */
+.grid-data .sensor-panel .metric-box { padding: 8px 10px; border-radius: 8px; min-width: 0; }
+.grid-data .metric-value { font-size: 30px; margin-top: 2px; }
+.grid-data .metric-title { font-size: 11.5px; }
+.grid-data .tank-gauge-stack { flex: 1; gap: 8px !important; }
+.grid-data .tank-gauge-card { padding: 8px 10px; border-radius: 8px; display: flex; flex-direction: column; align-items: stretch; }
+.grid-data .tank-gauge-card .nicegui-echart { flex: 1; height: auto !important; min-height: 130px; }
+.grid-data .tank-title { font-size: 14px; }
+.grid-data .tank-liters { font-size: 17px; margin-top: 0; }
+
+/* Mittlere Breite: zwei Spalten, die Seite scrollt */
+@media (max-width: 1699px) {
+    .dash-grid {
+        min-height: 0;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-rows: none;
+        grid-template-areas:
+            "cps side"
+            "trans side"
+            "recipe data"
+            "status data"
+            "act data";
+    }
+    .grid-process-state .process-state { font-size: 64px; }
+    .transfer-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .transfer-tank { grid-column: 1; grid-row: 1; }
+    .transfer-level { grid-column: 2; grid-row: 1; }
+    .transfer-capacity { grid-column: 1 / -1; grid-row: 2; }
+    .transfer-ack { grid-column: 1 / -1; grid-row: 3; }
+    .transfer-start { grid-column: 1; grid-row: 4; }
+    .transfer-stop { grid-column: 2; grid-row: 4; }
+    .dash-grid > .recipe-panel .recipe-body { grid-template-columns: minmax(0, 1fr); }
+    .grid-data .tank-gauge-card .nicegui-echart { min-height: 170px; }
+}
+
+/* Schmal: eine Spalte, Transfer weit oben */
+@media (max-width: 899px) {
+    .dash-grid {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "cps"
+            "trans"
+            "side"
+            "recipe"
+            "data"
+            "status"
+            "act";
+    }
+    .dash-header { flex-wrap: wrap; gap: 8px; }
+}
+
+/* ---- Feinabstimmung v2: kompakte Hoehen, damit ab 1700 px alles ohne Scrollen passt ---- */
+.nicegui-content { padding: 0 !important; }
+.dash-grid { min-height: calc(100vh - 84px); }
+.dash-grid .panel-title { font-size: 16px; }
+.dash-grid .q-linear-progress { height: 6px !important; border-radius: 3px; }
+.dash-grid .manual-drain-progress { margin: 0; }
+
+.grid-status .status-row { min-height: 0; padding: 6px 10px; }
+.grid-status .status-title { white-space: nowrap; font-size: 13px; }
+.grid-status .status-value { font-size: 12.5px; white-space: nowrap; }
+
+.grid-actuators .actuator-row { padding: 4px 8px; gap: 6px; }
+.grid-actuators .actuator-title { font-size: 12.5px; line-height: 1.15; }
+.grid-actuators .actuator-badge { min-width: 34px; padding: 1px 6px; font-size: 10.5px; }
+
+.grid-process-state .process-display { padding: 8px 20px; gap: 4px; }
+.grid-process-state .process-state { font-size: clamp(56px, 5vw, 96px); }
+.grid-process-state .process-message { font-size: 17px; }
+.grid-process-state .process-label { font-size: 12px; }
+
+.transfer-status-box { min-height: 70px; padding: 8px 14px; }
+.transfer-line { font-size: 14px; }
+.transfer-form { gap: 10px 14px; }
+.transfer-start { white-space: nowrap; }
+.transfer-field .q-field__control { height: 40px; min-height: 40px; }
+
+.grid-side-card { gap: 6px !important; }
+.grid-side-card .switch-row { gap: 6px; }
+.grid-side-card .q-toggle { min-height: 30px; }
+.grid-side-card .q-btn { min-height: 38px; }
+.grid-side-card .manual-drain-button { min-height: 38px; }
+.grid-side-card .control-separator { margin: 2px 0; }
+.grid-side-card .control-section-title { margin: 0 0 2px; }
+.grid-side-card .manual-drain-status { font-size: 12.5px; margin: 0; }
+.grid-side-card .confirmation-help { font-size: 11.5px; line-height: 1.35; }
+.grid-side-card .text-sm { font-size: 12px; line-height: 1.3; }
+
+.grid-data .sensor-panel .metric-box { padding: 6px 10px; gap: 0; }
+.grid-data .metric-value { font-size: 26px; }
+.grid-data .tank-gauge-card .nicegui-echart { min-height: 110px; }
+.grid-data .tank-percent { display: none; }
+.dash-grid > .recipe-panel { gap: 4px; }
+
+/* ---- Feinabstimmung v2b ---- */
+.grid-status .status-row { flex-wrap: nowrap; }
+.grid-status .status-row > .column { min-width: 0; }
+.dash-grid > .recipe-panel > .panel-subtitle { display: none; }
+.recipe-panel .recipe-detail { font-size: 12px; line-height: 1.35; }
+.grid-process-state .process-state { font-size: clamp(56px, 4.6vw, 88px); }
+.grid-side-card .switch-row { min-height: 0; }
+.grid-side-card .q-toggle__label,
+.transfer-switch .q-toggle__label { padding-left: 8px; }
+/* Outline-Stop-Buttons: lesbares Rot statt dunklem Quasar-Negativ */
+.dash-grid .q-btn.q-btn--outline.text-negative { color: #f87171 !important; }
+.dash-grid .q-btn.q-btn--outline.text-negative:before { border-color: rgba(248, 113, 113, 0.65); }
+.grid-side-card .text-sm { font-size: 11.5px; }
+
+/* NiceGUI-Karten richten Kinder links aus: Formular und Rezeptbereich brauchen die volle Breite */
+.transfer-form, .recipe-body { width: 100%; }
+
+/* ---- System Status: Name in Zeile 1, Statuswert darunter (Lampe links) ---- */
+.grid-status .status-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    row-gap: 1px;
+    align-content: center;
+    align-items: center;
+}
+.grid-status .status-row > .status-dot { grid-column: 1; grid-row: 1 / span 2; }
+.grid-status .status-row > .column { grid-column: 2; grid-row: 1; min-width: 0; }
+.grid-status .status-row > .status-value { grid-column: 2; grid-row: 2; text-align: left; }
+
+/* Untertitel unter dem Haupttitel immer in Grossbuchstaben */
+.dashboard-root .subtitle { text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
+.grid-status .status-row > .status-value { font-weight: 600; color: #aab9cd; }

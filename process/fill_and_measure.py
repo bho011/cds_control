@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Callable
 
@@ -54,6 +55,9 @@ class FillAndMeasureController(BackgroundHardwareProcess):
         self.process_logger = None
         self.display_state: str | None = "IDLE"
         self.last_start_request: str | None = None
+        # AP-08: Kennung des zuletzt akzeptiert gestarteten Mischlaufs. Eine
+        # Transferfreigabe bezieht sich auf genau diese Kennung (None = keine).
+        self._run_id: str | None = None
 
     def is_active(self) -> bool:
         """Auch aktiv, solange der zugehoerige Dosier-Thread noch laeuft (z. B.
@@ -112,6 +116,7 @@ class FillAndMeasureController(BackgroundHardwareProcess):
                 return self._reject_start_locked(plan_message)
 
             self.last_start_request = datetime.now().isoformat(timespec="seconds")
+            self._run_id = uuid.uuid4().hex
             self.is_running = True
             self._teardown_in_progress = False
             self._last_error = None
@@ -121,6 +126,44 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             self._begin_run_locked("cds-fill-and-measure", settings)
 
         return self._result(True, "Fill-and-Measure-Prozess gestartet.")
+
+    def get_finished_run_info(self) -> dict[str, Any]:
+        """
+        AP-08: Ist der zuletzt gestartete Mischlauf sauber abgeschlossen und damit
+        fuer eine Transferfreigabe geeignet? Rein lesend, verbraucht nichts.
+
+        available nur bei: Thread beendet, Zustand FINISHED, kein Fehler, kein
+        Stopp-Grund (z. B. Emergency Stop nach dem Ende), gueltige Endbewertung
+        (OK oder NOT_EVALUATED). Alles andere liefert einen Grund (fail-closed).
+        """
+        with self._lock:
+            info: dict[str, Any] = {
+                "available": False,
+                "reason": None,
+                "run_id": self._run_id,
+                "evaluation_status": None,
+            }
+            machine = self.state_machine
+            if self._run_id is None or machine is None:
+                info["reason"] = "Kein abgeschlossener Mischlauf vorhanden."
+            elif self.is_running or self._teardown_in_progress or self.is_active():
+                info["reason"] = "Mischlauf laeuft noch."
+            elif machine.state.name != "FINISHED":
+                info["reason"] = f"Mischlauf nicht abgeschlossen (Zustand {machine.state.name})."
+            elif machine.error_message is not None or self._stop_reason is not None:
+                info["reason"] = "Mischlauf wurde mit Fehler oder Stopp beendet."
+            elif machine.final_evaluation_status not in ("OK", "NOT_EVALUATED"):
+                info["reason"] = "Endbewertung des Mischlaufs fehlt."
+            else:
+                info["available"] = True
+                info["evaluation_status"] = machine.final_evaluation_status
+            return info
+
+    def invalidate_finished_run(self) -> None:
+        """AP-08: Ein anderer Prozess veraendert den Mixing Tank (Drain, Cleaning): die
+        Transferfreigabe des alten Mischlaufs verfaellt."""
+        with self._lock:
+            self._run_id = None
 
     def _prepare_nutrient_plan_locked(self, settings: dict[str, Any]) -> str | None:
         """Plan und Dosiervoraussetzungen VOR Thread/GPIO pruefen. None = ok
@@ -215,6 +258,7 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             return {
                 "dosing": dosing_status,
                 "final_evaluation": evaluation,
+                "run_id": self._run_id,
                 "is_running": self.is_running,
                 "thread_alive": self.is_active(),
                 "teardown_in_progress": self._teardown_in_progress,

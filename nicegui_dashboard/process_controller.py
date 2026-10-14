@@ -12,6 +12,7 @@ from process.fill_and_measure import FillAndMeasureController
 from process.manual_drain_jog import ManualDrainJog
 from process.nutrient_dosing import NutrientDosingController
 from process.pump_prime import PRIME_CHUNK_ML, PRIME_MAX_ML_PER_PUMP, PumpPrimeController
+from process.target_transfer import TargetTransferController, TransferRequest
 from process.tank_cleaning import TankCleaningController
 from services.settings_validation import SettingField, validate_settings
 
@@ -57,6 +58,15 @@ PROCESS_SETTINGS_SCHEMA = [
     SettingField("enable_sensor_circulation", bool, required=False, default=False),
     SettingField("hardware_execution_enabled", bool, required=False, default=False),
     SettingField("required_confirmation_text", str, required=False, default="confirmed"),
+    # AP-08 Zieltanktransfer: Quellseiten-Ueberwachung ueber DrainSafetyLimits. Gleiche Namen
+    # und Standardwerte wie in config/water_cycle_settings.json (Transferpumpe 16 L/min ist ein
+    # Nennwert, nicht gemessen).
+    SettingField("transfer_pump_liters_per_minute", float, required=False, default=16.0, min_value=0.1),
+    SettingField("drain_timeout_buffer_seconds", float, required=False, default=180.0, min_value=0.0),
+    SettingField("empty_threshold_liters", float, required=False, default=0.3, min_value=0.0),
+    SettingField("empty_confirm_samples", int, required=False, default=5, min_value=1),
+    SettingField("no_drain_progress_warning_seconds", float, required=False, default=60.0, min_value=0.0),
+    SettingField("valve_settle_seconds", float, required=False, default=1.0, min_value=0.0),
 ]
 
 # Every key here is already read via settings.get(key, default) in
@@ -162,6 +172,9 @@ class ProcessController:
         self.prime = PumpPrimeController(
             get_sensor_snapshot=self.get_sensor_snapshot,
         )
+        self.target_transfer = TargetTransferController(
+            get_sensor_snapshot=self.get_sensor_snapshot,
+        )
 
     def load_settings(self) -> dict[str, Any]:
         with SETTINGS_PATH.open("r", encoding="utf-8") as file:
@@ -196,6 +209,9 @@ class ProcessController:
         actual (even if minor) behavior change.
         """
         fill_and_measure_busy = self.fill_and_measure.is_running or self.fill_and_measure.is_active()
+        # AP-08: ein laufender Zieltanktransfer sperrt jeden anderen Hardwareprozess.
+        # Auch eine nicht bereinigte Pumpenabschaltstoerung (Aktoren noch gehalten) sperrt alles.
+        transfer_busy = self.target_transfer.is_active() or self.target_transfer.hardware_fault_pending()
 
         if starting == "fill_and_measure":
             if (
@@ -204,6 +220,7 @@ class ProcessController:
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
+                or transfer_busy
             ):
                 return (
                     "Start blocked: process, cleanup, background thread, Manual Drain Jog, "
@@ -217,6 +234,7 @@ class ProcessController:
                 or self.fill_and_measure._teardown_in_progress
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
+                or transfer_busy
             ):
                 return "Manual Drain Jog blocked: main process, cleanup, Tank Cleaning, or Prime is active."
             return None
@@ -228,6 +246,7 @@ class ProcessController:
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
+                or transfer_busy
             ):
                 return "Tank Cleaning blocked: another process, cleanup, Manual Drain Jog, or Prime is active."
             return None
@@ -238,8 +257,24 @@ class ProcessController:
                 or self.fill_and_measure._teardown_in_progress
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
+                or transfer_busy
             ):
                 return "Prime blocked: another process, cleanup, Manual Drain Jog, or Tank Cleaning is active."
+            return None
+
+        if starting == "target_transfer":
+            if (
+                fill_and_measure_busy
+                or self.fill_and_measure._teardown_in_progress
+                or self.manual_drain_jog.is_active()
+                or self.tank_cleaning.is_active()
+                or self.prime.is_active()
+                or transfer_busy
+            ):
+                return (
+                    "Target Transfer blocked: another process, cleanup, Manual Drain Jog, "
+                    "Tank Cleaning, Prime or a transfer is still active."
+                )
             return None
 
         raise ValueError(f"Unknown process for _busy_reason(): {starting!r}")
@@ -336,6 +371,9 @@ class ProcessController:
                 "tank_cleaning_settings_error": tank_cleaning_settings_error,
 
                 "prime": self.prime.get_status(),
+
+                "target_transfer": self.target_transfer.get_status(),
+                "transfer_release": self._transfer_release_status(),
             }
 
     def start_fill_and_measure(
@@ -457,6 +495,21 @@ class ProcessController:
                 self.last_error = f"Prime emergency stop failed: {exc}"
 
             try:
+                # Der Transferthread reagiert sofort (Event) und schaltet selbst in der
+                # Reihenfolge Pumpe aus, dann Ventil zu; kein paralleler Zugriff von hier.
+                self.target_transfer.request_stop(reason="emergency_stop")
+            except Exception as exc:
+                self.last_error = f"Target Transfer emergency stop failed: {exc}"
+
+            try:
+                # Nach fehlgeschlagener Pumpenabschaltung: erneut versuchen (Pumpe zuerst).
+                retry = self.target_transfer.retry_hardware_cleanup()
+                if not retry.get("success"):
+                    self.last_error = retry.get("message")
+            except Exception as exc:
+                self.last_error = f"Target Transfer cleanup retry failed: {exc}"
+
+            try:
                 if self.fill_and_measure._actuators is not None:
                     self.fill_and_measure._actuators.safe_shutdown_all()
             except Exception as exc:
@@ -488,6 +541,11 @@ class ProcessController:
             except Exception as exc:
                 self.last_error = f"Prime emergency stop failed: {exc}"
 
+            try:
+                self.target_transfer.wait_stopped()
+            except Exception as exc:
+                self.last_error = f"Target Transfer emergency stop failed: {exc}"
+
         await asyncio.to_thread(_wait_for_everything)
 
         with self._lock:
@@ -496,6 +554,7 @@ class ProcessController:
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
+                or self.target_transfer.is_active()
             ):
                 return self._result(
                     True,
@@ -532,6 +591,9 @@ class ProcessController:
             self.last_message = result.get("message", "Manual Drain Jog start requested.")
             if not result.get("success"):
                 self.last_error = result.get("message")
+            else:
+                # Der Mixer-Inhalt aendert sich: die Transferfreigabe des Mischlaufs verfaellt.
+                self.fill_and_measure.invalidate_finished_run()
 
         return result
 
@@ -577,6 +639,11 @@ class ProcessController:
                 self.last_error = f"Prime shutdown failed: {exc}"
 
             try:
+                self.target_transfer.request_stop(reason="controller_shutdown")
+            except Exception as exc:
+                self.last_error = f"Target Transfer shutdown failed: {exc}"
+
+            try:
                 if self.fill_and_measure._actuators is not None:
                     self.fill_and_measure._actuators.safe_shutdown_all()
             except Exception as exc:
@@ -607,12 +674,21 @@ class ProcessController:
         except Exception as exc:
             self.last_error = f"Prime shutdown failed: {exc}"
 
+        try:
+            self.target_transfer.wait_stopped()
+            retry = self.target_transfer.retry_hardware_cleanup()
+            if not retry.get("success"):
+                self.last_error = retry.get("message")
+        except Exception as exc:
+            self.last_error = f"Target Transfer shutdown failed: {exc}"
+
         with self._lock:
             if (
                 self.fill_and_measure.is_active()
                 or self.manual_drain_jog.is_active()
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
+                or self.target_transfer.is_active()
             ):
                 return self._result(False, "Shutdown timeout: Hintergrundthread läuft noch.")
 
@@ -653,6 +729,8 @@ class ProcessController:
             self.last_message = result.get("message", "Tank Cleaning start requested.")
             if not result.get("success"):
                 self.last_error = result.get("message")
+            else:
+                self.fill_and_measure.invalidate_finished_run()
 
         return result
 
@@ -661,6 +739,79 @@ class ProcessController:
 
         with self._lock:
             self.last_message = result.get("message", "Tank Cleaning stop requested.")
+
+        return result
+
+    def _transfer_release_status(self) -> dict[str, Any]:
+        """Freigabestatus fuer die Anzeige: gibt es einen abgeschlossenen, noch nicht
+        verwendeten Mischlauf, auf den sich eine Transferfreigabe beziehen kann?"""
+        info = dict(self.fill_and_measure.get_finished_run_info())
+        if info.get("available") and self.target_transfer.is_run_used(info.get("run_id")):
+            info["available"] = False
+            info["reason"] = "Fuer diesen Mischlauf wurde der Transfer bereits erfolgreich abgeschlossen."
+        elif info.get("available") and self.target_transfer.fault_latched():
+            info["available"] = False
+            info["reason"] = "Transferstoerung nicht quittiert (Reset / Ack)."
+        return info
+
+    def start_target_transfer(self, confirmation_text: str, request: TransferRequest) -> dict[str, Any]:
+        """
+        AP-08: Transfer des Mixing-Tank-Inhalts in einen Solution Tank (1-4). Alle
+        fachlichen Freigabepruefungen (Zieltank, Fuellstand, Kapazitaet, NOT_EVALUATED,
+        Mixer-Menge) liegen in process.target_transfer; hier: Exklusivitaet,
+        Bestaetigungstext, Zuordnung der Freigabe zum zuletzt abgeschlossenen Mischlauf.
+        """
+        with self._lock:
+            busy_message = self._busy_reason("target_transfer")
+            if busy_message is not None:
+                return self._result(False, busy_message)
+
+        try:
+            settings = self.load_settings()
+        except Exception as exc:
+            message = f"Settings could not be loaded: {exc}"
+            self._set_error(message)
+            return self._result(False, message)
+
+        required_text = settings.get("required_confirmation_text", "confirmed")
+        if not isinstance(confirmation_text, str) or confirmation_text.strip() != required_text:
+            message = "Target Transfer blocked: confirmation text is wrong."
+            self._set_error(message)
+            return self._result(False, message)
+
+        # Pruefung und Start atomar unter demselben Lock (kein anderer Start dazwischen).
+        with self._lock:
+            busy_message = self._busy_reason("target_transfer")
+            if busy_message is not None:
+                return self._result(False, busy_message)
+
+            info = self.fill_and_measure.get_finished_run_info()
+            if not info.get("available"):
+                message = f"Target Transfer blocked: {info.get('reason')}"
+                self._set_error(message)
+                return self._result(False, message)
+
+            if not isinstance(request, TransferRequest) or request.run_id != info.get("run_id"):
+                message = (
+                    "Target Transfer blocked: die Freigabe gehoert nicht zum zuletzt "
+                    "abgeschlossenen Mischlauf."
+                )
+                self._set_error(message)
+                return self._result(False, message)
+
+            result = self.target_transfer.start(settings, request, info.get("evaluation_status"))
+
+            self.last_message = result.get("message", "Target Transfer start requested.")
+            if not result.get("success"):
+                self.last_error = result.get("message")
+
+        return result
+
+    def stop_target_transfer(self) -> dict[str, Any]:
+        result = self.target_transfer.stop(reason="stopped_by_user")
+
+        with self._lock:
+            self.last_message = result.get("message", "Target Transfer stop requested.")
 
         return result
 
@@ -721,13 +872,27 @@ class ProcessController:
                 or self.fill_and_measure._teardown_in_progress
                 or self.tank_cleaning.is_active()
                 or self.prime.is_active()
+                or self.target_transfer.is_active()
             ):
                 return self._result(
                     False,
-                    "Reset blockiert: Prozess, Hintergrundthread, Cleanup, Tank Cleaning oder Prime läuft noch."
+                    "Reset blockiert: Prozess, Hintergrundthread, Cleanup, Tank Cleaning, Prime oder Transfer läuft noch."
                 )
 
+            if self.target_transfer.fault_latched() or self.target_transfer.hardware_fault_pending():
+                # Zuerst nur die Transferstoerung quittieren: der abgeschlossene Mischlauf bleibt
+                # erhalten, damit der Transfer nach Behebung wiederholt werden kann. Ein weiterer
+                # Reset setzt dann wie gewohnt den Mischlauf zurueck.
+                transfer_reset = self.target_transfer.acknowledge()
+                if transfer_reset.get("success"):
+                    self.last_error = None
+                    self.last_message = "Transferstoerung quittiert."
+                return transfer_reset
+
             result = self.fill_and_measure.acknowledge_error()
+            transfer_reset = self.target_transfer.acknowledge()
+            if not transfer_reset.get("success"):
+                return transfer_reset
             self.last_error = None
             self.last_message = "Reset acknowledged. Controller ready."
 

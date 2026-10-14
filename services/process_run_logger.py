@@ -51,6 +51,14 @@ class ProcessRunLogger:
             "drain_valve_0",
             "mixing_circulation_pump",
             "sensor_circulation_pump",
+            "valve_1",
+            "valve_2",
+            "valve_3",
+            "valve_4",
+
+            "transfer_target_tank",
+            "transfer_run_id",
+            "transfer_release",
         ]
 
         self._file = self.file_path.open("w", newline="", encoding="utf-8")
@@ -112,6 +120,14 @@ class ProcessRunLogger:
             "drain_valve_0": actuator_status.get("drain_valve_0"),
             "mixing_circulation_pump": actuator_status.get("mixing_circulation_pump"),
             "sensor_circulation_pump": actuator_status.get("sensor_circulation_pump"),
+            "valve_1": actuator_status.get("valve_1"),
+            "valve_2": actuator_status.get("valve_2"),
+            "valve_3": actuator_status.get("valve_3"),
+            "valve_4": actuator_status.get("valve_4"),
+
+            "transfer_target_tank": extra.get("transfer_target_tank"),
+            "transfer_run_id": extra.get("transfer_run_id"),
+            "transfer_release": extra.get("transfer_release"),
         }
 
         self._writer.writerow(row)

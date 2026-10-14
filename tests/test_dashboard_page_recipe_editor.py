@@ -21,8 +21,10 @@ from nicegui_dashboard.pages.dashboard_page import create_dashboard_page
 # Expected step per recipe-editor number field, in the order they are
 # created in dashboard_page.py (RO Water Volume ... pH adjustment factor).
 # nutrient_b_percent_display (readonly, auto-calculated) is excluded - it
-# has no user-facing +/- stepping.
-EXPECTED_STEPS = [1, 0.1, 10, 1, 1, 0.01, 0.1, 1, 1, 1, 10, 0.01]
+# has no user-facing +/- stepping. The FIRST entry is not a recipe field: it is the
+# AP-08 Transfer card's read-off target-tank level (0.5 L), which is built before
+# the Recipe card (it sits above it in the grid).
+EXPECTED_STEPS = [0.5, 1, 0.1, 10, 1, 1, 0.01, 0.1, 1, 1, 1, 10, 0.01]
 
 
 @pytest.fixture(autouse=True)
