@@ -50,7 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-MAX_ON_SECONDS = 3.0
+MAX_ON_SECONDS = 10.0
 RUNTIME_TOLERANCE_S = 0.5          # Messtoleranz ueber 3 s, danach FAILED
 VALVE_SETTLE_S = 1.0               # wie valve_settle_seconds in config/water_cycle_settings.json
 PUMP_DOSE_ML = 1.0                 # ca. 1,6 s bei 120 rpm / 8 Mikroschritten

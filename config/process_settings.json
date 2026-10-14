@@ -6,7 +6,7 @@
   "min_ro_liters_required": 20.0,
   "max_fill_seconds": 20.0,
   "min_fill_progress_liters": 0.2,
-  "no_fill_progress_timeout_seconds": 8.0,
+  "no_fill_progress_timeout_seconds": 20.0,
   "max_negative_level_drift_liters": 2.0,
   "level_filter_samples": 5,
   "target_reached_confirm_samples": 3,
