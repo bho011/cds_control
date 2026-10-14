@@ -20,6 +20,7 @@ immer unterschieden hat.
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime
 from typing import Any, Callable
@@ -199,6 +200,13 @@ class FillAndMeasureController(BackgroundHardwareProcess):
                 start_mixer_liters = self.state_machine.start_mixer_liters
                 added_liters = self.state_machine.last_added_liters
 
+            evaluation = None
+            if self.state_machine is not None and self.state_machine.final_evaluation_status is not None:
+                evaluation = {
+                    "status": self.state_machine.final_evaluation_status,
+                    "details": self.state_machine.final_evaluation,
+                }
+
             dosing_status = None
             if self._nutrient_plan is not None and self._dosing_controller is not None:
                 # planned_ul: Gesamtmenge des Plans, auch bevor die Dosierung gestartet ist.
@@ -206,6 +214,7 @@ class FillAndMeasureController(BackgroundHardwareProcess):
 
             return {
                 "dosing": dosing_status,
+                "final_evaluation": evaluation,
                 "is_running": self.is_running,
                 "thread_alive": self.is_active(),
                 "teardown_in_progress": self._teardown_in_progress,
@@ -461,4 +470,12 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             mixer_liters_filtered=mixer_liters_filtered,
             start_mixer_liters=self.state_machine.start_mixer_liters,
             added_liters=self.state_machine.last_added_liters,
+            extra={
+                "evaluation_status": self.state_machine.final_evaluation_status,
+                "evaluation_details": (
+                    json.dumps(self.state_machine.final_evaluation, sort_keys=True)
+                    if self.state_machine.final_evaluation is not None
+                    else None
+                ),
+            },
         )

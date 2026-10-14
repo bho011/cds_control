@@ -288,6 +288,7 @@ class RunConfigSnapshot:
 
     target_ec_ms_cm: float
     ec_mixing_time_seconds: int
+    target_ph: float
 
     nutrient_dosing_enabled: bool
     legacy_dosing_needs_review: bool
@@ -343,6 +344,7 @@ class RunConfigSnapshot:
             max_mixer_liters=max_mixer_liters,
             target_ec_ms_cm=recipe.target_ec_ms_cm,
             ec_mixing_time_seconds=recipe.ec_mixing_time_seconds,
+            target_ph=recipe.target_ph,
             nutrient_dosing_enabled=recipe.nutrient_dosing_enabled,
             legacy_dosing_needs_review=recipe.legacy_dosing_needs_review,
             nutrients_ml_per_100_l=recipe.nutrients_ml_per_100_l,

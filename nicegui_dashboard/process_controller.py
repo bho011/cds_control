@@ -295,6 +295,7 @@ class ProcessController:
                 "last_message": fill_and_measure_status["last_message"],
                 "last_start_request": fill_and_measure_status["last_start_request"],
                 "dosing": fill_and_measure_status.get("dosing"),
+                "final_evaluation": fill_and_measure_status.get("final_evaluation"),
                 "settings_error": settings_error,
 
                 "hardware_execution_enabled": settings.get(

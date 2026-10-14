@@ -171,6 +171,7 @@ def test_run_config_snapshot_matches_the_recipe_in_every_business_value():
     assert snapshot.target_ro_water_l == recipe.target_ro_water_l
     assert snapshot.target_ec_ms_cm == recipe.target_ec_ms_cm
     assert snapshot.ec_mixing_time_seconds == recipe.ec_mixing_time_seconds
+    assert snapshot.target_ph == recipe.target_ph
     assert snapshot.nutrient_dosing_enabled == recipe.nutrient_dosing_enabled
     assert snapshot.legacy_dosing_needs_review == recipe.legacy_dosing_needs_review
     assert snapshot.nutrients_ml_per_100_l == recipe.nutrients_ml_per_100_l

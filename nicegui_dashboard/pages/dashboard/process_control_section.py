@@ -41,6 +41,21 @@ _DOSING_PHASE_TEXT = {
 }
 
 
+def format_evaluation_status(evaluation: dict[str, Any] | None) -> str:
+    """Eine Zeile fuer die vorhandene Statusanzeige: EC/pH-Bewertung der
+    Endmessung. Leer, solange keine Bewertung vorliegt. NOT_EVALUATED gilt nicht
+    als bestaetigte Sollwerterfuellung."""
+    if not evaluation:
+        return ""
+    status = str(evaluation.get("status") or "")
+    if not status:
+        return ""
+    text = f"EC/pH-Bewertung: {status}"
+    if status == "NOT_EVALUATED":
+        text += " (Sollwerterfuellung nicht bestaetigt)"
+    return text
+
+
 def format_dosing_status(dosing: dict[str, Any] | None) -> tuple[str, float, str]:
     """Anzeige der MCU_B-Naehrstoffdosierung: (Zeile, Fortschritt 0..1, Fehlertext).
     Rein, ohne UI. ``dosing`` ist ``NutrientDosingController.get_status()`` oder None

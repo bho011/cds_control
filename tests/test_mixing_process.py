@@ -294,3 +294,19 @@ def test_dosing_thread_outliving_the_wait_keeps_the_process_busy():
     dosing.active = False  # erst jetzt ist MCU_B sicher frei
     assert controller.is_active() is False
     assert controller.acknowledge_error()["success"] is True
+
+
+def test_get_status_exposes_final_evaluation() -> None:
+    controller = FillAndMeasureController(lambda: {"ok": True})
+    assert controller.get_status()["final_evaluation"] is None
+    controller.state_machine = SimpleNamespace(
+        state=SimpleNamespace(name="FINISHED"),
+        error_message=None,
+        start_mixer_liters=None,
+        last_added_liters=None,
+        final_evaluation_status="NOT_EVALUATED",
+        final_evaluation={"EC": {"status": "NOT_EVALUATED"}},
+    )
+    status = controller.get_status()
+    assert status["final_evaluation"]["status"] == "NOT_EVALUATED"
+    assert status["final_evaluation"]["details"] == {"EC": {"status": "NOT_EVALUATED"}}

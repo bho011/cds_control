@@ -192,3 +192,12 @@ def test_start_and_prime_are_blocked_while_a_dosing_thread_is_alive(dosing_start
     assert not result["success"] and not started.is_set()
     assert not controller.start_prime({"MCU_B": ["P1"]})["success"]
     assert not controller.acknowledge_error()["success"]
+
+
+def test_format_evaluation_status() -> None:
+    from nicegui_dashboard.pages.dashboard.process_control_section import format_evaluation_status
+
+    assert format_evaluation_status(None) == ""
+    assert format_evaluation_status({"status": "OK"}) == "EC/pH-Bewertung: OK"
+    assert format_evaluation_status({"status": "FAILED"}) == "EC/pH-Bewertung: FAILED"
+    assert "nicht bestaetigt" in format_evaluation_status({"status": "NOT_EVALUATED"})

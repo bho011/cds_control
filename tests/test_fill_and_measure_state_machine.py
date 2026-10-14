@@ -11,6 +11,8 @@ alle Tests sind deshalb ohne echte Wartezeit deterministisch.
 
 from __future__ import annotations
 
+import pytest
+
 from statemachine.fill_and_measure_state_machine import FillAndMeasureState, FillAndMeasureStateMachine
 
 
@@ -296,3 +298,111 @@ def test_safe_shutdown_turns_off_all_configured_actuators() -> None:
 
     for actuator in (mixer_refill_pump, ro_inlet_valve, mixing_pump, sensor_pump):
         assert actuator.is_on is False
+
+
+# --- EC-/pH-Soll-Ist-Bewertung nach dem Mischvorgang ---------------------------
+
+
+def _run_to_measure(settings, ec=1.5, ph=6.0, water_values=None, recipe_run=True):
+    class WaterSensor(ScriptedSensor):
+        def __call__(self):
+            snap = super().__call__()
+            if snap is not None:
+                snap["water_values"] = water_values if water_values is not None else {"ec_ms_cm": ec, "ph": ph}
+            return snap
+
+    pump = FakeActuator("mixer_refill_pump")
+    sm = _make_state_machine(sensor=WaterSensor(mixer_liters=10.0, ro_liters=500.0), settings=settings, mixer_refill_pump=pump)
+    sm.recipe_run = recipe_run
+    sm.state = FillAndMeasureState.MEASURE_VALUES
+    sm._last_accepted_at = sm._clock()
+    sm.update()
+    return sm, pump
+
+
+def _eval_settings(**overrides):
+    values = {
+        "ec_tolerance_ms_cm": 0.1,
+        "ph_tolerance": 0.2,
+        "recipe_run_config_snapshot": {"target_ec_ms_cm": 1.5, "target_ph": 6.0},
+    }
+    values.update(overrides)
+    return _base_settings(**values)
+
+
+def test_evaluation_within_tolerance_finishes() -> None:
+    sm, _ = _run_to_measure(_eval_settings(), ec=1.55, ph=6.1)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation["EC"]["status"] == "ok"
+    assert sm.final_evaluation["pH"]["status"] == "ok"
+    assert sm.final_evaluation_status == "OK"
+
+
+def test_ec_out_of_tolerance_errors_with_pumps_off() -> None:
+    sm, pump = _run_to_measure(_eval_settings(), ec=1.8, ph=6.0)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "ec_out_of_tolerance"
+    assert sm.final_evaluation_status == "FAILED"
+    assert pump.is_on is False
+
+
+def test_ph_out_of_tolerance_errors() -> None:
+    sm, _ = _run_to_measure(_eval_settings(), ec=1.5, ph=5.0)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "ph_out_of_tolerance"
+
+
+@pytest.mark.parametrize(
+    "water_values",
+    [
+        {"ph": 6.0},
+        {"ec_ms_cm": None, "ph": 6.0},
+        {"ec_ms_cm": float("nan"), "ph": 6.0},
+        {"ec_ms_cm": "1.5", "ph": 6.0},
+        {"ec_ms_cm": -0.1, "ph": 6.0},
+        {"ec_ms_cm": 1.5, "ph": 15.0},
+        {"ec_ms_cm": 1.5, "ph": float("inf")},
+    ],
+)
+def test_missing_or_implausible_actual_values_error(water_values) -> None:
+    sm, _ = _run_to_measure(_eval_settings(), water_values=water_values)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "measurement_implausible"
+
+
+@pytest.mark.parametrize("bad", [0, -0.1, None, "0.1", float("nan"), True])
+def test_invalid_configured_tolerance_errors(bad) -> None:
+    sm, _ = _run_to_measure(_eval_settings(ec_tolerance_ms_cm=bad))
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "tolerance_invalid"
+
+
+def test_missing_setpoint_with_configured_tolerance_errors() -> None:
+    settings = _eval_settings(recipe_run_config_snapshot={"target_ec_ms_cm": 1.5})
+    sm, _ = _run_to_measure(settings)
+    assert sm.state == FillAndMeasureState.ERROR
+    assert sm.stop_reason == "setpoint_invalid"
+
+
+def test_without_configured_tolerance_nothing_is_evaluated() -> None:
+    settings = _base_settings(recipe_run_config_snapshot={"target_ec_ms_cm": 1.5, "target_ph": 6.0})
+    sm, _ = _run_to_measure(settings, ec=9.9, ph=1.0)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation == {"EC": {"status": "NOT_EVALUATED"}, "pH": {"status": "NOT_EVALUATED"}}
+    assert sm.final_evaluation_status == "NOT_EVALUATED"
+
+
+def test_partially_configured_tolerance_is_not_confirmed() -> None:
+    settings = _eval_settings()
+    del settings["ph_tolerance"]
+    sm, _ = _run_to_measure(settings, ec=1.5, ph=1.0)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation["EC"]["status"] == "ok"
+    assert sm.final_evaluation["pH"]["status"] == "NOT_EVALUATED"
+    assert sm.final_evaluation_status == "NOT_EVALUATED"
+
+
+def test_evaluation_skipped_outside_recipe_run() -> None:
+    sm, _ = _run_to_measure(_base_settings(ec_tolerance_ms_cm=0.1), ec=9.9, recipe_run=False)
+    assert sm.state == FillAndMeasureState.FINISHED
+    assert sm.final_evaluation is None

@@ -17,6 +17,7 @@ from nicegui_dashboard.pages.dashboard.prime_section import (
 from nicegui_dashboard.pages.dashboard.process_control_section import (
     build_process_control,
     format_dosing_status,
+    format_evaluation_status,
     refresh_process_control,
     wire_process_control_handlers,
 )
@@ -143,7 +144,9 @@ def create_dashboard_page(controller: CdsController) -> None:
         else:
             process_error_label.set_text("")
 
-        control_message_label.set_text(control_data.get("last_message") or "Ready")
+        control_message = control_data.get("last_message") or "Ready"
+        evaluation_text = format_evaluation_status(control_data.get("final_evaluation"))
+        control_message_label.set_text(f"{control_message} | {evaluation_text}" if evaluation_text else control_message)
         control_error_label.set_text(f"Error: {control_data['error']}" if control_data.get("error") else "")
 
         dosing_text, dosing_value, dosing_error = format_dosing_status(control_data.get("dosing"))

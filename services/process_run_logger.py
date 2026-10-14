@@ -42,6 +42,8 @@ class ProcessRunLogger:
             "ph",
             "water_temperature",
             "dissolved_oxygen",
+            "evaluation_status",
+            "evaluation_details",
 
             "mixer_refill_pump",
             "transfer_pump",
@@ -101,6 +103,8 @@ class ProcessRunLogger:
             "ph": water_values.get("ph"),
             "water_temperature": water_values.get("water_temperature"),
             "dissolved_oxygen": water_values.get("dissolved_oxygen"),
+            "evaluation_status": extra.get("evaluation_status"),
+            "evaluation_details": extra.get("evaluation_details"),
 
             "mixer_refill_pump": actuator_status.get("mixer_refill_pump"),
             "transfer_pump": actuator_status.get("transfer_pump"),

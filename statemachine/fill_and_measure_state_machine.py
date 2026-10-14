@@ -16,6 +16,7 @@ from process.nutrient_dosing import DosingPhase
 from process.watchdog import FillWatchdog
 from services.sensor_stamp import Stamp, is_newer, read_stamp
 
+from .measurement_evaluation import evaluate_final_values, overall_status
 from .sensor_reading import filtered_mixer_liters, mixer_liters_from_snapshot, ro_liters_from_snapshot
 from .start_validation import validate_fill_runtime, validate_fill_start_with_reason
 
@@ -107,6 +108,8 @@ class FillAndMeasureStateMachine:
 
         self.start_mixer_liters: float | None = None
         self.final_snapshot: dict[str, Any] | None = None
+        self.final_evaluation: dict[str, Any] | None = None
+        self.final_evaluation_status: str | None = None
         self.error_message: str | None = None
 
         filter_samples = int(self.settings.get("level_filter_samples", 5))
@@ -718,6 +721,18 @@ class FillAndMeasureStateMachine:
         print(f"          pH:             {water_values.get('ph')}")
         print(f"          Temp:           {water_values.get('water_temperature')} °C")
         print(f"          DO:             {water_values.get('dissolved_oxygen')}")
+
+        if self.recipe_run:
+            ok, message, reason, details = evaluate_final_values(self.settings, snapshot)
+            self.final_evaluation = details
+            self.final_evaluation_status = overall_status(ok, details)
+            print(f"[MEASURE] EC/pH evaluation: {details}")
+            if not ok:
+                # Keine Korrektur, kein Drain: Pumpen aus (error -> safe_shutdown),
+                # Bedienerentscheidung erforderlich.
+                self.stop_reason = reason
+                self.error(message or "EC/pH-Bewertung fehlgeschlagen.")
+                return
 
         self._change_state(FillAndMeasureState.FINISHED)
 
