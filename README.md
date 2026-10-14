@@ -2,7 +2,7 @@
 
 *This file is bilingual: English first, [German version below](#central-dosing-system--python-control-layer-deutsch). / Diese Datei ist zweisprachig: Englisch zuerst, deutsche Version weiter unten.*
 
-Status: 2026-10-14 (see [Development status](#development-status-2026-10-14))
+Status: 2026-10-15 (see [Development status](#development-status-2026-10-15))
 Project status: development and validation phase
 Goal: safe, traceable, and modularly extensible control logic for the water-based CDS process.
 
@@ -10,21 +10,21 @@ Goal: safe, traceable, and modularly extensible control logic for the water-base
 
 ---
 
-## Development status (2026-10-14)
+## Development status (2026-10-15)
 
-Basis: `main` and `origin/main` (GitHub, verified with `git ls-remote origin` on 2026-10-14) both at `f463a0f`. Detailed results: Sections 21–24.
+Basis: `main` and `origin/main` (GitHub, `git push origin main` succeeded on 2026-10-15; both refs identical) at `84e57eb`. Detailed results: Sections 21–25.
 
 | Category | Content |
 |---|---|
-| Implemented, integrated into `main`, and published on GitHub (`f463a0f`) | AP-00 to AP-04 (up to `6125b1f`): test isolation, run-option forwarding, sensor/settings hardening, recipe start validation, fill safety, shared sensor readings and hardware start gates, drain safety, Water Cycle completion |
+| Implemented, integrated into `main`, and published on GitHub (`84e57eb`) | AP-00 to AP-04: test isolation, run-option forwarding, sensor/settings hardening, recipe start validation, fill safety, shared sensor readings and hardware start gates, drain safety, Water Cycle completion. AP-06 (fail-closed EC/pH final-value evaluation, `statemachine/measurement_evaluation.py`) and AP-07 in its reduced scope (pH acceptance band `ph_min`/`ph_max`). AP-08: controlled transfer into Solution Tanks 1–4 with the compact dashboard layout (Section 25) |
 | AP-05 Stage 1 (integrated, published) | Pure domain logic `domain/recipe/nutrient_plan.py` and `domain/recipe/volume_balance.py` (commit `f463a0f`, fully integrated into `main` and published on GitHub). Integrated as code only: no process, hardware, or MQTT integration |
-| Verified in software | Hardware-free test suite on `main` (`f463a0f`): 1874 passed, **1 failed** (known Recipe Editor test, Section 23); AP-05 Stage 1: 565 tests passed (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
+| Verified in software | Hardware-free test suite on `main` (`84e57eb`, 2026-10-15): 2963 passed, 0 failed (Section 23); of these 158 in `tests/test_target_transfer.py` (AP-08 and its dashboard integration). AP-05 Stage 1: 565 tests passed (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
 | Integrated runs **not** yet validated | Individual components are function-tested (Section 4). For AP-00 to AP-05 no integrated hardware validation is documented: no MCU_B dosing, no chemical dosing, no real run of the hardened fill/drain/Water Cycle paths, no integrated AP-08 transfer |
-| Planned next steps | all pending: AP-05 Stages 2–6 (Stage 2: hardware/profile gates, see Section 22), AP-06 to AP-09 (table below) |
+| Planned next steps | AP-08: first supervised integrated water test (Section 24); AP-05 Stages 2–6 (Stage 2: hardware/profile gates, see Section 22); AP-09 (table below) |
 
 ### Work-package overview AP-00 to AP-09
 
-The assignment of changes to work packages (AP-00 to AP-05) is taken from branch names (`feature/ap0x-*`) and the AP references in module and test docstrings; commit titles alone were not used. The roadmap AP-06 to AP-09 is the project's defined scope; no code for it exists yet and nothing in it is implemented.
+The assignment of changes to work packages (AP-00 to AP-05) is taken from branch names (`feature/ap0x-*`) and the AP references in module and test docstrings; commit titles alone were not used. The roadmap AP-06 to AP-09 is the project's defined scope; AP-06 to AP-08 are implemented in the scope stated in the table, AP-09 (overall integration, hardware validation) has not been started.
 
 | AP | Goal | Realized scope | Status | Main components | Open items |
 |---|---|---|---|---|---|
@@ -39,9 +39,9 @@ The assignment of changes to work packages (AP-00 to AP-05) is taken from branch
 | AP-04 | Water Cycle completion | Final outcome and cleanup are collected; final MQTT statuses derived only after cleanup | integrated | `process/water_cycle.py` | No guaranteed MQTT delivery |
 | AP-05 Stage 1 | Dosing plan and volume accounting (pure logic) | Immutable plan for MCU_B, µL arithmetic, conservative volume accounting | integrated, published | `domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py` | Not wired into any process |
 | AP-05 Stages 2–6 | Further MCU_B dosing steps (Stage 2 = hardware/profile gates, per module docstring); Stages 3–6 are not detailed in the repository | AP-specific implementation not yet started | pending | – | MCU_B identity, calibration, profile, firmware gates |
-| AP-06 | EC control and correction logic | AP-specific implementation not yet started | pending | – | Whole scope |
-| AP-07 | MCU_A integration and pH control | AP-specific implementation not yet started | pending | – | Whole scope |
-| AP-08 | Transfer into the target container | Controlled transfer of the Mixing Tank content into exactly one Solution Tank (1-4): operator-selected tank, read-off tank level and capacity confirmation checked against the 300 L nominal volume and the mixer amount at transfer start, separate acknowledgement for `NOT_EVALUATED`, release bound to the last finished mixing run and consumed only by a successfully completed transfer (retry after stop/failure with a new release, fresh read-off level and fresh mixer measurement), valve open, settle, stop re-check, then pump; pump off before valve close (failed pump-off: valve stays open, critical error, physical emergency stop required); first plausible 0 L ends the transfer; drain-style source monitoring; Emergency Stop, process interlock, dashboard status and process log. Software only, integrated hardware run pending | implemented (hardware-free tests; components individually function-tested) | `process/target_transfer.py`, `process/drain_safety.py`, `nicegui_dashboard/process_controller.py` | No target tank sensors: no overflow protection, safety reserve rests on the operator confirmation; first supervised water test (Section 24) |
+| AP-06 | EC control and correction logic | Reduced to a fail-closed final-value evaluation: measured EC/pH are compared with the recipe setpoints and configured tolerances at the end of a recipe run; out of tolerance, implausible, or invalid input ends in `ERROR` with pumps off; no automatic correction. `NOT_EVALUATED` (no tolerance configured) is shown as not confirmed. Dashboard status line and CSV columns `evaluation_status`/`evaluation_details` | integrated (evaluation only) | `statemachine/measurement_evaluation.py`, `statemachine/fill_and_measure_state_machine.py`, `services/process_run_logger.py` | No automatic EC correction; tolerances are not set (EC stays `NOT_EVALUATED`) |
+| AP-07 | MCU_A integration and pH control | Scope deliberately reduced (`docs/CDS_EC_MIXING_PROCESS_CONCEPT.md`): no automatic pH correction via MCU_A. Implemented: the final pH is evaluated against an acceptance band `ph_min`/`ph_max` (limits included, both mandatory, not together with `ph_tolerance`; fail-closed on invalid, incomplete, or conflicting settings); the recipe pH setpoint is display only. Current band 5.0–6.5 in `config/process_settings.json` | integrated (reduced scope) | `statemachine/measurement_evaluation.py`, `config/process_settings.json` | No MCU_A integration, no automatic pH correction (outside the reduced scope) |
+| AP-08 | Transfer into the target container | Controlled transfer of the Mixing Tank content into exactly one Solution Tank (1-4): operator-selected tank, read-off tank level and capacity confirmation checked against the 300 L nominal volume and the mixer amount at transfer start, separate acknowledgement for `NOT_EVALUATED`, release bound to the last finished mixing run and consumed only by a successfully completed transfer (retry after stop/failure with a new release, fresh read-off level and fresh mixer measurement), valve open, settle, stop re-check, then pump; pump off before valve close (failed pump-off: valve stays open, critical error, physical emergency stop required); first plausible 0 L ends the transfer; drain-style source monitoring; Emergency Stop, process interlock, dashboard status and process log. Software only, integrated hardware run pending | implemented (hardware-free tests; components individually function-tested) | `process/target_transfer.py`, `process/drain_safety.py`, `process/fill_and_measure.py`, `nicegui_dashboard/process_controller.py`, `nicegui_dashboard/pages/dashboard/process_control_section.py` | No target tank sensors: no overflow protection, safety reserve rests on the operator confirmation; first supervised water test (Sections 24, 25) |
 | AP-09 | Overall integration, hardware validation, and system tests | AP-specific implementation not yet started | pending | – | All hardware validation items (Section 24) |
 
 ---
@@ -98,12 +98,12 @@ gpio_config.py ──► hardware/ ──► process/ ──► statemachine/   
 Currently implemented:
 
 - MQTT sensor bridge for OPC-UA sensor data (read timeout + QoS-1 publish with acknowledgment)
-- NiceGUI dashboard for visualization and process control (revised 4-column layout, see Section 14)
+- NiceGUI dashboard for visualization and process control (one-grid layout without scrolling from 1700 px width, see Section 14)
 - modular Water Cycle process (Refill → sensor box circulation → Drain)
 - automatic circulation control (`process/auto_circulation.py`) – level-dependent on/off switching of the circulation pumps, reused by Water Cycle **and** Tank Cleaning
 - Manual Drain Jog – dashboard-controlled manual draining with a server-side 30-second watchdog
 - Tank Cleaning – automated cleaning cycle (Fill → Hold → Drain), see Section 13
-- central preflight check including a GPIO conflict check against the Node-RED GPIO helper, via CLI **and** via the "Run Preflight Check" button in the dashboard (Dev Info)
+- central preflight check including a GPIO conflict check against the Node-RED GPIO helper, via CLI **and** via the "Run Preflight Check" button in the dashboard (Maintenance dialog)
 - recipe editor in the dashboard with three favorites and JSON storage
 - mixing tank calibration with pump-driven fill/drain segments, a per-second trace log, and an offline-recomputable formula (`--analyze`), see Section 16
 - central system configuration for OPC-UA, MQTT, and mixer-level calibration (`config/system_config.json`), now also used by the dashboard MQTT layer and the state-machine calibration (see Section 7)
@@ -192,6 +192,7 @@ cds_control/
 │   └── recipe_model.py               # compat wrapper -> domain/recipe/models.py
 ├── statemachine/
 │   ├── fill_and_measure_state_machine.py
+│   ├── measurement_evaluation.py     # pure EC/pH final-value evaluation, pH band (AP-06/AP-07)
 │   ├── sensor_reading.py             # strict mixer/RO liter reading (AP-02A)
 │   └── start_validation.py           # pure recipe start release / runtime check (AP-02B/C)
 ├── process/
@@ -203,7 +204,8 @@ cds_control/
 │   ├── water_cycle.py
 │   ├── auto_circulation.py
 │   ├── manual_drain_jog.py
-│   ├── fill_and_measure.py           # FillAndMeasureController
+│   ├── fill_and_measure.py           # FillAndMeasureController (run id for the transfer release)
+│   ├── target_transfer.py            # TargetTransferController: transfer into Solution Tank 1-4 (AP-08)
 │   ├── pump_prime.py
 │   ├── tank_cleaning/                # controller.py, phases.py, fill/hold/drain_phase.py, status_publisher.py
 │   ├── watchdog.py
@@ -230,7 +232,7 @@ cds_control/
 │   ├── components/                   # formatting.py, status_widgets.py
 │   ├── recipe_store/                 # book_io.py, migrations.py, queries.py, run_config.py
 │   ├── pages/
-│   │   ├── dashboard_page.py         # thin scaffold, ~190 lines
+│   │   ├── dashboard_page.py         # thin scaffold: header + one grid (dash-grid) for all cards
 │   │   └── dashboard/                # one file per dashboard section (recipe_text, status_actuators,
 │   │                                  # maintenance, recipe, process_control, prime, sensor_tanks)
 │   └── static/
@@ -292,7 +294,7 @@ Further settings files, one per process:
 
 - `config/water_cycle_settings.json` – Water Cycle
 - `config/calibration_settings.json` – mixing tank calibration
-- `config/process_settings.json` – Fill-and-Measure
+- `config/process_settings.json` – Fill-and-Measure, pH acceptance band, and the transfer safety values for AP-08 (`transfer_pump_liters_per_minute`, `drain_timeout_buffer_seconds`, `empty_threshold_liters`, `empty_confirm_samples`, `no_drain_progress_warning_seconds`, `valve_settle_seconds`; same values as `water_cycle_settings.json`)
 - `config/tank_cleaning_settings.json` – Tank Cleaning (target volume, hold time, auto-circulation thresholds, drain parameters, its own `hardware_execution_enabled` switch)
 
 ---
@@ -315,6 +317,7 @@ Further settings files, one per process:
 - Emergency Stop is implemented asynchronously (`ProcessController.emergency_stop()`): signalling (state-machine abort, `request_stop()`, actuator shutdown) happens immediately under the lock; waiting for the thread join then runs outside the lock in a worker thread — the dashboard stays responsive for other connected clients in the meantime, instead of freezing for up to ~7s.
 - Since AP-03B, hardware start is released only for `hardware_execution_enabled is True` (strict type, no coercion). Since AP-02B/C, recipe runs need a fail-closed start release and fresh sensor measurements; since AP-04A, all drain paths are bounded by a sensor watchdog; since AP-04, the Water Cycle reports cleanup errors instead of success (Section 21).
 - Switch-off is a software call without physical feedback; this limit is documented, not solved (Section 24).
+- AP-08 target transfer (Section 25): opens exactly one Solution Tank valve, the pump starts only after the settle time and a repeated stop/sensor check; the pump is always switched off before the valve is closed. If `pump.off()` fails, the valve is deliberately **not** closed, the actuators stay held, the dashboard shows a critical message asking for the **physical emergency stop** (independent of the Raspberry Pi, not software-controllable), and no new transfer is possible until the fault is fixed and acknowledged. No overflow protection is claimed.
 
 Default state in the configs:
 
@@ -335,7 +338,7 @@ python main.py preflight
 python main.py gpio-check
 ```
 
-Also triggerable from the dashboard: the "Run Preflight Check" button in Dev Info writes the full result to the process log (runs in a worker thread, does not block the dashboard for other users while running).
+Also triggerable from the dashboard: the "Run Preflight Check" button in the Maintenance dialog writes the full result to the process log (runs in a worker thread, does not block the dashboard for other users while running).
 
 Critical CDS GPIOs for Python:
 
@@ -476,25 +479,30 @@ Dashboard: "Start Tank Cleaning" button in the "Process Control → Tank Cleanin
 
 ## 14. NiceGUI dashboard
 
-The dashboard was rebuilt into a 4-column layout that needs no scrolling:
+The dashboard uses **one grid for all cards** (CSS class `dash-grid` in `nicegui_dashboard/static/dashboard.css`). From 1700 px width everything fits on one Full-HD screen at 100 % without scrolling (checked with a visible area of 1884 × 924 px):
 
 ```text
-┌─────────────┬───────────────────┬──────────────────────┬────────────────┐
-│ System      │ Current Process   │ Process Control      │ Sensor Values  │
-│ Status      │ State             │  - Safety            │                │
-│             │                   │    Confirmation      │ Tanks / Levels │
-│ Actuators / │ Recipe /          │  - Maintenance       │ (RO + Mixing,  │
-│ Outputs     │ Setpoints         │    (Manual Drain Jog)│  untereinander │
-│             │                   │  - Tank Cleaning     │  gestapelt)    │
-└─────────────┴───────────────────┴──────────────────────┴────────────────┘
+┌────────────┬─────────────────────────┬────────────────┬──────────────┐
+│ System     │ Current Process State   │ Process        │ Sensor       │
+│ Status     │                         │ Control        │ Values       │
+├────────────┼─────────────────────────┤  - Safety      │              │
+│ Actuators /│ Transfer in             │    switches    │ Tanks /      │
+│ Outputs    │ Solution Tank           │  - Start/Reset │ Levels       │
+├────────────┴─────────────────────────┤  - Emergency   │ (RO, Mixing) │
+│ Recipe / Setpoints                   │    Stop        │              │
+│                                      │  - Maintenance │              │
+│                                      │  - Tank Clean. │              │
+└──────────────────────────────────────┴────────────────┴──────────────┘
 ```
 
-(The last column's German labels mean "stacked vertically" — the RO and Mixing tank gauges sit one above the other, see the bullet below.)
-
-- **System Status / Actuators**: only the outputs actually in use (Mixer Refill Pump, Supply Valve 6, Drain Valve 0, Transfer Pump, Mixing/Sensor Circulation Pump, Valve 1–5). Unused pins (`contactor_0/5`, `valve_7/8/9`) have been removed from the display so the card isn't cluttered unnecessarily.
-- **Process Control**: Safety Confirmation (one shared confirmation field for Start Process **and** Tank Cleaning) → Emergency Stop → Maintenance (Manual Drain Jog) → Tank Cleaning.
-- **Dev Info**: the status badges that used to be permanently visible (RASPI LIVE / PYTHON CORE / Update) and the process log are now hidden behind a "Dev Info" button in the header and open as a dialog – diagnostic info that's unnecessary for the end user no longer clutters the main view.
-- **Sensor Values / Tanks**: its own right-hand column; the RO and Mixing tank gauges are stacked vertically (no longer side by side) and have a stable width independent of how many decimal places the fill level shows.
+- **Header**: title, subtitle `vGREENS - DRIVEN BY PURPOSE. POWERED BY DATA.` (text as written in the code, shown in capitals by CSS), live date/time and the sensor update time, and the **Maintenance** button.
+- **System Status**: per entry the name in the first line and the status value (`connected`, `running`, `current`, `no payload`) in the second line, status lamp on the left.
+- **Actuators / Outputs**: the outputs actually in use in two columns (Mixer Refill, Supply V6, Drain V0, Transfer Pump, Mixing/Sensor Circ., Valve 1–5). Unused pins (`contactor_0/5`, `valve_7/8/9`) are not shown.
+- **Transfer in Solution Tank** (AP-08, Section 25): status marker (Ready, Release possible, Release with acknowledgement, Running, Stopped, Completed, Fault), release/status box, tank selection, read-off level, the two confirmation switches, Start Transfer / Stop. Long explanations are in an info tooltip.
+- **Process Control**: per-attempt safety switch (shared by Start Process, Tank Cleaning, and Transfer), sensor circulation and "tank emptied" switches, Start Process / Reset / Ack, Emergency Stop, Maintenance (Manual Drain Jog), Tank Cleaning. Long help texts are info tooltips.
+- **Maintenance dialog** (formerly "Dev Info"): the status badges (RASPI LIVE / PYTHON CORE / Update), Prime, Preflight, and the process log are behind the **Maintenance** button in the header.
+- **Sensor Values / Tanks**: its own right-hand column; the RO and Mixing tank gauges are stacked vertically, without scale numbers, with a stable width independent of the number of decimal places of the fill level.
+- **Responsive**: 1000–1699 px two columns (the page scrolls), below 900 px one column with the Transfer card near the top. Select menus are dark with light text everywhere.
 
 ```bash
 sudo systemctl restart cds-nicegui-dashboard.service
@@ -502,7 +510,7 @@ systemctl status cds-nicegui-dashboard.service --no-pager
 python main.py dashboard   # manual start
 ```
 
-The UI is an HMI/visualization layer plus start/stop control for Fill-and-Measure, Manual Drain Jog, and Tank Cleaning. The actual process logic stays in the Python process modules (`process/`, `statemachine/`), not in the UI code.
+The UI is an HMI/visualization layer plus start/stop control for Fill-and-Measure, Manual Drain Jog, Tank Cleaning, and the AP-08 target transfer. The actual process logic stays in the Python process modules (`process/`, `statemachine/`), not in the UI code.
 
 ---
 
@@ -574,8 +582,9 @@ Derived from all calibration sessions so far (zero-normalized, fill phase only, 
 9. **Peristaltic pump control** — firmware-side hardening is complete in the separate `central_dosing_sys_peristaltic` repository (branch `harden-serial-protocol`) and verified on both Arduino MCUs on real hardware: drivers disabled by default, dose/runtime limits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), a machine-readable `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL` protocol (see `docs/SERIAL_PROTOCOL.md` there). `cds_control` now has a standalone, hardware-free-tested Python serial client and terminal CLI for this protocol (`services/peristaltic/`, `scripts/peristaltic_calibration_cli.py` — discover/map/check/stop-all/test/calibrate/pair-test/all-four-test, water-only, max 10 ml per test dose, see `docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md`), but it is deliberately **not** wired into the recipe logic, the NiceGUI dashboard, or the state machine, and **no real peristaltic pumps are connected** — that integration, and real per-pump calibration/verification, remain separate, not-yet-started steps. A design-only plan for splitting the shared firmware into an `MCU_A_PH`/`MCU_B_EC` profile pair also exists at `docs/PERISTALTIC_PROFILE_PLAN.md` (no firmware/behavior changed by it).
 10. **pH dosing bounds not yet enforced** — pH setpoint, pH mixing-time, and pH stock-volume bounds were confirmed against the legacy Node-RED configuration (see `docs/OPEN_RECIPE_DECISIONS.md`) but intentionally not added as hard validation, since pH dosing has no consumer yet and they were outside the explicitly requested rule set. (EC setpoint/mixing-time bounds and the EC adjustment factor bound *are* enforced — see Section 15. Addon 1/Addon 2 bounds no longer apply at all, since Addon 1/Addon 2 were removed from the active recipe model entirely.) Whether/how to enforce the remaining pH bounds is a product decision, not yet made.
 11. **AP-05 Stage 1 integrated but not wired in** — commit `f463a0f` is in `main` and on GitHub; no process, dashboard, or hardware code uses `domain/recipe/nutrient_plan.py` / `volume_balance.py` (Section 22). Stages 2–6 and AP-06 to AP-09 are pending.
-12. **Known test failure** — Recipe Editor step test (Section 23).
-13. **Open safety and hardware questions** (O1, switch-off feedback, level < ~10 L, dry running, provisional drain parameters, kill/SIGTERM limits, `DigitalOutput` cleanup, MQTT delivery, MCU_B identity/calibration gates) — Section 24.
+12. ~~Known test failure~~ Done: the Recipe Editor step test passes since the EC setpoint step was set to `0.1` (commit `7b419f1`); its expected steps additionally contain the AP-08 level input (0.5 L) as first entry (Section 23).
+13. **Open safety and hardware questions** (O1, switch-off feedback, level < ~10 L, dry running, provisional drain parameters, kill/SIGTERM limits, `DigitalOutput` cleanup, MQTT delivery, MCU_B identity/calibration gates, AP-08 overflow and transfer sequence) — Section 24.
+14. **AP-08 integrated supervised water test** — the transfer is implemented and tested hardware-free (Section 25); the first real, supervised run (small amount, physical emergency stop within reach, target tank level read off by an operator) is still pending. No target tank sensors exist; automatic overflow protection is a documented later extension.
 
 ---
 
@@ -692,13 +701,15 @@ Strategy: `pytest` with the AP-00 guard; all tests are hardware-free. Process, s
 
 | Run | Result |
 |---|---|
-| Full suite, main worktree (`f463a0f`, 2026-10-14) | 1874 passed, **1 failed** |
+| Full suite, main worktree (`84e57eb`, 2026-10-15) | 2963 passed, 0 failed |
+| AP-08 tests only (`tests/test_target_transfer.py`, incl. dashboard integration) | 158 passed |
+| Full suite, main worktree (`f463a0f`, 2026-10-14, historical) | 1874 passed, 1 failed (the since fixed Recipe Editor step test) |
 | AP-05 Stage 1 tests only | 565 passed |
 | Full suite, separate worktree `../cds_control_ap05_s1` | 1873 passed, 2 failed, 3 errors (the known failure plus the missing-file effects below) |
 
-- **Known failure:** `tests/test_dashboard_page_recipe_editor.py::test_recipe_editor_number_fields_have_field_appropriate_step` expects an EC setpoint step of `0.1`; `nicegui_dashboard/pages/dashboard/recipe_section.py` sets `0.05`. Which value is intended is not decided; this README does not claim either. It is unrelated to AP-00 to AP-05.
+- **Former known failure (fixed):** `tests/test_dashboard_page_recipe_editor.py::test_recipe_editor_number_fields_have_field_appropriate_step` expected an EC setpoint step of `0.1` while the code used `0.05`; the code now uses `0.1` (`7b419f1`). The test's expected list now also contains the AP-08 level input (0.5 L) as first entry, because the Transfer card is built before the Recipe card.
 - **Separate worktree failures (environmental):** the file `recipes/dashboard_recipes.json` is git-ignored runtime data and missing in that worktree. Tests that read the real recipe book (`tests/test_recipe_run_config.py::test_real_active_recipe_merged_onto_real_settings_passes_schema` and two tests in `tests/test_process_locking.py`) fail there because the code tries to create `recipes/` and the AP-00 guard correctly blocks that (`os.mkdir('recipes')`). This is a missing local file, not a product defect; the same file is present in the main worktree.
-- The suite is therefore **not** fully green; no statement "all tests pass" is made. Passing tests do not prove hardware behavior.
+- On 2026-10-15 the full hardware-free suite is green (2963 passed). The separate-worktree failures above were environmental and are historical. Passing tests do not prove hardware behavior.
 
 ## 24. Open safety and hardware questions
 
@@ -719,6 +730,35 @@ Strategy: `pytest` with the AP-00 guard; all tests are hardware-free. Process, s
 
 The assignment of open items to AP-05 Stage 2 and AP-09 follows the roadmap (AP-09: overall integration, hardware validation, system tests); the individual assignment is the author's reading of that scope.
 
+## 25. AP-08 – Controlled transfer into Solution Tanks 1–4
+
+Software result, verified by hardware-free tests (`tests/test_target_transfer.py`, Section 23). The integrated sequence has **not** yet been run on the real plant (Section 24); the individual components are function-tested (Section 4). No firmware change, no additional sensors, no automatic drain, no automatic EC/pH correction.
+
+**Routing (confirmed by the plant owner, Python GPIO mapping is binding, Node-RED mapping is ignored).** The mapping is pinned in `process/target_transfer.py`; if `gpio_config.py` deviates, the transfer blocks instead of switching another valve. The drain (Valve 0, GPIO21) and Valve 6 are never target valves.
+
+| Target | Valve | GPIO |
+|---|---|---|
+| Solution Tank 1 | `valve_1` | 27 |
+| Solution Tank 2 | `valve_2` | 19 |
+| Solution Tank 3 | `valve_3` | 24 |
+| Solution Tank 4 | `valve_4` | 25 |
+| Transfer pump | `transfer_pump` | 26 (GPIO-controlled contactor, no feedback) |
+
+**Release.**
+
+- The mixing run must be finished (`FINISHED`, no error, no stop reason) with the final evaluation `OK` or `NOT_EVALUATED`. Each accepted mixing start gets a run id (`FillAndMeasureController`); the operator's release is bound to the run id that the dashboard displayed. Manual Drain Jog and Tank Cleaning invalidate the release (the mixer content changes); an Emergency Stop does too, because it sets the mixing state machine to error.
+- The operator selects tank 1–4, enters the target level read off the scale, and confirms that enough free capacity including a safety reserve is available. With `NOT_EVALUATED` the operator additionally acknowledges, separately, that EC/pH were not confirmed against setpoints (no quality evidence).
+- Software checks: target level 0–300 L (nominal volume), target level plus mixer amount at transfer start at most 300 L, mixer amount at least 10 L (the sensor is not reliable below) and at most `max_mixer_liters`, strict types (no bool, NaN, inf), valid sensor timestamp. **No safety reserve and no mixer sensor uncertainty is modelled; both rest on the operator confirmation.**
+- Only a **successfully completed** transfer consumes the release. After a stop or failure the same finished mixing run can be used again with a new release, a freshly read-off level, and a new mixer measurement; after a fault or an emergency stop only after acknowledgement (Reset / Ack; the first Reset acknowledges only the transfer fault and keeps the mixing run, a second Reset resets it as before). There is never an automatic restart.
+
+**Sequence and monitoring.** Valve open → settle time → stop re-check → sensor re-check → pump on. Source-side monitoring with the existing drain safety (`DrainSensorWatchdog`: sensor loss, plausibility, rise, no progress; calculated maximum runtime). The transfer ends when the first fresh, valid **0 L** reading arrives (plant owner: when draining, the first 0 L means the Mixing Tank is actually empty, afterwards the values may fluctuate again), provided the course so far was plausible (the last plausible value was already at or below 10 L). An implausible 0 in the high level range does not end the transfer and does not count as course. On the end the pump is stopped first, then the valve closed. The general drain paths are unchanged.
+
+**Pump switch-off failure.** If `pump.off()` raises, the target valve is deliberately **not** closed (not against a possibly running pump), the actuators and the hardware lock stay held, the error is critical, and the dashboard asks for the **physical emergency stop** (it cuts the whole CDS power independently of the Raspberry Pi and is not software-controllable). No new transfer or other process can start until the pump switch-off succeeds and the fault is acknowledged; Emergency Stop, shutdown, and Reset / Ack retry the switch-off (pump first). Without contactor feedback the software cannot prove that the pump stopped and does not claim it.
+
+**Interlock, status, log.** `ProcessController` blocks every other hardware process while a transfer runs; Emergency Stop, shutdown, and Reset include the transfer. MQTT `process_state` values: `TARGET_TRANSFER_RELEASED`, `TARGET_TRANSFER_VALVE_OPEN`, `TARGET_TRANSFER_RUNNING`, `TARGET_TRANSFER_STOPPED`, `TARGET_TRANSFER_PUMP_OFF_FAILED`. The process log (`logs/target_transfer_*.csv`) has the columns `valve_1`–`valve_4`, `transfer_target_tank`, `transfer_run_id`, and `transfer_release` (JSON record of the operator release). The transfer safety settings are in `config/process_settings.json` (Section 7).
+
+**Not covered.** No overflow protection (the four tanks, 300 L nominal each with a manually readable scale, have no sensors); no hardware validation of the integrated sequence; provisional drain parameters (16 L/min, 180 s, 5 s sensor loss); no contactor feedback. See Section 24.
+
 ---
 ---
 
@@ -726,28 +766,28 @@ The assignment of open items to AP-05 Stage 2 and AP-09 follows the roadmap (AP-
 
 *Deutsche Version. [English version above](#central-dosing-system--python-control-layer).*
 
-Stand: 14.10.2026 (siehe [Entwicklungsstand](#entwicklungsstand-2026-10-14))
+Stand: 15.10.2026 (siehe [Entwicklungsstand](#entwicklungsstand-2026-10-15))
 Projektstatus: Entwicklungs- und Validierungsphase
 Ziel: sichere, nachvollziehbare und modular erweiterbare Steuerungslogik für den wasserbasierten CDS-Prozess.
 
 > **Sicherheitsstatus in einem Satz:** Hardwareausführung ist im Repository standardmäßig deaktiviert (`hardware_execution_enabled: false`); der Anlagenverantwortliche hat bestätigt, dass sämtliche CDS-Hardwarekomponenten bereits einzeln getestet wurden und funktionsfähig sind (heute, 14.10.2026, erneut geprüft; Abschnitt 4). Ausstehend sind die **integrierten Prozessläufe** (Water Cycle, Tank Cleaning, AP-08-Transfer, Dosierung), nicht die einzelnen Komponenten.
 ---
 
-## Entwicklungsstand (2026-10-14)
+## Entwicklungsstand (2026-10-15)
 
-Grundlage: `main` und `origin/main` (GitHub, am 2026-10-14 per `git ls-remote origin` geprüft) stehen beide auf `f463a0f`. Detailergebnisse: Abschnitte 21–24.
+Grundlage: `main` und `origin/main` (GitHub, `git push origin main` am 2026-10-15 erfolgreich; beide Refs identisch) stehen auf `84e57eb`. Detailergebnisse: Abschnitte 21–25.
 
 | Kategorie | Inhalt |
 |---|---|
-| Implementiert, in `main` integriert und auf GitHub veröffentlicht (`f463a0f`) | AP-00 bis AP-04 (bis `6125b1f`): Testisolierung, Weitergabe der Laufoptionen, Sensor-/Settings-Härtung, Rezeptstartvalidierung, Fill-Sicherheit, gemeinsame Sensorauswertung und Hardware-Start-Gates, Drain-Sicherheit, Water-Cycle-Abschluss |
+| Implementiert, in `main` integriert und auf GitHub veröffentlicht (`84e57eb`) | AP-00 bis AP-04: Testisolierung, Weitergabe der Laufoptionen, Sensor-/Settings-Härtung, Rezeptstartvalidierung, Fill-Sicherheit, gemeinsame Sensorauswertung und Hardware-Start-Gates, Drain-Sicherheit, Water-Cycle-Abschluss. AP-06 (fail-closed EC/pH-Endwertbewertung, `statemachine/measurement_evaluation.py`) und AP-07 im reduzierten Umfang (pH-Zulässigkeitsband `ph_min`/`ph_max`). AP-08: kontrollierter Transfer in Solution Tank 1–4 mit dem kompakten Dashboard-Layout (Abschnitt 25) |
 | AP-05 Stufe 1 (integriert, veröffentlicht) | Reine Fachlogik `domain/recipe/nutrient_plan.py` und `domain/recipe/volume_balance.py` (Commit `f463a0f`, vollständig in `main` integriert und auf GitHub veröffentlicht). Nur als Code integriert: keine Prozess-, Hardware- oder MQTT-Anbindung |
-| Softwareseitig geprüft | Hardwarefreie Testsuite auf `main` (`f463a0f`): 1874 bestanden, **1 fehlgeschlagen** (bekannter Recipe-Editor-Test, Abschnitt 23); AP-05 Stufe 1: 565 Tests bestanden (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
+| Softwareseitig geprüft | Hardwarefreie Testsuite auf `main` (`84e57eb`, 2026-10-15): 2963 bestanden, 0 fehlgeschlagen (Abschnitt 23); davon 158 in `tests/test_target_transfer.py` (AP-08 und Dashboard-Integration). AP-05 Stufe 1: 565 Tests bestanden (`tests/test_nutrient_plan.py`, `tests/test_volume_balance.py`) |
 | Integrierte Läufe **nicht** validiert | Die Einzelkomponenten sind funktionsgeprüft (Abschnitt 4). Für AP-00 bis AP-05 ist keine integrierte Hardwarevalidierung dokumentiert: keine MCU_B-Dosierung, keine chemische Dosierung, kein realer Lauf der gehärteten Fill-/Drain-/Water-Cycle-Pfade, kein integrierter AP-08-Transfer |
-| Geplante nächste Schritte | alle ausstehend: AP-05 Stufen 2–6 (Stufe 2: Hardware-/Profil-Gates, siehe Abschnitt 22), AP-06 bis AP-09 (Tabelle unten) |
+| Geplante nächste Schritte | AP-08: erster begleiteter integrierter Wassertest (Abschnitt 24); AP-05 Stufen 2–6 (Stufe 2: Hardware-/Profil-Gates, siehe Abschnitt 22); AP-09 (Tabelle unten) |
 
 ### Arbeitspaket-Übersicht AP-00 bis AP-09
 
-Die Zuordnung der Änderungen zu Arbeitspaketen (AP-00 bis AP-05) stammt aus den Branchnamen (`feature/ap0x-*`) und den AP-Verweisen in Modul- und Test-Docstrings; Commit-Titel allein wurden nicht verwendet. Die Roadmap AP-06 bis AP-09 ist der definierte Projektumfang; dafür existiert noch kein Code, nichts davon ist implementiert.
+Die Zuordnung der Änderungen zu Arbeitspaketen (AP-00 bis AP-05) stammt aus den Branchnamen (`feature/ap0x-*`) und den AP-Verweisen in Modul- und Test-Docstrings; Commit-Titel allein wurden nicht verwendet. Die Roadmap AP-06 bis AP-09 ist der definierte Projektumfang; AP-06 bis AP-08 sind in dem in der Tabelle genannten Umfang umgesetzt, AP-09 (Gesamtintegration, Hardwarevalidierung) ist nicht begonnen.
 
 | AP | Ziel | Realisierter Umfang | Status | Wesentliche Komponenten | Offene Punkte |
 |---|---|---|---|---|---|
@@ -762,9 +802,9 @@ Die Zuordnung der Änderungen zu Arbeitspaketen (AP-00 bis AP-05) stammt aus den
 | AP-04 | Water-Cycle-Abschluss | Endergebnis und Cleanup werden gesammelt; finale MQTT-Status erst nach dem Cleanup abgeleitet | integriert | `process/water_cycle.py` | Keine garantierte MQTT-Zustellung |
 | AP-05 Stufe 1 | Dosierplan und Volumenbilanz (reine Logik) | Unveränderlicher Plan für MCU_B, µL-Arithmetik, konservative Volumenbilanz | integriert, veröffentlicht | `domain/recipe/nutrient_plan.py`, `domain/recipe/volume_balance.py` | In keinen Prozess eingebunden |
 | AP-05 Stufen 2–6 | Weitere MCU_B-Dosierschritte (Stufe 2 = Hardware-/Profil-Gates, laut Modul-Docstring); Stufen 3–6 sind im Repository nicht detailliert | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | MCU_B-Identität, Kalibrierung, Profil, Firmware-Gates |
-| AP-06 | EC-Regelung und Korrekturlogik | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
-| AP-07 | MCU_A-Integration und pH-Regelung | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Gesamter Umfang |
-| AP-08 | Transfer in den Zielbehälter | Kontrollierter Transfer des Mixing-Tank-Inhalts in genau einen Solution Tank (1-4): vom Bediener gewählter Tank, abgelesener Füllstand und Kapazitätsbestätigung, geprüft gegen das 300-L-Nennvolumen und die beim Transferstart erfasste Mixer-Menge, gesonderte Bestätigung bei `NOT_EVALUATED`, Freigabe an den zuletzt abgeschlossenen Mischlauf gebunden und nur durch einen erfolgreich abgeschlossenen Transfer verbraucht (Wiederholung nach Stopp/Fehler mit neuer Freigabe, neu abgelesenem Füllstand und neuer Mixer-Messung), Ventil auf, Settle, Stop-Recheck, dann Pumpe; Pumpe aus vor Ventil zu (Pumpe-aus fehlgeschlagen: Ventil bleibt offen, kritischer Fehler, physischer Not-Aus nötig); erste plausible 0 L beendet den Transfer; Quellseiten-Überwachung wie beim Drain; Emergency Stop, Prozessverriegelung, Dashboard-Status und Prozesslog. Nur Software, integrierter Hardwarelauf steht aus | umgesetzt (hardwarefreie Tests; Komponenten einzeln funktionsgeprüft) | `process/target_transfer.py`, `process/drain_safety.py`, `nicegui_dashboard/process_controller.py` | Keine Zieltank-Sensoren: keine Überlaufsicherung, Sicherheitsreserve liegt in der Bedienerbestätigung; erster begleiteter Wassertest (Abschnitt 24) |
+| AP-06 | EC-Regelung und Korrekturlogik | Reduziert auf eine fail-closed Endwertbewertung: gemessene EC-/pH-Werte werden am Ende eines Rezeptlaufs mit den Rezept-Sollwerten und konfigurierten Toleranzen verglichen; außerhalb der Toleranz, unplausibel oder ungültig endet in `ERROR` mit Pumpen aus; keine automatische Korrektur. `NOT_EVALUATED` (keine Toleranz konfiguriert) wird als nicht bestätigt angezeigt. Statuszeile im Dashboard und CSV-Spalten `evaluation_status`/`evaluation_details` | integriert (nur Bewertung) | `statemachine/measurement_evaluation.py`, `statemachine/fill_and_measure_state_machine.py`, `services/process_run_logger.py` | Keine automatische EC-Korrektur; Toleranzen sind nicht gesetzt (EC bleibt `NOT_EVALUATED`) |
+| AP-07 | MCU_A-Integration und pH-Regelung | Umfang bewusst reduziert (`docs/CDS_EC_MIXING_PROCESS_CONCEPT.md`): keine automatische pH-Korrektur über MCU_A. Umgesetzt: der End-pH wird gegen ein Zulässigkeitsband `ph_min`/`ph_max` bewertet (Grenzen eingeschlossen, beide Pflicht, nicht zusammen mit `ph_tolerance`; fail-closed bei ungültigen, unvollständigen oder widersprüchlichen Einstellungen); der Rezept-pH-Sollwert ist nur Anzeige. Aktuelles Band 5,0–6,5 in `config/process_settings.json` | integriert (reduzierter Umfang) | `statemachine/measurement_evaluation.py`, `config/process_settings.json` | Keine MCU_A-Integration, keine automatische pH-Korrektur (außerhalb des reduzierten Umfangs) |
+| AP-08 | Transfer in den Zielbehälter | Kontrollierter Transfer des Mixing-Tank-Inhalts in genau einen Solution Tank (1-4): vom Bediener gewählter Tank, abgelesener Füllstand und Kapazitätsbestätigung, geprüft gegen das 300-L-Nennvolumen und die beim Transferstart erfasste Mixer-Menge, gesonderte Bestätigung bei `NOT_EVALUATED`, Freigabe an den zuletzt abgeschlossenen Mischlauf gebunden und nur durch einen erfolgreich abgeschlossenen Transfer verbraucht (Wiederholung nach Stopp/Fehler mit neuer Freigabe, neu abgelesenem Füllstand und neuer Mixer-Messung), Ventil auf, Settle, Stop-Recheck, dann Pumpe; Pumpe aus vor Ventil zu (Pumpe-aus fehlgeschlagen: Ventil bleibt offen, kritischer Fehler, physischer Not-Aus nötig); erste plausible 0 L beendet den Transfer; Quellseiten-Überwachung wie beim Drain; Emergency Stop, Prozessverriegelung, Dashboard-Status und Prozesslog. Nur Software, integrierter Hardwarelauf steht aus | umgesetzt (hardwarefreie Tests; Komponenten einzeln funktionsgeprüft) | `process/target_transfer.py`, `process/drain_safety.py`, `process/fill_and_measure.py`, `nicegui_dashboard/process_controller.py`, `nicegui_dashboard/pages/dashboard/process_control_section.py` | Keine Zieltank-Sensoren: keine Überlaufsicherung, Sicherheitsreserve liegt in der Bedienerbestätigung; erster begleiteter Wassertest (Abschnitte 24, 25) |
 | AP-09 | Gesamtintegration, Hardwarevalidierung und Systemtests | AP-spezifische Umsetzung noch nicht begonnen | ausstehend | – | Alle Hardwarevalidierungspunkte (Abschnitt 24) |
 
 ---
@@ -821,12 +861,12 @@ gpio_config.py ──► hardware/ ──► process/ ──► statemachine/   
 Aktuell umgesetzt:
 
 - MQTT-Sensor-Bridge für OPC-UA-Sensordaten (Read-Timeout + QoS-1-Publish mit Bestätigung)
-- NiceGUI-Dashboard zur Visualisierung und Prozesssteuerung (überarbeitetes 4-Spalten-Layout, siehe Abschnitt 14)
+- NiceGUI-Dashboard zur Visualisierung und Prozesssteuerung (Ein-Raster-Layout ohne Scrollen ab 1700 px Breite, siehe Abschnitt 14)
 - modularer Water-Cycle-Prozess (Refill → Sensorbox-Zirkulation → Drain)
 - automatische Zirkulationssteuerung (`process/auto_circulation.py`) – füllstandsabhängiges Ein-/Ausschalten der Zirkulationspumpen, wiederverwendet von Water-Cycle **und** Tank Cleaning
 - Manual Drain Jog – dashboardgesteuerte manuelle Entleerung mit Server-seitigem 30-Sekunden-Watchdog
 - Tank Cleaning – automatischer Reinigungszyklus (Fill → Hold → Drain), siehe Abschnitt 13
-- zentraler Preflight-Check inkl. GPIO-Konfliktprüfung gegen Node-RED-GPIO-Helper, per CLI **und** per "Run Preflight Check"-Button im Dashboard (Dev Info)
+- zentraler Preflight-Check inkl. GPIO-Konfliktprüfung gegen Node-RED-GPIO-Helper, per CLI **und** per "Run Preflight Check"-Button im Dashboard (Maintenance-Dialog)
 - Recipe-Editor im Dashboard mit drei Favoriten und JSON-Ablage
 - Mixing-Tank-Kalibrierung mit pumpengesteuerten Fill-/Drain-Segmenten, sekündlichem Trace-Log und offline nachrechenbarer Formel (`--analyze`), siehe Abschnitt 16
 - zentrale Systemkonfiguration für OPC-UA, MQTT und Mixer-Level-Kalibrierung (`config/system_config.json`), inzwischen auch vom Dashboard-MQTT-Layer und der State-Machine-Kalibrierung genutzt (siehe Abschnitt 7)
@@ -915,6 +955,7 @@ cds_control/
 │   └── recipe_model.py               # Compat-Wrapper -> domain/recipe/models.py
 ├── statemachine/
 │   ├── fill_and_measure_state_machine.py
+│   ├── measurement_evaluation.py     # pure EC/pH final-value evaluation, pH band (AP-06/AP-07)
 │   ├── sensor_reading.py             # strikte Mixer-/RO-Liter-Auswertung (AP-02A)
 │   └── start_validation.py           # reine Rezept-Startfreigabe / Laufzeitprüfung (AP-02B/C)
 ├── process/
@@ -926,7 +967,8 @@ cds_control/
 │   ├── water_cycle.py
 │   ├── auto_circulation.py
 │   ├── manual_drain_jog.py
-│   ├── fill_and_measure.py           # FillAndMeasureController
+│   ├── fill_and_measure.py           # FillAndMeasureController (run id for the transfer release)
+│   ├── target_transfer.py            # TargetTransferController: transfer into Solution Tank 1-4 (AP-08)
 │   ├── pump_prime.py
 │   ├── tank_cleaning/                # controller.py, phases.py, fill/hold/drain_phase.py, status_publisher.py
 │   ├── watchdog.py
@@ -953,7 +995,7 @@ cds_control/
 │   ├── components/                   # formatting.py, status_widgets.py
 │   ├── recipe_store/                 # book_io.py, migrations.py, queries.py, run_config.py
 │   ├── pages/
-│   │   ├── dashboard_page.py         # dünnes Gerüst, ~190 Zeilen
+│   │   ├── dashboard_page.py         # dünnes Gerüst: Kopfzeile + ein Raster (dash-grid) für alle Karten
 │   │   └── dashboard/                # je eine Datei pro Dashboard-Bereich (recipe_text, status_actuators,
 │   │                                  # maintenance, recipe, process_control, prime, sensor_tanks)
 │   └── static/
@@ -1015,7 +1057,7 @@ Weitere Settings-Dateien, je Prozess eine eigene:
 
 - `config/water_cycle_settings.json` – Water-Cycle
 - `config/calibration_settings.json` – Mixing-Tank-Kalibrierung
-- `config/process_settings.json` – Fill-and-Measure
+- `config/process_settings.json` – Fill-and-Measure, pH-Zulässigkeitsband und die Transfer-Sicherheitswerte für AP-08 (`transfer_pump_liters_per_minute`, `drain_timeout_buffer_seconds`, `empty_threshold_liters`, `empty_confirm_samples`, `no_drain_progress_warning_seconds`, `valve_settle_seconds`; gleiche Werte wie in `water_cycle_settings.json`)
 - `config/tank_cleaning_settings.json` – Tank Cleaning (Zielvolumen, Haltezeit, Auto-Zirkulations-Schwellen, Drain-Parameter, eigener `hardware_execution_enabled`-Schalter)
 
 ---
@@ -1038,6 +1080,7 @@ Weitere Settings-Dateien, je Prozess eine eigene:
 - Emergency Stop ist asynchron implementiert (`ProcessController.emergency_stop()`): das Signalisieren (State-Machine-Abbruch, `request_stop()`, Aktor-Shutdown) passiert sofort unter Lock, das Warten auf den Thread-Join läuft danach außerhalb des Locks in einem Worker-Thread — das Dashboard bleibt für andere verbundene Clients währenddessen reaktionsfähig, statt bis zu ~7s einzufrieren.
 - Seit AP-03B wird der Hardwarestart nur für `hardware_execution_enabled is True` freigegeben (strikter Typ, keine Umwandlung). Seit AP-02B/C benötigen Rezeptläufe eine fail-closed Startfreigabe und aktuelle Sensormessungen; seit AP-04A sind alle Drain-Pfade durch einen Sensor-Watchdog begrenzt; seit AP-04 meldet der Water-Cycle Cleanup-Fehler statt Erfolg (Abschnitt 21).
 - Abschalten ist ein Softwareaufruf ohne physische Rückmeldung; diese Grenze ist dokumentiert, nicht gelöst (Abschnitt 24).
+- AP-08-Zieltanktransfer (Abschnitt 25): öffnet genau ein Solution-Tank-Ventil, die Pumpe startet erst nach der Settle-Zeit und einer wiederholten Stopp-/Sensorprüfung; die Pumpe wird immer vor dem Schließen des Ventils abgeschaltet. Schlägt `pump.off()` fehl, wird das Ventil bewusst **nicht** geschlossen, die Aktoren bleiben gehalten, das Dashboard zeigt eine kritische Meldung mit der Aufforderung zum **physischen Not-Aus** (unabhängig vom Raspberry Pi, softwareseitig nicht ansteuerbar), und bis zur Behebung und Quittierung ist kein neuer Transfer möglich. Es wird kein Überlaufschutz behauptet.
 
 Standardzustand in den Configs:
 
@@ -1058,7 +1101,7 @@ python main.py preflight
 python main.py gpio-check
 ```
 
-Zusätzlich per Dashboard auslösbar: Button "Run Preflight Check" in Dev Info schreibt das komplette Ergebnis ins Process Log (läuft in einem Worker-Thread, blockiert das Dashboard für andere Nutzer währenddessen nicht).
+Zusätzlich per Dashboard auslösbar: Button "Run Preflight Check" im Maintenance-Dialog schreibt das komplette Ergebnis ins Process Log (läuft in einem Worker-Thread, blockiert das Dashboard für andere Nutzer währenddessen nicht).
 
 Kritische CDS-GPIOs für Python:
 
@@ -1198,23 +1241,30 @@ Dashboard: Button "Start Tank Cleaning" im Bereich "Process Control → Tank Cle
 
 ## 14. NiceGUI-Dashboard
 
-Das Dashboard wurde auf ein 4-Spalten-Layout umgebaut, das ohne Scrollen auskommt:
+Das Dashboard nutzt **ein Raster für alle Karten** (CSS-Klasse `dash-grid` in `nicegui_dashboard/static/dashboard.css`). Ab 1700 px Breite passt alles bei 100 % auf einen Full-HD-Bildschirm ohne Scrollen (geprüft mit einem sichtbaren Bereich von 1884 × 924 px):
 
 ```text
-┌─────────────┬───────────────────┬──────────────────────┬────────────────┐
-│ System      │ Current Process   │ Process Control      │ Sensor Values  │
-│ Status      │ State             │  - Safety            │                │
-│             │                   │    Confirmation      │ Tanks / Levels │
-│ Actuators / │ Recipe /          │  - Maintenance       │ (RO + Mixing,  │
-│ Outputs     │ Setpoints         │    (Manual Drain Jog)│  untereinander │
-│             │                   │  - Tank Cleaning     │  gestapelt)    │
-└─────────────┴───────────────────┴──────────────────────┴────────────────┘
+┌────────────┬─────────────────────────┬────────────────┬──────────────┐
+│ System     │ Current Process State   │ Process        │ Sensor       │
+│ Status     │                         │ Control        │ Values       │
+├────────────┼─────────────────────────┤  - Safety      │              │
+│ Actuators /│ Transfer in             │    switches    │ Tanks /      │
+│ Outputs    │ Solution Tank           │  - Start/Reset │ Levels       │
+├────────────┴─────────────────────────┤  - Emergency   │ (RO, Mixing) │
+│ Recipe / Setpoints                   │    Stop        │              │
+│                                      │  - Maintenance │              │
+│                                      │  - Tank Clean. │              │
+└──────────────────────────────────────┴────────────────┴──────────────┘
 ```
 
-- **System Status / Actuators**: nur noch die tatsächlich genutzten Ausgänge (Mixer Refill Pump, Supply Valve 6, Drain Valve 0, Transfer Pump, Mixing/Sensor Circulation Pump, Valve 1–5). Unbenutzte Pins (`contactor_0/5`, `valve_7/8/9`) sind aus der Anzeige entfernt, um die Karte nicht unnötig zu füllen.
-- **Process Control**: Safety Confirmation (ein gemeinsames Bestätigungsfeld für Start Process **und** Tank Cleaning) → Emergency Stop → Maintenance (Manual Drain Jog) → Tank Cleaning.
-- **Dev Info**: Die früher permanent sichtbaren Status-Badges (RASPI LIVE / PYTHON CORE / Update) und das Prozess-Log sind hinter einem "Dev Info"-Button im Kopfbereich versteckt und öffnen sich als Dialog – für den Endanwender unnötige Diagnoseinfos stören dadurch nicht mehr die Hauptansicht.
-- **Sensor Values / Tanks**: eigene rechte Spalte, RO- und Mixing-Tank-Gauge stehen untereinander (nicht mehr nebeneinander) und haben eine stabile Breite unabhängig von der Anzahl der Nachkommastellen des Füllstands.
+- **Kopfbereich**: Titel, Untertitel `vGREENS - DRIVEN BY PURPOSE. POWERED BY DATA.` (Text wie im Code geschrieben, per CSS in Großbuchstaben dargestellt), Datum/Uhrzeit live und Zeit des Sensor-Updates, **Maintenance**-Button.
+- **System Status**: pro Eintrag der Name in der ersten Zeile und der Statuswert (`connected`, `running`, `current`, `no payload`) in der zweiten Zeile, Status-Lämpchen links.
+- **Actuators / Outputs**: die tatsächlich genutzten Ausgänge in zwei Spalten (Mixer Refill, Supply V6, Drain V0, Transfer Pump, Mixing/Sensor Circ., Valve 1–5). Unbenutzte Pins (`contactor_0/5`, `valve_7/8/9`) werden nicht angezeigt.
+- **Transfer in Solution Tank** (AP-08, Abschnitt 25): Statusmarke (Bereit, Freigabe möglich, Freigabe mit Bestätigung, Läuft, Gestoppt, Abgeschlossen, Störung), Freigabe-/Statusbox, Tankauswahl, abgelesener Füllstand, die zwei Bestätigungsschalter, Start Transfer / Stop. Lange Erklärungen stehen in einem Info-Tooltip.
+- **Process Control**: Sicherheitsschalter pro Versuch (gemeinsam für Start Process, Tank Cleaning und Transfer), Schalter für Sensorzirkulation und „Mischtank entleert“, Start Process / Reset / Ack, Emergency Stop, Maintenance (Manual Drain Jog), Tank Cleaning. Lange Hilfetexte sind Info-Tooltips.
+- **Maintenance-Dialog** (früher „Dev Info“): die Status-Badges (RASPI LIVE / PYTHON CORE / Update), Prime, Preflight und das Prozess-Log liegen hinter dem **Maintenance**-Button im Kopfbereich.
+- **Sensor Values / Tanks**: eigene rechte Spalte; RO- und Mixing-Tank-Gauge stehen untereinander, ohne Skalenzahlen, mit stabiler Breite unabhängig von der Anzahl der Nachkommastellen des Füllstands.
+- **Responsive**: 1000–1699 px zwei Spalten (die Seite scrollt), unter 900 px eine Spalte mit der Transfer-Card weit oben. Auswahlmenüs sind überall dunkel mit heller Schrift.
 
 ```bash
 sudo systemctl restart cds-nicegui-dashboard.service
@@ -1222,7 +1272,7 @@ systemctl status cds-nicegui-dashboard.service --no-pager
 python main.py dashboard   # manueller Start
 ```
 
-Die Oberfläche ist HMI/Visualisierung plus Start/Stop-Steuerung für Fill-and-Measure, Manual Drain Jog und Tank Cleaning. Die eigentliche Prozesslogik bleibt in den Python-Prozessmodulen (`process/`, `statemachine/`), nicht im UI-Code.
+Die Oberfläche ist HMI/Visualisierung plus Start/Stop-Steuerung für Fill-and-Measure, Manual Drain Jog, Tank Cleaning und den AP-08-Zieltanktransfer. Die eigentliche Prozesslogik bleibt in den Python-Prozessmodulen (`process/`, `statemachine/`), nicht im UI-Code.
 
 ---
 
@@ -1294,8 +1344,9 @@ Abgeleitet aus allen bisherigen Kalibrierungssessions (zero-normalisiert, nur Fi
 9. **Peristaltikpumpensteuerung** — Firmware-seitige Härtung ist im separaten Repository `central_dosing_sys_peristaltic` (Branch `harden-serial-protocol`) abgeschlossen und auf beiden Arduino-MCUs real verifiziert: Treiber standardmäßig deaktiviert, Dosis-/Laufzeitlimits (`MAX_SINGLE_DOSE_ML`, `MAX_RUNTIME_MS`), maschinenlesbares `PING`/`STATUS`/`DOSE`/`STOP`/`STOPALL`-Protokoll (siehe dortige `docs/SERIAL_PROTOCOL.md`). `cds_control` hat jetzt einen eigenständigen, hardwarefrei getesteten Python-Serial-Client und ein Terminal-CLI dafür (`services/peristaltic/`, `scripts/peristaltic_calibration_cli.py` — discover/map/check/stop-all/test/calibrate/pair-test/all-four-test, ausschließlich Wasser, max. 10 ml pro Testdosis, siehe `docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md`), das aber bewusst **nicht** an Rezeptlogik, NiceGUI-Dashboard oder State Machine angebunden ist, und es sind **noch keine echten Peristaltikpumpen angeschlossen** — diese Anbindung sowie eine reale Pumpen-Kalibrierung/-Verifikation bleiben separate, noch nicht begonnene Schritte. Ein reiner Entwurf für die Aufteilung der gemeinsamen Firmware in ein `MCU_A_PH`/`MCU_B_EC`-Profilpaar liegt außerdem unter `docs/PERISTALTIC_PROFILE_PLAN.md` vor (keine Firmware-/Verhaltensänderung dadurch).
 10. **pH-Dosierungsgrenzen noch nicht durchgesetzt** — pH-Sollwert, pH-Mischzeit und pH-Stockvolumengrenzen wurden gegen die alte Node-RED-Konfiguration bestätigt (siehe `docs/OPEN_RECIPE_DECISIONS.md`), aber bewusst nicht als harte Validierung ergänzt, da die pH-Dosierung noch keinen Konsumenten hat und sie außerhalb des explizit angeforderten Regelsatzes lagen. (EC-Sollwert-/Mischzeitgrenzen und die Grenze des EC-Anpassungsfaktors *sind* durchgesetzt — siehe Abschnitt 15. Addon-1/Addon-2-Grenzen entfallen vollständig, da Addon 1/Addon 2 vollständig aus dem aktiven Rezeptmodell entfernt wurden.) Ob/wie die verbleibenden pH-Grenzen durchgesetzt werden sollen, ist eine noch offene fachliche Entscheidung.
 11. **AP-05 Stufe 1 integriert, aber nicht eingebunden** — Commit `f463a0f` ist in `main` und auf GitHub; kein Prozess-, Dashboard- oder Hardwarecode nutzt `domain/recipe/nutrient_plan.py` / `volume_balance.py` (Abschnitt 22). Stufen 2–6 und AP-06 bis AP-09 sind ausstehend.
-12. **Bekannter Testfehler** — Recipe-Editor-Schrittweitentest (Abschnitt 23).
-13. **Offene Sicherheits- und Hardwarefragen** (O1, Abschaltrückmeldung, Füllstand < ca. 10 L, Trockenlauf, vorläufige Drain-Parameter, Kill-/SIGTERM-Grenzen, `DigitalOutput`-Cleanup, MQTT-Zustellung, MCU_B-Identitäts-/Kalibrierungs-Gates) — Abschnitt 24.
+12. ~~Bekannter Testfehler~~ Erledigt: Der Recipe-Editor-Schrittweitentest besteht, seit die EC-Sollwert-Schrittweite auf `0.1` gesetzt ist (Commit `7b419f1`); seine erwarteten Schrittweiten enthalten zusätzlich die AP-08-Füllstandseingabe (0,5 L) als ersten Eintrag (Abschnitt 23).
+13. **Offene Sicherheits- und Hardwarefragen** (O1, Abschaltrückmeldung, Füllstand < ca. 10 L, Trockenlauf, vorläufige Drain-Parameter, Kill-/SIGTERM-Grenzen, `DigitalOutput`-Cleanup, MQTT-Zustellung, MCU_B-Identität/Kalibrier-Gates, AP-08-Überlauf und Transferablauf) — Abschnitt 24.
+14. **AP-08 integrierter begleiteter Wassertest** — der Transfer ist umgesetzt und hardwarefrei getestet (Abschnitt 25); der erste reale, begleitete Lauf (kleine Menge, physischer Not-Aus in Reichweite, Zieltank-Füllstand vom Bediener abgelesen) steht noch aus. Es gibt keine Zieltank-Sensoren; ein automatischer Überlaufschutz ist eine dokumentierte spätere Erweiterung.
 
 ---
 
@@ -1412,13 +1463,15 @@ Strategie: `pytest` mit dem AP-00-Guard; alle Tests sind hardwarefrei. Prozess-,
 
 | Lauf | Ergebnis |
 |---|---|
-| Vollständige Suite, Haupt-Worktree (`f463a0f`, 2026-10-14) | 1874 bestanden, **1 fehlgeschlagen** |
+| Vollständige Suite, Haupt-Worktree (`84e57eb`, 2026-10-15) | 2963 bestanden, 0 fehlgeschlagen |
+| Nur AP-08-Tests (`tests/test_target_transfer.py`, inkl. Dashboard-Integration) | 158 bestanden |
+| Vollständige Suite, Haupt-Worktree (`f463a0f`, 2026-10-14, historisch) | 1874 bestanden, 1 fehlgeschlagen (der inzwischen behobene Recipe-Editor-Schrittweitentest) |
 | Nur AP-05-Stufe-1-Tests | 565 bestanden |
 | Vollständige Suite, separater Worktree `../cds_control_ap05_s1` | 1873 bestanden, 2 fehlgeschlagen, 3 Fehler (der bekannte Fehlschlag plus die Folgen der fehlenden Datei, siehe unten) |
 
-- **Bekannter Fehlschlag:** `tests/test_dashboard_page_recipe_editor.py::test_recipe_editor_number_fields_have_field_appropriate_step` erwartet für den EC-Sollwert die Schrittweite `0.1`; `nicegui_dashboard/pages/dashboard/recipe_section.py` setzt `0.05`. Welcher Wert gewollt ist, ist nicht entschieden; diese README behauptet keinen von beiden. Kein Bezug zu AP-00 bis AP-05.
+- **Früher bekannter Fehlschlag (behoben):** `tests/test_dashboard_page_recipe_editor.py::test_recipe_editor_number_fields_have_field_appropriate_step` erwartete für den EC-Sollwert die Schrittweite `0.1`, der Code setzte `0.05`; der Code setzt jetzt `0.1` (`7b419f1`). Die erwartete Liste des Tests enthält zusätzlich die AP-08-Füllstandseingabe (0,5 L) als ersten Eintrag, weil die Transfer-Card vor der Recipe-Card gebaut wird.
 - **Fehler im separaten Worktree (umgebungsbedingt):** Die Datei `recipes/dashboard_recipes.json` ist gitignorierte Laufzeitdatei und fehlt in diesem Worktree. Tests, die das echte Rezeptbuch lesen (`tests/test_recipe_run_config.py::test_real_active_recipe_merged_onto_real_settings_passes_schema` und zwei Tests in `tests/test_process_locking.py`), scheitern dort, weil der Code `recipes/` anlegen will und der AP-00-Guard dies korrekt blockiert (`os.mkdir('recipes')`). Das ist eine fehlende lokale Datei, kein Produktfehler; im Haupt-Worktree ist die Datei vorhanden.
-- Die Suite ist daher **nicht** vollständig grün; die Aussage „alle Tests erfolgreich“ wird nicht getroffen. Bestandene Tests belegen kein Hardwareverhalten.
+- Am 2026-10-15 ist die vollständige hardwarefreie Suite grün (2963 bestanden). Die Fehler im separaten Worktree waren umgebungsbedingt und sind historisch. Bestandene Tests belegen kein Hardwareverhalten.
 
 ## 24. Offene Sicherheits- und Hardwarefragen
 
@@ -1438,3 +1491,32 @@ Strategie: `pytest` mit dem AP-00-Guard; alle Tests sind hardwarefrei. Prozess-,
 | Transferablauf (AP-08) | `valve_1` bis `valve_4` und `transfer_pump` sind einzeln funktionsgeprüft (Anlagenverantwortlicher). Der integrierte AP-08-Ablauf (Ventil, Settle, Pumpe, Überwachung, Stopp) wurde noch nicht an der realen Anlage durchgeführt; Pumpenförderrate (16 L/min) und Transfer-Timeout folgen den vorläufigen Drain-Parametern. Ein gestoppter oder fehlgeschlagener Transfer verbraucht die Freigabe des Mischlaufs nicht (neue Freigabe, neu abgelesener Füllstand und neue Mixer-Messung nötig; nach Störung oder Emergency Stop erst nach Quittierung); nur ein erfolgreich abgeschlossener Transfer verbraucht sie | AP-09 |
 
 Die Zuordnung offener Punkte zu AP-05 Stufe 2 und AP-09 folgt der Roadmap (AP-09: Gesamtintegration, Hardwarevalidierung, Systemtests); die einzelne Zuordnung ist die Lesart des Autors.
+
+## 25. AP-08 – Kontrollierter Transfer in Solution Tank 1–4
+
+Softwareergebnis, durch hardwarefreie Tests belegt (`tests/test_target_transfer.py`, Abschnitt 23). Der integrierte Ablauf wurde **noch nicht** an der realen Anlage durchgeführt (Abschnitt 24); die Einzelkomponenten sind funktionsgeprüft (Abschnitt 4). Keine Firmwareänderung, keine zusätzliche Sensorik, kein automatischer Drain, keine automatische EC-/pH-Korrektur.
+
+**Zuordnung (vom Anlagenverantwortlichen bestätigt, das Python-GPIO-Mapping ist verbindlich, das Node-RED-Mapping wird ignoriert).** Die Zuordnung ist in `process/target_transfer.py` festgeschrieben; weicht `gpio_config.py` ab, blockiert der Transfer, statt ein anderes Ventil zu schalten. Drain (Valve 0, GPIO21) und Valve 6 sind nie Zielventile.
+
+| Ziel | Ventil | GPIO |
+|---|---|---|
+| Solution Tank 1 | `valve_1` | 27 |
+| Solution Tank 2 | `valve_2` | 19 |
+| Solution Tank 3 | `valve_3` | 24 |
+| Solution Tank 4 | `valve_4` | 25 |
+| Transferpumpe | `transfer_pump` | 26 (GPIO-gesteuerter Contactor, keine Rückmeldung) |
+
+**Freigabe.**
+
+- Der Mischlauf muss beendet sein (`FINISHED`, kein Fehler, kein Stopp-Grund) mit der Endbewertung `OK` oder `NOT_EVALUATED`. Jeder akzeptierte Mischstart bekommt eine Lauf-ID (`FillAndMeasureController`); die Bedienerfreigabe ist an die Lauf-ID gebunden, die das Dashboard angezeigt hat. Manual Drain Jog und Tank Cleaning machen die Freigabe ungültig (der Mixer-Inhalt ändert sich); ein Emergency Stop ebenfalls, weil er die Mischlauf-State-Machine auf Fehler setzt.
+- Der Bediener wählt Tank 1–4, gibt den an der Skala abgelesenen Zieltank-Füllstand ein und bestätigt, dass ausreichend freie Kapazität einschließlich Sicherheitsreserve vorhanden ist. Bei `NOT_EVALUATED` bestätigt er zusätzlich gesondert, dass EC/pH nicht gegen Sollwerte bestätigt wurden (kein Qualitätsnachweis).
+- Softwareprüfung: Zieltank-Füllstand 0–300 L (Nennvolumen), Füllstand plus Mixer-Menge beim Transferstart höchstens 300 L, Mixer-Menge mindestens 10 L (darunter ist der Sensor nicht belastbar) und höchstens `max_mixer_liters`, strikte Typen (kein bool, NaN, inf), gültiger Sensor-Zeitstempel. **Eine Sicherheitsreserve und die Unsicherheit des Mixer-Sensors werden nicht modelliert; beides liegt in der Bedienerbestätigung.**
+- Nur ein **erfolgreich abgeschlossener** Transfer verbraucht die Freigabe. Nach Stopp oder Fehler kann derselbe abgeschlossene Mischlauf mit neuer Freigabe, neu abgelesenem Füllstand und neuer Mixer-Messung erneut verwendet werden; nach Störung oder Emergency Stop erst nach Quittierung (Reset / Ack; das erste Reset quittiert nur die Transferstörung und behält den Mischlauf, ein zweites Reset setzt ihn wie bisher zurück). Es gibt nie einen automatischen Neustart.
+
+**Ablauf und Überwachung.** Ventil auf → Settle-Zeit → Stopp erneut prüfen → Sensor erneut prüfen → Pumpe an. Quellseitige Überwachung mit der vorhandenen Drain-Sicherheit (`DrainSensorWatchdog`: Sensorverlust, Plausibilität, Anstieg, kein Fortschritt; berechnete Maximallaufzeit). Der Transfer endet mit der ersten frischen, gültigen **0-L**-Messung (Anlagenverantwortlicher: beim Entleeren bedeutet die erste 0 L, dass der Mixing Tank tatsächlich leer ist, danach können die Werte wieder schwanken), sofern der bisherige Verlauf plausibel war (der letzte plausible Wert lag schon bei höchstens 10 L). Eine unplausible 0 im hohen Füllstandsbereich beendet den Transfer nicht und zählt nicht als Verlauf. Beim Ende wird zuerst die Pumpe gestoppt, danach das Ventil geschlossen. Die allgemeinen Drain-Pfade sind unverändert.
+
+**Fehler beim Abschalten der Pumpe.** Wirft `pump.off()` eine Exception, wird das Zielventil bewusst **nicht** geschlossen (nicht gegen eine möglicherweise laufende Pumpe), die Aktoren und die Hardware-Sperre bleiben gehalten, der Fehler ist kritisch, und das Dashboard fordert den **physischen Not-Aus** an (er trennt die gesamte CDS-Stromversorgung unabhängig vom Raspberry Pi und ist softwareseitig nicht ansteuerbar). Bis das Abschalten der Pumpe gelingt und die Störung quittiert ist, kann weder ein neuer Transfer noch ein anderer Prozess starten; Emergency Stop, Shutdown und Reset / Ack versuchen das Abschalten erneut (Pumpe zuerst). Ohne Contactor-Rückmeldung kann die Software keinen Pumpenstillstand beweisen und behauptet ihn nicht.
+
+**Verriegelung, Status, Log.** Der `ProcessController` sperrt während eines Transfers jeden anderen Hardwareprozess; Emergency Stop, Shutdown und Reset schließen den Transfer ein. MQTT-`process_state`-Werte: `TARGET_TRANSFER_RELEASED`, `TARGET_TRANSFER_VALVE_OPEN`, `TARGET_TRANSFER_RUNNING`, `TARGET_TRANSFER_STOPPED`, `TARGET_TRANSFER_PUMP_OFF_FAILED`. Das Prozesslog (`logs/target_transfer_*.csv`) hat die Spalten `valve_1`–`valve_4`, `transfer_target_tank`, `transfer_run_id` und `transfer_release` (JSON-Eintrag der Bedienerfreigabe). Die Transfer-Sicherheitseinstellungen stehen in `config/process_settings.json` (Abschnitt 7).
+
+**Nicht abgedeckt.** Kein Überlaufschutz (die vier Tanks mit je 300 L Nennvolumen und manuell ablesbarer Skala haben keine Sensoren); keine Hardwarevalidierung des integrierten Ablaufs; vorläufige Drain-Parameter (16 L/min, 180 s, 5 s Sensorverlust); keine Contactor-Rückmeldung. Siehe Abschnitt 24.
