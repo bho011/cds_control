@@ -143,7 +143,7 @@ def build_recipe_section(recipe_state: dict[str, Any]) -> tuple[RecipeCardWidget
                 with ui.column().classes("recipe-form-section"):
                     ui.label("EC").classes("recipe-section-title")
                     target_ec_input = ui.number(
-                        "EC Setpoint", suffix="mS/cm", min=0.5, max=2.5, step=0.05
+                        "EC Setpoint", suffix="mS/cm", min=0.5, max=2.5, step=0.1
                     )
                     ec_mixing_time_input = ui.number(
                         "Mixing time", suffix="s (seconds)", min=300, max=1200, step=10
