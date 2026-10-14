@@ -346,7 +346,7 @@ def cds(controller, monkeypatch, tmp_path, empty_tank):
 
 def _dash_widgets(tank_emptied):
     return SimpleNamespace(
-        confirmation_input=SimpleNamespace(value="confirmed"),
+        safety_confirm_switch=SimpleNamespace(value=True),
         run_sensor_circulation_switch=SimpleNamespace(value=False),
         tank_emptied_confirm_switch=SimpleNamespace(value=tank_emptied),
     )
@@ -374,7 +374,7 @@ def test_dashboard_confirmation_is_reset_after_blocked_and_accepted_start(cds, c
 
     # blockiert (falscher Text): Schalter wird trotzdem zurueckgesetzt
     widgets = _dash_widgets(True)
-    widgets.confirmation_input.value = "wrong"
+    widgets.safety_confirm_switch.value = False
     pcs.handle_start(cds, widgets, lambda m: None)
     assert widgets.tank_emptied_confirm_switch.value is False
 

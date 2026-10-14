@@ -13,7 +13,7 @@ from nicegui_dashboard.components.formatting import fmt
 
 @dataclass
 class ProcessControlWidgets:
-    confirmation_input: ui.input
+    safety_confirm_switch: ui.switch
     run_sensor_circulation_switch: ui.switch
     tank_emptied_confirm_switch: ui.switch
     start_button: ui.button
@@ -88,14 +88,15 @@ def build_process_control() -> ProcessControlWidgets:
         #)
 
         ui.label("Safety Confirmation").classes("control-section-title")
-        confirmation_input = ui.input(
-            label="Confirmation",
-            placeholder="type exactly: confirmed",
-            password=False,
-        ).classes("control-input w-full")
+        safety_confirm_switch = ui.switch(
+            "Ich bestätige die Sicherheitsfreigabe für diesen Start.",
+            value=False,
+        ).classes("text-slate-200 mt-2")
 
         ui.label(
-            "To start the process, type exactly 'confirmed'. GPIOs are only initialized after valid confirmation and hardware_execution_enabled=true."
+            "Gilt nur für den nächsten Startversuch (Prozess oder Tank Cleaning) und wird nach "
+            "jedem Versuch zurückgesetzt. GPIOs werden nur initialisiert, wenn die Bestätigung "
+            "gesetzt ist und hardware_execution_enabled=true."
         ).classes("confirmation-help")
 
         run_sensor_circulation_switch = ui.switch(
@@ -164,7 +165,7 @@ def build_process_control() -> ProcessControlWidgets:
             "Fills the Mixing Tank with RO water (target from settings), "
             "circulates for a fixed hold time, then drains automatically. "
             "Runs unattended - use Stop or Emergency Stop to abort. "
-            "Uses the confirmation field above."
+            "Uses the safety confirmation switch above."
         ).classes("confirmation-help")
 
         hardware_enabled_label = ui.label(
@@ -178,7 +179,7 @@ def build_process_control() -> ProcessControlWidgets:
         ).classes("text-sm text-slate-400")
 
     return ProcessControlWidgets(
-        confirmation_input=confirmation_input,
+        safety_confirm_switch=safety_confirm_switch,
         run_sensor_circulation_switch=run_sensor_circulation_switch,
         tank_emptied_confirm_switch=tank_emptied_confirm_switch,
         start_button=start_button,
@@ -197,6 +198,14 @@ def build_process_control() -> ProcessControlWidgets:
     )
 
 
+def _consume_safety_confirmation(widgets: ProcessControlWidgets) -> bool:
+    """Liest die Sicherheitsbestaetigung genau einmal und setzt den Schalter sofort
+    zurueck (gilt nur fuer einen Versuch). Nur ein echtes True zaehlt (fail-closed)."""
+    confirmed = widgets.safety_confirm_switch.value is True
+    widgets.safety_confirm_switch.value = False
+    return confirmed
+
+
 def handle_start(controller: Any, widgets: ProcessControlWidgets, add_log: Callable[[str], None]) -> None:
     # The tank-emptied confirmation is valid for this single start attempt
     # only: read the raw value once and reset the switch immediately, so every
@@ -204,6 +213,7 @@ def handle_start(controller: Any, widgets: ProcessControlWidgets, add_log: Calla
     # leaves it off. Unlike the circulation switch it is never kept for a retry.
     tank_emptied_confirmed = widgets.tank_emptied_confirm_switch.value
     widgets.tank_emptied_confirm_switch.value = False
+    safety_confirmed = _consume_safety_confirmation(widgets)
 
     control_data = controller.get_process_control_status()
 
@@ -216,21 +226,13 @@ def handle_start(controller: Any, widgets: ProcessControlWidgets, add_log: Calla
         add_log(f"[SAFE] {message}")
         return
 
-    entered_text = (widgets.confirmation_input.value or "").strip()
     required_text = str(control_data["required_confirmation_text"]).strip()
-
-    add_log(
-        f"[DEBUG] Confirmation received: '{entered_text}' | required: '{required_text}'"
-    )
-
-    if entered_text != required_text:
-        message = (
-            "Start blocked: confirmation text is wrong. "
-            f"Entered='{entered_text}' Required='{required_text}'"
-        )
+    if not safety_confirmed:
+        message = "Start blocked: safety confirmation is not set."
         ui.notify(message, color="negative")
         add_log(f"[BLOCKED] {message}")
         return
+    entered_text = required_text
 
     # Raw value, deliberately NOT bool(...)-coerced here: RunOptions is
     # validated strictly (type(value) is bool) inside
@@ -305,7 +307,16 @@ def handle_manual_drain_stop(controller: Any, add_log: Callable[[str], None]) ->
 def handle_tank_cleaning_start(
     controller: Any, widgets: ProcessControlWidgets, add_log: Callable[[str], None]
 ) -> None:
-    entered_text = (widgets.confirmation_input.value or "").strip()
+    if not _consume_safety_confirmation(widgets):
+        message = "Tank cleaning blocked: safety confirmation is not set."
+        ui.notify(message, color="negative")
+        add_log(f"[BLOCKED] {message}")
+        return
+    control_data = controller.get_process_control_status()
+    entered_text = str(
+        control_data.get("tank_cleaning_required_confirmation_text")
+        or control_data["required_confirmation_text"]
+    ).strip()
     result = controller.start_tank_cleaning(entered_text)
 
     if result["success"]:

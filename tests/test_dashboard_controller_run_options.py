@@ -70,9 +70,9 @@ def notifications(monkeypatch):
     return notes
 
 
-def _widgets(text="confirmed", circulation=False, tank_emptied=True):
+def _widgets(confirmed=True, circulation=False, tank_emptied=True):
     return SimpleNamespace(
-        confirmation_input=SimpleNamespace(value=text),
+        safety_confirm_switch=SimpleNamespace(value=confirmed),
         run_sensor_circulation_switch=SimpleNamespace(value=circulation),
         tank_emptied_confirm_switch=SimpleNamespace(value=tank_emptied),
     )
@@ -159,7 +159,7 @@ def test_d_hardware_disabled_blocks_direct_controller_call(cds, controller):
 
 
 def test_d_wrong_confirmation_text_blocks_start(cds, controller, spy, notifications):
-    widgets = _widgets(text="wrong", circulation=True)
+    widgets = _widgets(confirmed=False, circulation=True)
     pcs.handle_start(cds, widgets, lambda m: None)
     assert spy == []
     assert notifications[-1][1] == "negative"
@@ -198,3 +198,38 @@ def test_e_invalid_run_option_rejected_on_direct_call(cds, controller):
     result = cds.start_fill_and_measure("confirmed", run_options=RunOptions(sensor_circulation_enabled="true"))  # type: ignore[arg-type]
     assert result["success"] is False
     assert controller.fill_and_measure.is_active() is False
+
+
+def test_safety_confirmation_is_consumed_by_every_start_attempt(cds, controller, spy, notifications):
+    widgets = _widgets(confirmed=False)
+    pcs.handle_start(cds, widgets, lambda m: None)
+    assert widgets.safety_confirm_switch.value is False
+    assert spy == []
+
+    widgets = _widgets(confirmed=True, tank_emptied=False)
+    pcs.handle_start(cds, widgets, lambda m: None)
+    assert widgets.safety_confirm_switch.value is False
+
+
+def test_safety_confirmation_requires_real_true(cds, controller, spy, notifications):
+    widgets = _widgets(confirmed="confirmed")
+    pcs.handle_start(cds, widgets, lambda m: None)
+    assert spy == []
+    assert notifications[-1][1] == "negative"
+
+
+def test_tank_cleaning_without_safety_confirmation_is_blocked(notifications):
+    calls = []
+    fake = SimpleNamespace(
+        start_tank_cleaning=lambda text: calls.append(text) or {"success": True, "message": "x"},
+        get_process_control_status=lambda: {"required_confirmation_text": "confirmed"},
+    )
+    widgets = _widgets(confirmed=False)
+    pcs.handle_tank_cleaning_start(fake, widgets, lambda m: None)
+    assert calls == []
+    assert notifications[-1][1] == "negative"
+
+    widgets = _widgets(confirmed=True)
+    pcs.handle_tank_cleaning_start(fake, widgets, lambda m: None)
+    assert calls == ["confirmed"]
+    assert widgets.safety_confirm_switch.value is False
