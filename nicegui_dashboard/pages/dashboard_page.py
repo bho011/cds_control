@@ -16,6 +16,7 @@ from nicegui_dashboard.pages.dashboard.prime_section import (
 )
 from nicegui_dashboard.pages.dashboard.process_control_section import (
     build_process_control,
+    format_dosing_status,
     refresh_process_control,
     wire_process_control_handlers,
 )
@@ -84,6 +85,9 @@ def create_dashboard_page(controller: CdsController) -> None:
                             control_message_label = ui.label("Ready").classes("process-message")
                             process_error_label = ui.label("").classes("error-text")
                             control_error_label = ui.label("").classes("error-text")
+                            dosing_label = ui.label("Dosierung: -").classes("process-message")
+                            dosing_progress = ui.linear_progress(value=0.0).classes("w-full")
+                            dosing_error_label = ui.label("").classes("error-text")
 
                         process_timestamp_label = ui.label("Process timestamp: -").classes("hidden")
                         process_source_label = ui.label("Source: -").classes("hidden")
@@ -138,6 +142,14 @@ def create_dashboard_page(controller: CdsController) -> None:
             process_error_label.set_text(f"Process error: {process_data['error']}")
         else:
             process_error_label.set_text("")
+
+        control_message_label.set_text(control_data.get("last_message") or "Ready")
+        control_error_label.set_text(f"Error: {control_data['error']}" if control_data.get("error") else "")
+
+        dosing_text, dosing_value, dosing_error = format_dosing_status(control_data.get("dosing"))
+        dosing_label.set_text(dosing_text)
+        dosing_progress.set_value(dosing_value)
+        dosing_error_label.set_text(dosing_error)
 
         hardware_enabled = control_data["hardware_execution_enabled"]
 

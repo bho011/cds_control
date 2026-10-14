@@ -31,6 +31,55 @@ class ProcessControlWidgets:
     required_text_label: ui.label
 
 
+_DOSING_PHASE_TEXT = {
+    "RUNNING": "laeuft",
+    "STOPPING": "wird gestoppt",
+    "FINISHED": "abgeschlossen",
+    "ABORTED": "abgebrochen",
+    "ERROR": "FEHLER",
+    "IDLE": "bereit",
+}
+
+
+def format_dosing_status(dosing: dict[str, Any] | None) -> tuple[str, float, str]:
+    """Anzeige der MCU_B-Naehrstoffdosierung: (Zeile, Fortschritt 0..1, Fehlertext).
+    Rein, ohne UI. ``dosing`` ist ``NutrientDosingController.get_status()`` oder None
+    (kein Dosierlauf). Nur softwareseitig bestaetigte Mengen zaehlen als Fortschritt;
+    eine unklare Menge wird immer ausdruecklich ausgewiesen."""
+    if not dosing:
+        return "Dosierung: -", 0.0, ""
+
+    phase = str(dosing.get("phase") or "IDLE")
+    target_ul = int(dosing.get("planned_ul") or dosing.get("target_ul") or 0)
+    confirmed_ul = int(dosing.get("confirmed_ul") or 0)
+    uncertain_ul = int(dosing.get("uncertain_ul") or 0)
+    progress = min(1.0, confirmed_ul / target_ul) if target_ul > 0 else 0.0
+
+    parts = [f"Dosierung: {_DOSING_PHASE_TEXT.get(phase, phase)}"]
+    pump = dosing.get("current_pump")
+    if pump:
+        role = next((p.get("role") for p in dosing.get("pumps") or [] if p.get("pump") == pump), None)
+        parts.append(f"Pumpe {pump} ({role})" if role else f"Pumpe {pump}")
+    parts.append(f"{confirmed_ul / 1000:.1f}/{target_ul / 1000:.1f} ml bestaetigt")
+    per_pump = [
+        f"{p['pump']} {int(p.get('confirmed_ul') or 0) / 1000:.1f}/{int(p.get('target_ul') or 0) / 1000:.1f}"
+        for p in dosing.get("pumps") or []
+    ]
+    if per_pump:
+        parts.append(" | ".join(per_pump))
+
+    error = ""
+    if phase in ("ABORTED", "ERROR"):
+        error = f"Dosierung {dosing.get('completion_reason') or phase}"
+        if dosing.get("last_error"):
+            error += f": {dosing['last_error']}"
+    if uncertain_ul > 0:
+        error = (error + " | " if error else "") + (
+            f"{uncertain_ul / 1000:.1f} ml unklar (Chunk nicht wiederholt, vor Neustart pruefen)"
+        )
+    return " | ".join(parts), progress, error
+
+
 def build_process_control() -> ProcessControlWidgets:
     with ui.card().classes("panel process-control-panel"):
         ui.label("Process Control").classes("panel-title")

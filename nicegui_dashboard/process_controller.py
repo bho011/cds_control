@@ -10,6 +10,7 @@ from domain.recipe_model import RunOptions
 from nicegui_dashboard.recipe_store import build_run_config, get_active_recipe, load_recipe_book
 from process.fill_and_measure import FillAndMeasureController
 from process.manual_drain_jog import ManualDrainJog
+from process.nutrient_dosing import NutrientDosingController
 from process.pump_prime import PRIME_CHUNK_ML, PRIME_MAX_ML_PER_PUMP, PumpPrimeController
 from process.tank_cleaning import TankCleaningController
 from services.settings_validation import SettingField, validate_settings
@@ -142,8 +143,15 @@ class ProcessController:
         # of the currently active recipe again.
         self._last_run_settings: dict[str, Any] | None = None
 
+        # AP-05 Schritt 3: der MCU_B-Dosierer gehoert zum Mischlauf; er wird hier
+        # (ohne Hardwarezugriff beim Erzeugen) angelegt, damit Emergency Stop und
+        # Shutdown ihn direkt erreichen.
+        self.nutrient_dosing = NutrientDosingController(
+            get_sensor_snapshot=self.get_sensor_snapshot,
+        )
         self.fill_and_measure = FillAndMeasureController(
             get_sensor_snapshot=self.get_sensor_snapshot,
+            dosing_controller=self.nutrient_dosing,
         )
         self.manual_drain_jog = ManualDrainJog(
             get_sensor_snapshot=self.get_sensor_snapshot,
@@ -286,6 +294,7 @@ class ProcessController:
                 "error": fill_and_measure_status["error"],
                 "last_message": fill_and_measure_status["last_message"],
                 "last_start_request": fill_and_measure_status["last_start_request"],
+                "dosing": fill_and_measure_status.get("dosing"),
                 "settings_error": settings_error,
 
                 "hardware_execution_enabled": settings.get(
@@ -425,6 +434,13 @@ class ProcessController:
                 self.last_error = f"Fill-and-Measure emergency stop failed: {exc}"
 
             try:
+                # Nach dem State-Machine-Fehler (der "process_error" absetzt): der
+                # Emergency-Stop-Grund soll der endgueltige Stopp-Grund sein.
+                self.nutrient_dosing.request_stop(reason="emergency_stop")
+            except Exception as exc:
+                self.last_error = f"Nutrient dosing emergency stop failed: {exc}"
+
+            try:
                 self.manual_drain_jog.request_stop(reason="emergency_stop")
             except Exception as exc:
                 self.last_error = f"Manual Drain Jog emergency stop failed: {exc}"
@@ -450,6 +466,11 @@ class ProcessController:
                 self.fill_and_measure.wait_stopped()
             except Exception as exc:
                 self.last_error = f"Fill-and-Measure emergency stop failed: {exc}"
+
+            try:
+                self.nutrient_dosing.wait_stopped()
+            except Exception as exc:
+                self.last_error = f"Nutrient dosing emergency stop failed: {exc}"
 
             try:
                 self.manual_drain_jog.wait_stopped()
@@ -535,6 +556,11 @@ class ProcessController:
                 self.last_error = f"Fill-and-Measure shutdown failed: {exc}"
 
             try:
+                self.nutrient_dosing.request_stop(reason="controller_shutdown")
+            except Exception as exc:
+                self.last_error = f"Nutrient dosing shutdown failed: {exc}"
+
+            try:
                 self.manual_drain_jog.request_stop(reason="controller_shutdown")
             except Exception as exc:
                 self.last_error = f"Manual Drain Jog shutdown failed: {exc}"
@@ -559,6 +585,11 @@ class ProcessController:
             self.fill_and_measure.wait_stopped(timeout_seconds)
         except Exception as exc:
             self.last_error = f"Fill-and-Measure shutdown failed: {exc}"
+
+        try:
+            self.nutrient_dosing.wait_stopped()
+        except Exception as exc:
+            self.last_error = f"Nutrient dosing shutdown failed: {exc}"
 
         try:
             self.manual_drain_jog.wait_stopped()

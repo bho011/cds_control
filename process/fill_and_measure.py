@@ -179,6 +179,7 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             self._actuators = None
             self._mqtt_publisher = None
             self.process_logger = None
+            self._nutrient_plan = None  # Dosieranzeige des beendeten Laufs verschwindet mit dem Reset
             self._last_error = None
             self.display_state = "IDLE"
             self._last_message = "Reset acknowledged. Controller ready."
@@ -200,7 +201,8 @@ class FillAndMeasureController(BackgroundHardwareProcess):
 
             dosing_status = None
             if self._nutrient_plan is not None and self._dosing_controller is not None:
-                dosing_status = self._dosing_controller.get_status()
+                # planned_ul: Gesamtmenge des Plans, auch bevor die Dosierung gestartet ist.
+                dosing_status = dict(self._dosing_controller.get_status(), planned_ul=self._nutrient_plan.total_ul)
 
             return {
                 "dosing": dosing_status,
