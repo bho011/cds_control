@@ -32,8 +32,20 @@ from .background_process import BackgroundHardwareProcess
 class FillAndMeasureController(BackgroundHardwareProcess):
     label = "Fill-and-Measure"
 
-    def __init__(self, get_sensor_snapshot: Callable[[], dict[str, Any] | None]) -> None:
+    def __init__(
+        self,
+        get_sensor_snapshot: Callable[[], dict[str, Any] | None],
+        dosing_controller: Any = None,
+        plan_builder: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> None:
         super().__init__(get_sensor_snapshot)
+
+        # AP-05 Schritt 2: Nährstoffdosierung ist Teil des Mischlaufs. Der
+        # Dosier-Controller schaltet kein GPIO (nur MCU_B ueber seriell); die
+        # RO-Pumpe und die Zirkulation steuert ausschliesslich die State Machine.
+        self._dosing_controller = dosing_controller
+        self._plan_builder = plan_builder
+        self._nutrient_plan = None
 
         self.is_running = False
         self._teardown_in_progress = False
@@ -41,6 +53,15 @@ class FillAndMeasureController(BackgroundHardwareProcess):
         self.process_logger = None
         self.display_state: str | None = "IDLE"
         self.last_start_request: str | None = None
+
+    def is_active(self) -> bool:
+        """Auch aktiv, solange der zugehoerige Dosier-Thread noch laeuft (z. B.
+        wenn er die Wartefrist im Teardown ueberschreitet): kein neuer
+        Hardwareprozess, kein Reset, bis MCU_B nicht mehr dosieren kann."""
+        if super().is_active():
+            return True
+        dosing = self._dosing_controller
+        return dosing is not None and bool(dosing.is_active())
 
     # ---- public dashboard API -----------------------------------------
 
@@ -53,6 +74,10 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             if not isinstance(settings, dict):
                 return self._reject_start_locked(
                     "Start blockiert: Prozesseinstellungen fehlen oder sind ungueltig."
+                )
+            if self._dosing_controller is not None and self._dosing_controller.is_active():
+                return self._reject_start_locked(
+                    "Start blockiert: der Dosier-Thread des vorherigen Laufs ist noch aktiv."
                 )
             if settings.get("hardware_execution_enabled") is not True:
                 return self._reject_start_locked(
@@ -81,6 +106,10 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             if not allowed:
                 return self._reject_start_locked(validation_message)
 
+            plan_message = self._prepare_nutrient_plan_locked(settings)
+            if plan_message is not None:
+                return self._reject_start_locked(plan_message)
+
             self.last_start_request = datetime.now().isoformat(timespec="seconds")
             self.is_running = True
             self._teardown_in_progress = False
@@ -91,6 +120,36 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             self._begin_run_locked("cds-fill-and-measure", settings)
 
         return self._result(True, "Fill-and-Measure-Prozess gestartet.")
+
+    def _prepare_nutrient_plan_locked(self, settings: dict[str, Any]) -> str | None:
+        """Plan und Dosiervoraussetzungen VOR Thread/GPIO pruefen. None = ok
+        (auch ohne Dosierung). Jeder Fehler blockiert den ganzen Lauf."""
+        self._nutrient_plan = None
+        snapshot = settings.get("recipe_run_config_snapshot")
+        if not isinstance(snapshot, dict) or snapshot.get("nutrient_dosing_enabled") is not True:
+            return None
+        try:
+            if self._dosing_controller is None:
+                from process.nutrient_dosing import NutrientDosingController
+
+                self._dosing_controller = NutrientDosingController(self.get_sensor_snapshot)
+            builder = self._plan_builder
+            if builder is None:
+                from process.nutrient_dosing import build_run_plan as builder
+            plan = builder(settings)
+        except Exception as exc:
+            return f"Start blockiert: Dosierplan nicht erstellbar ({type(exc).__name__}: {exc})."
+        if not plan.has_dosing_work:
+            return None
+        if settings.get("enable_mixing_circulation") is not True or settings.get("enable_sensor_circulation") is not True:
+            return "Start blockiert: Mit Naehrstoffdosierung muessen Mixing- und Sensorzirkulation aktiviert sein."
+        if self._dosing_controller.is_active():
+            return "Start blockiert: Naehrstoffdosierung laeuft noch."
+        reason = self._dosing_controller.check_plan(plan)
+        if reason is not None:
+            return f"Start blockiert: {reason}"
+        self._nutrient_plan = plan
+        return None
 
     def _reject_start_locked(self, message: str) -> dict[str, Any]:
         """Abgelehnter Start: nur Fehler-/Meldungstext, kein Laufstatus. Lock gehalten."""
@@ -139,7 +198,12 @@ class FillAndMeasureController(BackgroundHardwareProcess):
                 start_mixer_liters = self.state_machine.start_mixer_liters
                 added_liters = self.state_machine.last_added_liters
 
+            dosing_status = None
+            if self._nutrient_plan is not None and self._dosing_controller is not None:
+                dosing_status = self._dosing_controller.get_status()
+
             return {
+                "dosing": dosing_status,
                 "is_running": self.is_running,
                 "thread_alive": self.is_active(),
                 "teardown_in_progress": self._teardown_in_progress,
@@ -204,6 +268,8 @@ class FillAndMeasureController(BackgroundHardwareProcess):
                 get_sensor_snapshot=self.get_sensor_snapshot,
                 settings=settings,
                 recipe_run=True,
+                nutrient_plan=self._nutrient_plan,
+                dosing=self._dosing_controller if self._nutrient_plan is not None else None,
             )
 
             with self._lock:
@@ -264,6 +330,7 @@ class FillAndMeasureController(BackgroundHardwareProcess):
                     pass
 
         finally:
+            self._shutdown_and_wait_for_dosing()
             with self._lock:
                 self._teardown_in_progress = True
                 self.display_state = "TEARDOWN"
@@ -316,6 +383,28 @@ class FillAndMeasureController(BackgroundHardwareProcess):
                 if self._last_error is None and self.state_machine is not None:
                     if self.state_machine.error_message:
                         self._last_error = self.state_machine.error_message
+
+    def _shutdown_and_wait_for_dosing(self) -> None:
+        """Vor dem Cleanup: Aktoren aus (setzt auch den Dosier-Stopp ab) und auf das
+        Ende des Dosier-Threads warten, damit kein Prozess als beendet gilt, solange
+        MCU_B noch dosieren koennte. Ohne Lock (Warten bis zu stop_join_timeout)."""
+        state_machine = self.state_machine
+        if state_machine is not None:
+            try:
+                state_machine.safe_shutdown()
+            except Exception:
+                pass
+        dosing = self._dosing_controller
+        if dosing is None or self._nutrient_plan is None:
+            return
+        try:
+            if dosing.is_active():
+                dosing.request_stop("process_end")
+                dosing.wait_stopped()
+                if dosing.is_active():
+                    self._last_error = self._last_error or "Dosier-Thread beendet sich nicht rechtzeitig."
+        except Exception as exc:
+            self._last_error = self._last_error or f"Dosierstopp fehlgeschlagen: {type(exc).__name__}: {exc}"
 
     def _publish_status(self) -> None:
         if self._mqtt_publisher is None or self.state_machine is None:

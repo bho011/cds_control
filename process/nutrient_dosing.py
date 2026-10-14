@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from domain.recipe.nutrient_plan import NutrientDosingPlan
+from domain.recipe.nutrient_plan import NutrientDosingPlan, NutrientPlanError, build_nutrient_dosing_plan
 from services.peristaltic.calibration import (
     CalibrationValidationError,
     has_volumetric_calibration,
@@ -88,6 +88,12 @@ CONTROLLER = "MCU_B"
 
 # Vorläufige Prototypgrenze je DOSE-Befehl (Plan und Firmware erlauben mehr).
 NUTRIENT_MAX_DOSE_ML = 10.0
+
+# Vorläufiges RO-Vorfüllziel vor der Dosierung (Konzept: 30 l, konfigurierbar,
+# real zu bestätigen); bei kleinen Rezepten höchstens die Hälfte der RO-Sollmenge,
+# damit nach der Dosierung noch RO-Wasser zum Verdünnen folgt.
+NUTRIENT_PREFILL_LITERS = 30.0
+NUTRIENT_PREFILL_MAX_FRACTION = 0.5
 
 # Laufzeitabschätzung je Chunk: Schritte = ml / firmware_ml_per_step, Schrittrate =
 # speed_rpm * STEPS_PER_REV * microsteps / 60 (konstante Rate, Beschleunigungsrampe
@@ -187,6 +193,32 @@ def plan_blocking_reasons(
     return reasons
 
 
+def build_run_plan(settings: dict[str, Any]) -> NutrientDosingPlan:
+    """Dosierplan für einen Mischlauf aus dem Rezept-Snapshot der Einstellungen
+    plus Mapping und bestätigtem Firmwareprofil. Liest nur Konfigurationsdateien.
+    Wirft ValueError mit lesbarer Meldung bei jedem Problem (fail-closed)."""
+    try:
+        snapshot = settings["recipe_run_config_snapshot"]
+        mapping = load_mapping(MAPPING_PATH)
+        profiles = load_firmware_profiles(FIRMWARE_PROFILES_PATH)
+        entry = mapping.controllers[CONTROLLER]
+        profile = profiles.controllers[CONTROLLER]
+        weights = {pump: resolve_firmware_ml_per_step(profiles, CONTROLLER, pump) for pump in VALID_PUMPS}
+        roles = {pump: entry.pumps.get(pump) for pump in VALID_PUMPS}
+        ro_l = snapshot["target_ro_water_l"]
+        prefill = min(float(settings.get("nutrient_prefill_liters", NUTRIENT_PREFILL_LITERS)), ro_l * NUTRIENT_PREFILL_MAX_FRACTION)
+        return build_nutrient_dosing_plan(
+            snapshot,
+            pump_roles=roles,
+            pump_weights=weights,
+            profile_id=profile.profile_id,
+            max_chunk_ml=NUTRIENT_MAX_DOSE_ML,
+            prefill_target_l=prefill,
+        )
+    except (MappingValidationError, FirmwareProfileError, NutrientPlanError, KeyError, TypeError) as exc:
+        raise ValueError(f"Dosierplan nicht erstellbar: {type(exc).__name__}: {exc}") from exc
+
+
 @dataclass
 class PumpProgress:
     pump: str
@@ -272,6 +304,12 @@ class NutrientDosingController(BackgroundHardwareProcess):
         self._entry = entry
         self._profile = profile
         return None
+
+    def check_plan(self, plan: Any) -> str | None:
+        """Vorabprüfung ohne Start und ohne seriellen Zugriff (Mapping, Profil,
+        Kalibrierung, Port-Datei, Plan). None = ausführbar, sonst Blockgrund."""
+        with self._lock:
+            return self._load_and_check(plan)
 
     def start(self, settings: dict[str, Any], plan: NutrientDosingPlan) -> dict[str, Any]:
         with self._lock:
