@@ -5,6 +5,7 @@ Solution Tank (1 bis 4).
 Ablauf (ein Hintergrundthread, gleiche Basisklasse wie Tank Cleaning und
 Manual Drain Jog):
 
+    Alle dokumentierten Ventile (Valve 0 bis 6) schliessen -> Stop pruefen ->
     Zielventil auf -> Settle-Zeit -> Stop erneut pruefen -> Sensor erneut
     pruefen -> Transferpumpe an -> Ueberwachung -> Pumpe aus -> Ventil zu.
 
@@ -15,6 +16,19 @@ Node-RED wird ignoriert):
     Tank 2 -> Valve 2 -> GPIO19      Tank 4 -> Valve 4 -> GPIO25
     Transferpumpe -> GPIO26
     Drain (Valve 0, GPIO21) und Valve 6 sind NIE Zieltankventile.
+
+Vorab-Schliessen: Bevor das Zielventil oeffnet und die Pumpe foerdert, werden
+ALLE dokumentierten Ventile (Drain Valve 0, Valve 1 bis 5, Supply Valve 6;
+PRE_TRANSFER_CLOSE_VALVES) geschlossen. Jedes wird als Ausgang im inaktiven
+Zustand (Relais aus) angelegt und der gemeldete Zustand geprueft. Gelingt das bei
+einem Ventil nicht oder ist es nicht als inaktiv bestaetigt, bricht der Transfer
+fail-closed ab, bevor Zielventil oder Pumpe geschaltet wurden. Valve 7 bis 9 sind
+nicht dokumentiert und werden nicht beruehrt. Bekannte, vom Anlagenverantwortlichen
+bewusst akzeptierte Eigenschaft des Hardware-Layers (Standardweg): gpiozero legt
+einen neuen Ausgang ueber lgpio zuerst kurz auf LOW und dann auf den inaktiven
+Pegel; bei active-low-Relaiskarten ist das ein sehr kurzer Impuls pro Ausgang
+(Dauer nicht gemessen). Bisher betraf das nur Pumpe und Zielventil, jetzt alle
+sieben Ventile.
 
 Was diese Funktion NICHT ist:
 
@@ -27,7 +41,9 @@ Was diese Funktion NICHT ist:
 * Kein Qualitaetsnachweis. Bei NOT_EVALUATED gilt die EC-/pH-Sollwerterfuellung
   als nicht bestaetigt; der Bediener muss das gesondert zur Kenntnis nehmen.
 * Keine physische Rueckmeldung: "Pumpe aus"/"Ventil zu" bedeutet, dass der
-  Schaltaufruf ohne Fehler zurueckkam.
+  Schaltaufruf ohne Fehler zurueckkam; beim Vorab-Schliessen, dass der Ausgang
+  inaktiv angelegt und als inaktiv gemeldet wurde. Ob ein Ventil physisch zu
+  ist, weiss die Software nicht.
 
 Sicherheitsueberwachung der Quellseite: dieselben Bausteine wie beim Drain
 (process/drain_safety.py): Sensorverlust, Plausibilitaet, Fortschrittsfenster,
@@ -101,6 +117,21 @@ TARGET_TANK_ROUTING: dict[int, tuple[str, int]] = {
 TRANSFER_PUMP_NAME = "transfer_pump"
 TRANSFER_PUMP_GPIO = 26
 
+# Alle dokumentierten Ventile (Valve 0 bis 6), die VOR dem Oeffnen des Zielventils geschlossen werden:
+# (Aktorname, Schluessel in gpio_config.OUTPUTS). Die Aktornamen entsprechen denen der anderen Prozesse
+# und des Dashboards (drain_valve_0, supply_valve_6, valve_1 ...), die GPIO-Nummern kommen aus
+# gpio_config.OUTPUTS. Drain steht bewusst an erster Stelle. Valve 7 bis 9 sind nicht dokumentiert/genutzt
+# und werden nicht beruehrt; Pumpen und Contactoren gehoeren nie in diese Liste.
+PRE_TRANSFER_CLOSE_VALVES: tuple[tuple[str, str], ...] = (
+    ("drain_valve_0", "valve_0_drain"),
+    ("valve_1", "valve_1"),
+    ("valve_2", "valve_2"),
+    ("valve_3", "valve_3"),
+    ("valve_4", "valve_4"),
+    ("valve_5", "valve_5"),
+    ("supply_valve_6", "test_supply_valve_6"),
+)
+
 CRITICAL_PUMP_OFF_MESSAGE = (
     "KRITISCH: Die Transferpumpe konnte nicht abgeschaltet werden. Ohne Contactor-Rueckmeldung ist "
     "NICHT bestaetigt, dass die Pumpe steht. Physischen NOT-AUS BETAETIGEN. Das Zielventil wurde "
@@ -121,6 +152,10 @@ class TransferPhase:
     ERROR = "ERROR"
 
 
+class ValveCloseError(RuntimeError):
+    """Vorab-Schliessen der dokumentierten Ventile fehlgeschlagen: Transfer faehrt nicht an."""
+
+
 @dataclass(frozen=True)
 class TransferRequest:
     """Bedienerfreigabe. Alle Felder werden strikt geprueft (kein Cast, kein bool als Zahl)."""
@@ -139,6 +174,7 @@ class TransferPlan:
     valve_name: str
     valve_pin: int
     pump_pin: int
+    close_valves: tuple[tuple[str, int], ...]
     target_level_liters: float
     evaluation_status: str
     not_evaluated_acknowledged: bool
@@ -176,7 +212,38 @@ def resolve_routing(tank: Any) -> tuple[str, int, int] | str:
     # Drain und Valve 6 duerfen nie Zielventil sein.
     if valve_pin in (OUTPUTS.get("valve_0_drain"), OUTPUTS.get("test_supply_valve_6")):
         return "Zielventil kollidiert mit Drain-/Versorgungsventil."
+    # Ohne eindeutige, gueltige Pins aller dokumentierten Ventile laesst sich nicht vorab schliessen.
+    closing = resolve_valve_closing(valve_name, valve_pin, TRANSFER_PUMP_GPIO)
+    if isinstance(closing, str):
+        return closing
     return valve_name, valve_pin, TRANSFER_PUMP_GPIO
+
+
+def resolve_valve_closing(valve_name: str, valve_pin: int, pump_pin: int) -> tuple[tuple[str, int], ...] | str:
+    """(Aktorname, GPIO) aller vor dem Transfer zu schliessenden Ventile oder eine Fehlermeldung (fail-closed).
+
+    Rein rechnerisch, beruehrt keine Hardware. Jeder GPIO muss eine einfache Ganzzahl im BCM-Bereich 0 bis 27
+    sein (kein bool) und darf weder doppelt vorkommen noch der Transferpumpe gehoeren. Das Zielventil muss in
+    der Liste stehen."""
+    closing: list[tuple[str, int]] = []
+    used_pins = {pump_pin}
+    for actuator_name, config_key in PRE_TRANSFER_CLOSE_VALVES:
+        pin = OUTPUTS.get(config_key)
+        if type(pin) is not int or not 0 <= pin <= 27:
+            return (
+                f"Ventil {actuator_name} laesst sich nicht vorab schliessen: ungueltiger GPIO in gpio_config "
+                f"({config_key}={pin!r})."
+            )
+        if pin in used_pins:
+            return (
+                f"Ventil {actuator_name} laesst sich nicht vorab schliessen: GPIO {pin} ist doppelt belegt "
+                f"({config_key}, Pumpe oder anderes Ventil)."
+            )
+        used_pins.add(pin)
+        closing.append((actuator_name, pin))
+    if (valve_name, valve_pin) not in closing:
+        return f"Zielventil {valve_name} (GPIO {valve_pin}) fehlt in der Liste der vorab zu schliessenden Ventile."
+    return tuple(closing)
 
 
 def validate_transfer_release(
@@ -471,6 +538,10 @@ class TargetTransferController(BackgroundHardwareProcess):
             return routing
         valve_name, valve_pin, pump_pin = routing
 
+        close_valves = resolve_valve_closing(valve_name, valve_pin, pump_pin)
+        if isinstance(close_valves, str):  # bereits ueber resolve_routing geprueft, doppelt haelt besser
+            return close_valves
+
         try:
             limits = DrainSafetyLimits.from_settings(settings, start_liters)
         except DrainSafetySettingsError as exc:
@@ -482,6 +553,7 @@ class TargetTransferController(BackgroundHardwareProcess):
             valve_name=valve_name,
             valve_pin=valve_pin,
             pump_pin=pump_pin,
+            close_valves=close_valves,
             target_level_liters=float(request.target_level_liters),
             evaluation_status=evaluation_status,
             not_evaluated_acknowledged=request.not_evaluated_acknowledged is True,
@@ -577,7 +649,20 @@ class TargetTransferController(BackgroundHardwareProcess):
             self._actuators = actuators
             # Pumpe zuerst registriert: auch ein safe_shutdown_all() schaltet sie vor dem Ventil ab.
             pump = actuators.add(name=TRANSFER_PUMP_NAME, gpio_pin=plan.pump_pin)
-            valve = actuators.add(name=plan.valve_name, gpio_pin=plan.valve_pin)
+
+            # Danach ALLE dokumentierten Ventile (Valve 0 bis 6) geschlossen anlegen und pruefen, bevor
+            # irgendetwas geoeffnet oder gefoerdert wird. Bei einem Fehler wurden Zielventil und Pumpe
+            # nie eingeschaltet; der Cleanup im finally gibt alles frei.
+            try:
+                valves = self._close_all_valves(actuators, plan)
+            except ValveCloseError as exc:
+                self._fail(
+                    "valve_close_failed",
+                    f"Transfer abgebrochen: nicht alle Ventile konnten geschlossen werden ({exc}). "
+                    "Weder Zielventil noch Pumpe wurden eingeschaltet.",
+                )
+                return
+            valve = valves[plan.valve_name]
 
             self._mqtt_publisher = MqttPublisher()
             self._logger = ProcessRunLogger(process_name="target_transfer")
@@ -591,8 +676,36 @@ class TargetTransferController(BackgroundHardwareProcess):
         finally:
             self._safe_shutdown_and_publish(actuators, pump, valve)
 
+    def _close_all_valves(self, actuators, plan: TransferPlan) -> dict[str, Any]:
+        """Legt alle dokumentierten Ventile als Ausgang im inaktiven (geschlossenen) Zustand an und prueft
+        den gemeldeten Zustand. Rueckgabe: Aktorname -> Ausgang (enthaelt das Zielventil). Jeder Fehler,
+        jedes nicht als inaktiv bestaetigte Ventil und jeder nicht lesbare Zustand wirft ValveCloseError.
+        Keine physische Rueckmeldung: bestaetigt ist nur der Software-Zustand."""
+        outputs: dict[str, Any] = {}
+        for name, pin in plan.close_valves:
+            try:
+                outputs[name] = actuators.add(name=name, gpio_pin=pin)
+            except Exception as exc:
+                raise ValveCloseError(f"{name} (GPIO {pin}): {type(exc).__name__}: {exc}") from exc
+            print(f"[CLOSE] {name} | GPIO {pin}")
+
+        try:
+            status = actuators.status_payload()
+        except Exception as exc:
+            raise ValveCloseError(f"Ventilzustand nicht lesbar ({type(exc).__name__}: {exc})") from exc
+        not_closed = [name for name in outputs if status.get(name) is not False]
+        if not_closed:
+            raise ValveCloseError(f"nicht als geschlossen bestaetigt: {', '.join(not_closed)}")
+        return outputs
+
     def _transfer(self, settings, plan: TransferPlan, actuators, pump, valve) -> None:
         limits = plan.limits
+
+        # Alle Ventile sind bereits geschlossen (_close_all_valves). Ein Stop, der waehrenddessen kam,
+        # verhindert das Oeffnen des Zielventils ganz.
+        if self._stop_event.is_set():
+            self._mark_stopped("stopped_before_valve_open")
+            return
 
         # Start: Ventil auf -> Settle -> Stop erneut pruefen -> Sensor erneut pruefen -> Pumpe an.
         valve.on()
@@ -796,8 +909,8 @@ class TargetTransferController(BackgroundHardwareProcess):
                 "process_state": process_state,
                 "actuators": {
                     "transfer_pump": actuator_status.get(TRANSFER_PUMP_NAME, False),
-                    "drain_valve_0": actuator_status.get("drain_valve_0"),
-                    **{name: actuator_status.get(name) for name, _pin in TARGET_TANK_ROUTING.values()},
+                    # Alle vorab geschlossenen Ventile (Drain, Valve 1 bis 5, Supply 6); None = nicht angelegt.
+                    **{name: actuator_status.get(name) for name, _config_key in PRE_TRANSFER_CLOSE_VALVES},
                 },
                 "target_transfer": status,
                 "error": status.get("last_error"),
@@ -834,12 +947,15 @@ class TargetTransferController(BackgroundHardwareProcess):
 
 __all__ = [
     "MIXER_SENSOR_RELIABLE_MIN_LITERS",
+    "PRE_TRANSFER_CLOSE_VALVES",
     "TARGET_TANK_NOMINAL_LITERS",
     "TARGET_TANK_ROUTING",
     "TargetTransferController",
     "TransferPhase",
     "TransferPlan",
     "TransferRequest",
+    "ValveCloseError",
     "resolve_routing",
+    "resolve_valve_closing",
     "validate_transfer_release",
 ]

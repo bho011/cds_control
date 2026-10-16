@@ -15,6 +15,7 @@ import asyncio
 import csv
 import json
 import math
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -28,11 +29,13 @@ from process.fill_and_measure import FillAndMeasureController
 from process.manual_drain_jog import ManualDrainJog
 from process.pump_prime import PumpPrimeController
 from process.target_transfer import (
+    PRE_TRANSFER_CLOSE_VALVES,
     TARGET_TANK_ROUTING,
     TargetTransferController,
     TransferPhase,
     TransferRequest,
     resolve_routing,
+    resolve_valve_closing,
     validate_transfer_release,
 )
 from process.tank_cleaning import TankCleaningController
@@ -76,6 +79,10 @@ class Rig:
         self.close_calls = 0
         self.published: list[dict] = []
         self.log_rows: list[dict] = []
+        # Fehlerinjektion fuer das Anlegen (= Schliessen) von Ausgaengen.
+        self.fail_add: set[str] = set()  # add() wirft fuer diese Aktornamen
+        self.preactivated: set[str] = set()  # Ausgang meldet nach dem Anlegen faelschlich "aktiv"
+        self.add_hook = None  # wird nach jedem erfolgreichen add(name) aufgerufen
         rig = self
 
         class FakeManager:
@@ -84,9 +91,17 @@ class Rig:
                 self.actuators: dict[str, FakeActuator] = {}
 
             def add(self, name: str, gpio_pin: int) -> FakeActuator:
+                if name in rig.fail_add:
+                    raise RuntimeError(f"GPIO {gpio_pin} nicht verfuegbar")
                 actuator = FakeActuator(name, gpio_pin, rig.events)
+                if name in rig.preactivated:
+                    actuator.is_on = True
                 self.actuators[name] = actuator
                 rig.registered[name] = actuator
+                # Ein angelegter Ausgang ist (real wie hier) im inaktiven Zustand = geschlossen.
+                rig.events.append((name, "add"))
+                if rig.add_hook is not None:
+                    rig.add_hook(name)
                 return actuator
 
             def status_payload(self) -> dict[str, bool]:
@@ -343,9 +358,16 @@ def test_drain_and_valve_6_are_never_target_valves() -> None:
 
 
 def test_changed_gpio_config_blocks_instead_of_switching_another_valve(monkeypatch) -> None:
-    monkeypatch.setitem(OUTPUTS, "valve_1", 6)
+    monkeypatch.setitem(OUTPUTS, "valve_1", 4)  # gueltig und eindeutig, aber nicht die bestaetigte Zuordnung
     assert isinstance(resolve_routing(1), str)
     assert resolve_routing(2) == ("valve_2", 19, 26)
+
+
+def test_gpio_config_collision_with_another_valve_blocks_every_tank(monkeypatch) -> None:
+    # Valve 1 auf dem Pin von Valve 6: weder Tank 1 (weicht ab) noch die uebrigen Tanks lassen sich
+    # noch vorab schliessen, weil zwei Ventile denselben Pin haetten. Alles blockiert, keine Hardware.
+    monkeypatch.setitem(OUTPUTS, "valve_1", 6)
+    assert all(isinstance(resolve_routing(tank), str) for tank in (1, 2, 3, 4))
 
 
 def test_changed_pump_gpio_blocks_all_tanks(monkeypatch) -> None:
@@ -371,11 +393,12 @@ def test_successful_transfer_opens_exactly_one_target_valve_then_pump(rig, tank)
     assert status["target_tank"] == tank
 
     valve_name, valve_pin = TARGET_TANK_ROUTING[tank]
-    # Nur Pumpe und genau das eine Zielventil existieren; kein Drain, kein Valve 6.
-    assert sorted(rig.registered) == sorted(["transfer_pump", valve_name])
+    # Pumpe plus alle dokumentierten Ventile (Valve 0 bis 6) wurden angelegt; das Zielventil mit dem
+    # bestaetigten Pin. Eingeschaltet wurden aber nur Zielventil und Pumpe, sonst nichts.
+    assert sorted(rig.registered) == sorted(["transfer_pump", *(name for name, _key in PRE_TRANSFER_CLOSE_VALVES)])
     assert rig.registered["transfer_pump"].pin == 26
     assert rig.registered[valve_name].pin == valve_pin
-    assert "drain_valve_0" not in rig.registered and "supply_valve_6" not in rig.registered
+    assert [name for name, action in rig.events if action == "on"] == [valve_name, "transfer_pump"]
 
     assert rig.order((valve_name, "on"), ("transfer_pump", "on"))
     assert rig.first((valve_name, "on")) < rig.first(("transfer_pump", "on"))
@@ -429,6 +452,220 @@ def test_not_evaluated_run_records_acknowledgement_not_quality(rig) -> None:
     release = json.loads(rig.log_rows[0]["extra"]["transfer_release"])
     assert release["evaluation_status"] == "NOT_EVALUATED"
     assert release["not_evaluated_acknowledged"] is True
+
+
+# --- Vorab-Schliessen aller dokumentierten Ventile ---------------------------------------------
+
+EXPECTED_CLOSE_VALVES = {
+    "drain_valve_0": 21,
+    "valve_1": 27,
+    "valve_2": 19,
+    "valve_3": 24,
+    "valve_4": 25,
+    "valve_5": 5,
+    "supply_valve_6": 6,
+}
+CLOSE_VALVE_NAMES = [name for name, _key in PRE_TRANSFER_CLOSE_VALVES]
+
+
+def _switched_on(rig) -> list[str]:
+    return [name for name, action in rig.events if action == "on"]
+
+
+def test_close_list_is_exactly_the_documented_valve_0_to_6_with_gpio_config_pins() -> None:
+    closing = resolve_valve_closing("valve_1", 27, 26)
+
+    assert closing == tuple(EXPECTED_CLOSE_VALVES.items())  # inkl. Reihenfolge: Drain zuerst
+    # Die Pins kommen aus gpio_config.OUTPUTS.
+    assert {name: OUTPUTS[key] for name, key in PRE_TRANSFER_CLOSE_VALVES} == EXPECTED_CLOSE_VALVES
+
+
+def test_close_list_excludes_pumps_contactors_and_undocumented_valves() -> None:
+    closing_pins = {pin for _name, pin in resolve_valve_closing("valve_1", 27, 26)}
+    never_touched = (
+        "transfer_pump", "mixer_refill_pump", "sensor_circulation_pump", "mixing_circulation_pump",
+        "contactor_0", "contactor_5", "valve_7", "valve_8", "valve_9",
+    )
+
+    assert closing_pins.isdisjoint({OUTPUTS[key] for key in never_touched})
+    # Jedes Zielventil steht in der Liste.
+    assert {name for name, _pin in TARGET_TANK_ROUTING.values()} <= set(CLOSE_VALVE_NAMES)
+
+
+def test_target_valve_missing_from_close_list_blocks() -> None:
+    assert isinstance(resolve_valve_closing("valve_7", 16, 26), str)
+    assert isinstance(resolve_valve_closing("valve_1", 99, 26), str)
+
+
+@pytest.mark.parametrize("tank", [1, 2, 3, 4])
+def test_all_documented_valves_are_closed_before_target_valve_opens_and_pump_starts(rig, tank) -> None:
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+
+    _run_to_end(controller, _settings(), _request(tank=tank))
+
+    assert controller.get_status()["phase"] == TransferPhase.FINISHED
+    valve_name, _pin = TARGET_TANK_ROUTING[tank]
+    # Pumpe zuerst angelegt, danach alle sieben Ventile in fester Reihenfolge (Drain zuerst).
+    assert [name for name, action in rig.events if action == "add"] == ["transfer_pump", *CLOSE_VALVE_NAMES]
+    # Jedes Ventil ist geschlossen angelegt, bevor das Zielventil oeffnet und bevor die Pumpe foerdert.
+    for name in CLOSE_VALVE_NAMES:
+        assert rig.first((name, "add")) < rig.first((valve_name, "on")), name
+        assert rig.first((name, "add")) < rig.first(("transfer_pump", "on")), name
+    assert rig.first((valve_name, "on")) < rig.first(("transfer_pump", "on"))
+    # Kein anderes Ventil wurde je eingeschaltet; am Ende ist alles aus.
+    assert _switched_on(rig) == [valve_name, "transfer_pump"]
+    assert all(not actuator.is_on for actuator in rig.registered.values())
+
+
+def test_status_and_log_report_every_closed_valve_from_the_first_row(rig) -> None:
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+
+    _run_to_end(controller, _settings(), _request(tank=3))
+
+    all_closed = {"transfer_pump": False, **{name: False for name in CLOSE_VALVE_NAMES}}
+    assert rig.published[0]["process_state"] == "TARGET_TRANSFER_RELEASED"
+    assert rig.published[0]["actuators"] == all_closed
+    assert rig.log_rows[0]["state"] == "TARGET_TRANSFER_RELEASED"
+    assert rig.log_rows[0]["actuator_status"] == all_closed
+
+
+def test_journal_lists_every_closed_valve_in_order(rig, capsys) -> None:
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+
+    _run_to_end(controller, _settings(), _request())
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("[CLOSE]")]
+    assert lines == [f"[CLOSE] {name} | GPIO {pin}" for name, pin in EXPECTED_CLOSE_VALVES.items()]
+
+
+@pytest.mark.parametrize("failing", CLOSE_VALVE_NAMES)
+def test_valve_that_cannot_be_closed_aborts_before_anything_is_switched_on(rig, failing) -> None:
+    rig.fail_add.add(failing)
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+
+    result = _run_to_end(controller, _settings(), _request(tank=2))  # valve_2 ist hier auch Zielventil
+
+    assert result["success"] is True  # der Start wurde angenommen, der Thread bricht ab
+    status = controller.get_status()
+    assert status["phase"] == TransferPhase.ERROR and status["result"] == "ERROR"
+    assert status["stop_reason"] == "valve_close_failed"
+    assert failing in status["last_error"] and "Weder Zielventil noch Pumpe" in status["last_error"]
+    assert status["fault_latched"] is True
+    # Weder Zielventil noch Pumpe noch ein anderes Ventil wurde eingeschaltet; alles wird freigegeben.
+    assert _switched_on(rig) == []
+    assert rig.shutdown_calls == 1 and rig.close_calls == 1
+    assert all(not actuator.is_on for actuator in rig.registered.values())
+    assert not controller.is_run_used("run-1")  # Freigabe des Mischlaufs bleibt erhalten
+    blocked = controller.start(_settings(), _request(tank=2), "OK")
+    assert blocked["success"] is False and "quittiert" in blocked["message"]
+
+
+@pytest.mark.parametrize("reported_active", ["drain_valve_0", "valve_3", "supply_valve_6"])
+def test_valve_not_confirmed_inactive_aborts_before_anything_is_switched_on(rig, reported_active) -> None:
+    rig.preactivated.add(reported_active)
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+
+    _run_to_end(controller, _settings(), _request(tank=4))
+
+    status = controller.get_status()
+    assert status["phase"] == TransferPhase.ERROR
+    assert status["stop_reason"] == "valve_close_failed"
+    assert "nicht als geschlossen bestaetigt" in status["last_error"] and reported_active in status["last_error"]
+    assert _switched_on(rig) == []
+    assert rig.shutdown_calls == 1 and rig.close_calls == 1
+
+
+def test_unreadable_valve_state_aborts_before_anything_is_switched_on(rig) -> None:
+    original = rig.FakeManager.status_payload
+    calls = {"n": 0}
+
+    def flaky(self):
+        calls["n"] += 1
+        if calls["n"] == 1:  # erster Aufruf = Pruefung der geschlossenen Ventile
+            raise RuntimeError("status boom")
+        return original(self)
+
+    rig.FakeManager.status_payload = flaky
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+
+    _run_to_end(controller, _settings(), _request())
+
+    status = controller.get_status()
+    assert status["phase"] == TransferPhase.ERROR
+    assert status["stop_reason"] == "valve_close_failed"
+    assert "nicht lesbar" in status["last_error"]
+    assert _switched_on(rig) == []
+
+
+@pytest.mark.parametrize("how", ["request_stop", "event_only"])
+def test_stop_during_pre_close_never_opens_the_target_valve(rig, how) -> None:
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+
+    def stop_after_last_valve(name: str) -> None:
+        if name == CLOSE_VALVE_NAMES[-1]:  # direkt vor dem Oeffnen des Zielventils
+            if how == "request_stop":
+                controller.request_stop("stopped_by_user")
+            else:
+                controller._stop_event.set()
+
+    rig.add_hook = stop_after_last_valve
+
+    _run_to_end(controller, _settings(), _request())
+
+    assert _switched_on(rig) == []
+    status = controller.get_status()
+    assert status["phase"] == TransferPhase.STOPPED
+    assert status["stop_reason"] == ("stopped_by_user" if how == "request_stop" else "stopped_before_valve_open")
+    assert rig.shutdown_calls == 1 and rig.close_calls == 1
+    assert not controller.is_run_used("run-1")
+
+
+@pytest.mark.parametrize(
+    "key, bad_pin",
+    [
+        ("valve_5", 26),  # Pin der Transferpumpe
+        ("valve_5", 27),  # Pin von Valve 1
+        ("test_supply_valve_6", 21),  # Pin des Drain
+        ("valve_5", True),
+        ("valve_5", "5"),
+        ("valve_5", 5.0),
+        ("valve_5", None),
+        ("valve_5", -1),
+        ("valve_5", 28),
+    ],
+)
+def test_unusable_valve_pins_block_every_tank_before_hardware(rig, monkeypatch, key, bad_pin) -> None:
+    monkeypatch.setitem(OUTPUTS, key, bad_pin)
+    controller, _sensor = _controller([50])
+
+    assert all(isinstance(resolve_routing(tank), str) for tank in (1, 2, 3, 4))
+    result = controller.start(_settings(), _request(), "OK")
+
+    assert result["success"] is False
+    assert rig.manager_instances == 0 and controller._thread is None
+    assert not controller.is_run_used("run-1")
+
+
+def test_missing_valve_in_gpio_config_blocks_every_tank_before_hardware(rig, monkeypatch) -> None:
+    monkeypatch.delitem(OUTPUTS, "valve_5")
+    controller, _sensor = _controller([50])
+
+    assert all(isinstance(resolve_routing(tank), str) for tank in (1, 2, 3, 4))
+    assert controller.start(_settings(), _request(), "OK")["success"] is False
+    assert rig.manager_instances == 0 and controller._thread is None
+
+
+def test_pump_off_failure_keeps_every_other_valve_closed_and_never_switches_them_on(rig) -> None:
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+    _make_pump_fail(rig)
+
+    _run_to_end(controller, _settings(), _request(tank=2))
+
+    assert controller.get_status()["stop_reason"] == "pump_off_failed"
+    assert _switched_on(rig) == ["valve_2", "transfer_pump"]
+    held_open = [name for name, actuator in rig.registered.items() if actuator.is_on]
+    assert sorted(held_open) == ["transfer_pump", "valve_2"]  # nur Pumpe (unbestaetigt) und Zielventil
+    assert not any(action == "off" for name, action in rig.events if name != "transfer_pump")
 
 
 # --- Einmalige Freigabe / blockierter Start -----------------------------------------------
@@ -568,6 +805,26 @@ def test_stop_during_valve_settle_never_starts_pump(rig) -> None:
     status = controller.get_status()
     assert status["phase"] == TransferPhase.STOPPED
     assert status["stop_reason"] == "emergency_stop"
+
+
+def test_pump_starts_only_after_the_valve_settle_time_has_elapsed(rig) -> None:
+    controller, _sensor = _controller(SUCCESS_LEVELS)
+    stamps: dict[str, float] = {}
+    original_add = rig.FakeManager.add
+
+    def add(self, name, gpio_pin):
+        actuator = original_add(self, name, gpio_pin)
+        if name in ("valve_2", "transfer_pump"):
+            actuator.on_hook = lambda name=name: stamps.setdefault(name, time.monotonic())
+        return actuator
+
+    rig.FakeManager.add = add
+
+    _run_to_end(controller, _settings(valve_settle_seconds=0.4), _request(tank=2))
+
+    assert controller.get_status()["phase"] == TransferPhase.FINISHED
+    # Das Zielventil oeffnet zuerst; die Pumpe laeuft erst nach der Settle-Zeit an (Toleranz fuer Timer-Jitter).
+    assert stamps["transfer_pump"] - stamps["valve_2"] >= 0.35
 
 
 def test_stop_between_settle_and_pump_never_starts_pump(rig) -> None:
@@ -1511,7 +1768,8 @@ def test_process_settings_file_validates_and_carries_transfer_safety_values() ->
     assert settings["empty_threshold_liters"] == 0.3
     assert settings["empty_confirm_samples"] == 5
     assert settings["no_drain_progress_warning_seconds"] == 60.0
-    assert settings["valve_settle_seconds"] == 1.0
+    # Der Transfer wartet 3 s zwischen "Ventil auf" und "Pumpe an" (Pumpe nicht gegen ein noch oeffnendes Ventil).
+    assert settings["valve_settle_seconds"] == 3.0
 
 
 # --- Dashboard-Handler und Anzeige ----------------------------------------------------------------
