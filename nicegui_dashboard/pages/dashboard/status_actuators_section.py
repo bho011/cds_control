@@ -1,4 +1,4 @@
-"""System-Status- und Aktoren/Outputs-Panel: Verbindungsstatus-Zeilen + 11 Aktor-Badges."""
+"""System-Status- und Aktoren/Outputs-Panel: Verbindungsstatus-Zeilen + 10 Aktor-Badges."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def build_status_actuators() -> dict[str, Any]:
 
         # Dict key == the process_data key holding that actuator's state -
         # lets refresh_status_actuators() update all of them in one loop
-        # instead of 11 near-identical lines.
+        # instead of 10 near-identical lines.
         actuator_rows = {
             "mixer_refill_pump": create_actuator_row("Mixer Refill"),
             "supply_valve_6": create_actuator_row("Supply V6"),
@@ -48,7 +48,6 @@ def build_status_actuators() -> dict[str, Any]:
             "valve_2": create_actuator_row("Valve 2"),
             "valve_3": create_actuator_row("Valve 3"),
             "valve_4": create_actuator_row("Valve 4"),
-            "valve_5": create_actuator_row("Valve 5"),
         }
 
     return {
