@@ -6,6 +6,7 @@ class DigitalOutput:
         self.name = name
         self.gpio_pin = gpio_pin
         self.is_active = False
+        self._closed = False
 
         self.device = OutputDevice(
             pin=gpio_pin,
@@ -20,11 +21,20 @@ class DigitalOutput:
             self.is_active = True
 
     def off(self):
-        if self.is_active:
-            print(f"[OFF] {self.name} | GPIO {self.gpio_pin}")
-            self.device.off()
-            self.is_active = False
+        # Kein elektrischer Readback: is_active ist nur ein Software-Flag und darf
+        # das Abschalten nie ueberspringen. Das Flag faellt erst nach erfolgreichem
+        # device.off(); eine Ausnahme bleibt erhalten, ein erneuter Versuch ist moeglich.
+        if self._closed:
+            return  # Handle bereits erfolgreich freigegeben
+        print(f"[OFF] {self.name} | GPIO {self.gpio_pin}")
+        self.device.off()
+        self.is_active = False
 
     def close(self):
+        # Schlaegt off() fehl, ist der physische Schaltzustand nicht nachgewiesen:
+        # das Handle wird dann NICHT freigegeben (Ausnahme aus off() geht nach oben).
+        if self._closed:
+            return
         self.off()
         self.device.close()
+        self._closed = True

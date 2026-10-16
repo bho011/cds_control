@@ -109,6 +109,8 @@ class ActuatorManager:
         Schaltet alle Aktoren aus und gibt GPIO-Ressourcen frei.
 
         Gibt eine Fehlerliste zurück, statt Fehler still zu verschlucken.
+        Bei einem Fehler bleibt die globale Hardwaresperre gehalten; ein
+        erneuter Aufruf ist der Retry.
         """
         errors: list[str] = []
         errors.extend(self.safe_shutdown_all())
@@ -120,6 +122,19 @@ class ActuatorManager:
                 message = f"Could not close actuator '{name}': {exc}"
                 errors.append(message)
                 self._record_error(message)
+
+        # Fail-closed: without an electrical readback a failed switch-off or
+        # close leaves the physical state unknown, so the lock must not be
+        # released while any output may still be driven. The outputs stay
+        # registered in self._outputs, so a later close_all() retries them
+        # (already closed ones are no-ops) and releases the lock on success.
+        if errors:
+            if self._lock_file is not None:
+                self._record_error(
+                    "Hardware lock retained: not all actuators were switched off "
+                    "and closed; call close_all() again once the cause is fixed."
+                )
+            return errors
 
         # Release the cross-process hardware lock last, after every GPIO
         # output has actually been switched off and closed. Idempotent:
