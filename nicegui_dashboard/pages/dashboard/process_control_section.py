@@ -152,10 +152,18 @@ def format_dosing_status(dosing: dict[str, Any] | None) -> tuple[str, float, str
     progress = min(1.0, confirmed_ul / target_ul) if target_ul > 0 else 0.0
 
     parts = [f"Dosierung: {_DOSING_PHASE_TEXT.get(phase, phase)}"]
-    pump = dosing.get("current_pump")
-    if pump:
+    # Rundenweise parallele Dosierung: mehrere Pumpen laufen gleichzeitig (active_pumps); current_pump bleibt
+    # als Rueckfall fuer aeltere Statusdaten.
+    active = list(dosing.get("active_pumps") or ([dosing["current_pump"]] if dosing.get("current_pump") else []))
+    if len(active) == 1:
+        pump = active[0]
         role = next((p.get("role") for p in dosing.get("pumps") or [] if p.get("pump") == pump), None)
         parts.append(f"Pumpe {pump} ({role})" if role else f"Pumpe {pump}")
+    elif active:
+        parts.append("Pumpen " + " + ".join(active))
+    in_flight_ul = int(dosing.get("in_flight_ul") or 0)
+    if in_flight_ul > 0:
+        parts.append(f"{in_flight_ul / 1000:.1f} ml in Ausfuehrung")
     parts.append(f"{confirmed_ul / 1000:.1f}/{target_ul / 1000:.1f} ml bestaetigt")
     per_pump = [
         f"{p['pump']} {int(p.get('confirmed_ul') or 0) / 1000:.1f}/{int(p.get('target_ul') or 0) / 1000:.1f}"

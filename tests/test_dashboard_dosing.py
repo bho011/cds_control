@@ -71,6 +71,14 @@ def test_running_shows_active_pump_and_progress():
     assert progress == 7500 / 20000 and error == ""
 
 
+def test_parallel_pumps_and_amount_in_flight_are_shown_without_counting_as_progress():
+    text, progress, error = format_dosing_status(
+        _status(current_pump="P1", active_pumps=["P1", "P2", "P3", "P4"], in_flight_ul=10000)
+    )
+    assert "Pumpen P1 + P2 + P3 + P4" in text and "10.0 ml in Ausfuehrung" in text
+    assert progress == 7500 / 20000 and error == ""  # nur bestaetigte Mengen sind Fortschritt
+
+
 def test_error_shows_reason_and_uncertain_amount_without_counting_it_as_progress():
     text, progress, error = format_dosing_status(
         _status(phase="ERROR", completion_reason="timeout", last_error="PeristalticTimeoutError: x", uncertain_ul=2500)
@@ -149,7 +157,9 @@ def dosing_start(controller, monkeypatch, tmp_path, empty_tank):
     """Rezept mit aktivierter Dosierung, Mapping/Profil/Kalibrierung in tmp_path, Fake-Lauf."""
     _setup(monkeypatch, tmp_path)
     monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
-    controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS, enable_mixing_circulation=True)
+    controller.load_settings = lambda: dict(
+        FULL_PROCESS_SETTINGS, enable_mixing_circulation=True, nutrient_ro_resume_progress=0.5, ec_tolerance_ms_cm=0.1
+    )
     recipe_store.save_recipe_to_slot(
         slot=1,
         recipe=dict(recipe_store.DEFAULT_RECIPE, recipe_name="Dosing", target_ro_water_l=10.0,
@@ -171,6 +181,95 @@ def test_recipe_start_with_dosing_builds_plan_and_shows_dosing_status(dosing_sta
     assert started.wait(2.0)
     dosing = controller.get_status()["dosing"]
     assert dosing["phase"] == DosingPhase.IDLE and dosing["planned_ul"] == _plan(ro_l=10.0).total_ul
+
+
+_DOSING_RUN = RunOptions(sensor_circulation_enabled=True, tank_emptied_confirmed=True)
+
+
+def _assert_blocked_before_anything_starts(controller, started, result, fragment: str) -> None:
+    assert not result["success"] and fragment in result["message"], result
+    assert not started.is_set() and not controller.fill_and_measure.is_running  # kein Thread, kein GPIO
+    assert controller.get_status()["dosing"] is None
+
+
+@pytest.mark.parametrize("override", [{"nutrient_ro_resume_progress": 0}, {"nutrient_ro_resume_progress": -0.1},
+                                      {"nutrient_ro_resume_progress": 1.01}, {"nutrient_ro_resume_progress": True},
+                                      {"nutrient_ro_resume_progress": None}, {"nutrient_ro_resume_progress": "abc"}])
+def test_dosing_start_with_invalid_resume_progress_is_blocked_before_anything_starts(dosing_start, override):
+    controller, started, _release = dosing_start
+    controller.load_settings = lambda: dict(
+        FULL_PROCESS_SETTINGS, enable_mixing_circulation=True, **{"nutrient_ro_resume_progress": 0.5, **override}
+    )
+    _assert_blocked_before_anything_starts(
+        controller, started, controller.start_fill_and_measure("confirmed", run_options=_DOSING_RUN),
+        "nutrient_ro_resume_progress",
+    )
+
+
+def test_dosing_start_without_resume_progress_is_blocked_before_anything_starts(dosing_start):
+    controller, started, _release = dosing_start
+    controller.load_settings = lambda: dict(FULL_PROCESS_SETTINGS, enable_mixing_circulation=True)  # Schluessel fehlt
+    _assert_blocked_before_anything_starts(
+        controller, started, controller.start_fill_and_measure("confirmed", run_options=_DOSING_RUN),
+        "nutrient_ro_resume_progress fehlt oder ist ungueltig",
+    )
+
+
+def _settings_without_ec_tolerance(**overrides):
+    """Prozesseinstellungen OHNE ec_tolerance_ms_cm (auch dann, wenn FULL_PROCESS_SETTINGS den Schluessel je erhaelt)."""
+    settings = {key: value for key, value in FULL_PROCESS_SETTINGS.items() if key != "ec_tolerance_ms_cm"}
+    settings.update(overrides)
+    return settings
+
+
+def test_dosing_start_without_ec_tolerance_is_blocked_before_anything_starts(dosing_start):
+    controller, started, _release = dosing_start
+    controller.load_settings = lambda: _settings_without_ec_tolerance(
+        enable_mixing_circulation=True, nutrient_ro_resume_progress=0.5
+    )
+    assert "ec_tolerance_ms_cm" not in controller.load_settings()
+    _assert_blocked_before_anything_starts(
+        controller, started, controller.start_fill_and_measure("confirmed", run_options=_DOSING_RUN),
+        "EC-Toleranz (ec_tolerance_ms_cm) fehlt",
+    )
+
+
+@pytest.mark.parametrize("bad", [0, -0.1, None, "0.1", float("nan"), float("inf"), True])
+def test_dosing_start_with_invalid_ec_tolerance_is_blocked_before_anything_starts(dosing_start, bad):
+    controller, started, _release = dosing_start
+    controller.load_settings = lambda: dict(
+        FULL_PROCESS_SETTINGS, enable_mixing_circulation=True, nutrient_ro_resume_progress=0.5, ec_tolerance_ms_cm=bad
+    )
+    _assert_blocked_before_anything_starts(
+        controller, started, controller.start_fill_and_measure("confirmed", run_options=_DOSING_RUN),
+        "EC-Toleranz (ec_tolerance_ms_cm) ist ungueltig",
+    )
+
+
+def test_dosing_start_with_valid_resume_progress_and_ec_tolerance_is_accepted(dosing_start):
+    controller, started, _release = dosing_start
+    controller.load_settings = lambda: dict(
+        FULL_PROCESS_SETTINGS, enable_mixing_circulation=True, nutrient_ro_resume_progress=1.0, ec_tolerance_ms_cm=0.1
+    )
+    assert controller.start_fill_and_measure("confirmed", run_options=_DOSING_RUN)["success"]
+    assert started.wait(2.0)
+
+
+@pytest.mark.parametrize("tolerance", [{"ec_tolerance_ms_cm": 0}, {}], ids=["tolerance invalid", "tolerance missing"])
+def test_water_run_does_not_need_dosing_settings(controller, empty_tank, monkeypatch, tmp_path, tolerance):
+    """Ohne Naehrstoffdosierung greift weder die Schwellenpruefung noch die Vorabpruefung der EC-Toleranz
+    (auch nicht bei fehlendem Schluessel): EC wird dort ohnehin nicht bewertet (NOT_EVALUATED)."""
+    monkeypatch.setattr(recipe_store.book_io, "RECIPE_BOOK_PATH", tmp_path / "dashboard_recipes.json")
+    controller.load_settings = lambda: _settings_without_ec_tolerance(**tolerance)  # kein nutrient_ro_resume_progress
+    recipe_store.save_recipe_to_slot(
+        slot=1, recipe=dict(recipe_store.DEFAULT_RECIPE, recipe_name="Wasser", target_ro_water_l=10.0), make_active=True
+    )
+    started, release = _install_blocking_fake_run(controller)
+    try:
+        assert controller.start_fill_and_measure("confirmed", run_options=_DOSING_RUN)["success"]
+        assert started.wait(2.0)
+    finally:
+        _release_and_join(controller, release)
 
 
 def test_start_without_sensor_circulation_is_blocked_with_clear_message_and_enables_nothing(dosing_start):

@@ -109,7 +109,15 @@ off** for all three saved recipes until manually reviewed and set.
 - `maxdelta: 0.1` (EC) / `maxdelta: 0.05` (used elsewhere in the same file
   for pH) is a legacy *tolerance band* around the setpoint (used to decide
   whether a correction is needed at all), not a recipe input field - not
-  applicable to the new dosing model.
+  applicable to the recipe/dosing model. **Update 2026-10-18 (AP-05):** the
+  EC value 0.1 is adopted as the process setting `ec_tolerance_ms_cm`
+  (`config/process_settings.json`, still not a recipe field) as a
+  *provisional historical reference value*, not as a hardware-validated
+  quality tolerance. It is now the acceptance limit of the final EC
+  evaluation (setpoint +/- 0.1 mS/cm, exact decimal comparison, limits
+  included), evaluated only for runs with nutrient dosing; an out-of-tolerance
+  result ends in a controlled error, there is no automatic correction. The pH
+  value 0.05 is not adopted (pH uses the acceptance band `ph_min`/`ph_max`).
 - `global.set("mixertankvol", {...})` / `maxtankvol` (300 l per numbered
   target tank 1-9) describes the separate downstream *target* tanks, not the
   Mixing Tank this task's limits apply to - not relevant here.

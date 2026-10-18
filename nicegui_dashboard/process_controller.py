@@ -67,6 +67,21 @@ PROCESS_SETTINGS_SCHEMA = [
     SettingField("empty_confirm_samples", int, required=False, default=5, min_value=1),
     SettingField("no_drain_progress_warning_seconds", float, required=False, default=60.0, min_value=0.0),
     SettingField("valve_settle_seconds", float, required=False, default=1.0, min_value=0.0),
+    # AP-05: Anteil der bestaetigten Gesamtdosierung (0 < x <= 1), ab dem die RO-Befuellung parallel zur
+    # Dosierung wieder startet; 1.0 = keine Ueberlappung. Kein Wert im Code: der Wert steht nur in
+    # config/process_settings.json. Ein Lauf MIT Naehrstoffdosierung wird ohne gueltigen Wert vor jeder
+    # Hardwareausgabe blockiert (statemachine/start_validation.py). ec_tolerance_ms_cm steht bewusst NICHT
+    # in diesem Schema (ein Schema-Standardwert waere eine Standardtoleranz): Ein Lauf MIT Naehrstoffdosierung
+    # wird ohne gueltigen Schluessel ebenfalls vor jeder Hardwareausgabe blockiert; ein Wasserlauf braucht ihn
+    # nicht (EC dort NOT_EVALUATED).
+    SettingField(
+        "nutrient_ro_resume_progress",
+        float,
+        required=False,
+        default=None,
+        max_value=1.0,
+        validator=lambda value: None if value > 0.0 else "muss groesser als 0 sein",
+    ),
 ]
 
 # Every key here is already read via settings.get(key, default) in

@@ -27,6 +27,7 @@ from domain.recipe.limits import (
     MIXER_EMPTY_VETO_L,
     RO_TANK_CAPACITY_L,
 )
+from statemachine.measurement_evaluation import ec_tolerance_problem
 from statemachine.sensor_reading import (
     _section,
     finite_number,
@@ -35,6 +36,34 @@ from statemachine.sensor_reading import (
 )
 
 _TOLERANCE_L = 1e-6
+
+# Anteil der bestaetigten Gesamtdosierung, ab dem die RO-Befuellung parallel zur Dosierung wieder startet.
+# Steht ausschliesslich in config/process_settings.json (kein Wert im Code); 1.0 = keine Ueberlappung.
+RESUME_PROGRESS_KEY = "nutrient_ro_resume_progress"
+
+
+def nutrient_ro_resume_progress(settings: Any) -> float | None:
+    """Gueltiger Wert (endliche Zahl, 0 < x <= 1; bool/String/None/NaN sind ungueltig) oder None."""
+    value = finite_number(settings.get(RESUME_PROGRESS_KEY)) if isinstance(settings, dict) else None
+    return value if value is not None and 0.0 < value <= 1.0 else None
+
+
+def validate_dosing_run_settings(settings: Any) -> tuple[str, str] | None:
+    """Einstellungen, die nur ein Lauf MIT Naehrstoffdosierung braucht, VOR jeder Hardwareausgabe pruefen.
+    None = ok, sonst (Grund-Code, Meldung). Dieselben Regeln wie die Endbewertung bzw. die Laufzeitpruefung
+    (valid_tolerance, nutrient_ro_resume_progress): ein Fehler soll vor der Dosierung auffallen, nicht danach.
+    Beide Einstellungen sind fuer einen solchen Lauf Pflicht: ein fehlender Schluessel blockiert genauso wie ein
+    ungueltiger Wert (Wasserlaeufe rufen diese Pruefung nicht auf)."""
+    if nutrient_ro_resume_progress(settings) is None:
+        raw = settings.get(RESUME_PROGRESS_KEY) if isinstance(settings, dict) else None
+        return (
+            "resume_progress_invalid",
+            f"{RESUME_PROGRESS_KEY} fehlt oder ist ungueltig (erlaubt: Zahl groesser 0 bis 1, war: {raw!r}).",
+        )
+    problem = ec_tolerance_problem(settings)
+    if problem is not None:
+        return "tolerance_invalid", problem
+    return None
 
 
 def required_ro_liters(target_total_liters: float, mixer_start_liters: float) -> float:

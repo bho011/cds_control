@@ -1,6 +1,6 @@
 # CDS – Konzept für EC-Mischprozess und spätere Korrekturregelung
 
-**Status:** Fachliches Konzept, noch keine Implementierung  
+**Status:** Fachliches Konzept; Teile sind umgesetzt (siehe die Nachträge vom 2026-10-14 und 2026-10-18)\
 **Zweck:** Verbindliche Arbeitsgrundlage für spätere Firmware-, Python-, State-Machine- und Dashboard-Arbeiten  
 **Hinweis:** Vorläufige Prozesswerte müssen bei realen Wasser- und Nährstofftests validiert werden.
 
@@ -38,6 +38,42 @@ Diese Punkte sind nicht verworfen, werden aber im AP2-Umfang weder entwickelt no
 | `NOT_EVALUATED` | Für EC und/oder pH ist **keine** Toleranz konfiguriert; die Größe wird nicht bewertet. Es gibt bewusst keine Standardtoleranz | umgesetzt (`STATUS_NOT_EVALUATED`) | Prozess endet regulär (`FINISHED`), die Sollwerterfüllung gilt aber **nicht** als bestätigt; das Dashboard zeigt „Sollwerterfüllung nicht bestätigt“. Kein Fehler, kein Stopp |
 
 Folge für den Betrieb: Ohne gesetzte `ph_tolerance` erfolgt keine pH-Abschaltung. Die Wirksamkeit der pH-Überwachung hängt davon ab, dass die Toleranz fachlich festgelegt und in den Prozesseinstellungen gesetzt wird (siehe Abschnitt 15, Punkt 7 für EC; für pH analog offen).
+
+---
+
+## Nachtrag 2026-10-18 – Umsetzungsstand AP-05 (parallele Dosierung, überlappende RO-Befüllung, EC-Toleranz)
+
+Dieser Nachtrag ersetzt keinen Abschnitt dieses Dokuments; wo er von den Abschnitten 4, 5, 6 und 14 abweicht, gilt der Nachtrag. Alle genannten Werte sind **vorläufig und nicht hardwarevalidiert**. Umgesetzt ist die Software (hardwarefreie Tests, Branch `feature/ap05-parallel-overlap`); ein beaufsichtigter Hardwaretest ausschließlich mit Wasser steht aus (siehe „Offene Punkte“).
+
+**Parallele Dosierung (Phase 4).**
+
+- Rundenbasiert: Runde *r* ist der *r*-te Chunk jeder Pumpe, die noch Aufträge hat. Alle Chunks einer Runde werden nacheinander gestartet, ohne auf den Abschluss der anderen zu warten (P1 + P3 = Lösung A, P2 + P4 = Lösung B; alle vier Pumpen können gleichzeitig laufen). Die nächste Runde beginnt erst, wenn jede Pumpe der Runde mit `DONE` und anschließendem `IDLE` bestätigt ist. Ein einziger Dosier-Thread bedient den Serial-Client. Die gewichtete Mengenverteilung, die Chunk-Planung und die Grenze von höchstens 10 ml je `DOSE`-Befehl bleiben unverändert.
+- Pumpengruppen: Die Startgruppe (Pumpen mit Aufträgen) muss eine erlaubte Gruppe sein (`{P1,P3}`, `{P2,P4}` oder alle vier), sonst wird der Start vor jeder Hardwareausgabe blockiert. In Folgerunden arbeiten nur Teilmengen weiter (Rückbau der Startgruppe); es kommt nie eine Pumpe hinzu, eine fertige Pumpe wird nie erneut gestartet. Die Regeln für manuelle Paralleltests sind unverändert.
+- Fehlerfall (Pumpenausfall, Firmware-Timeout, Verbindungsabbruch, Stopp, Emergency Stop): `STOPALL` stoppt alle vier Pumpen; alle zu diesem Zeitpunkt gestarteten, nicht bestätigten Chunks gelten als unsicher (obere Schranke), werden nie wiederholt und nie auf eine andere Pumpe übertragen (Abschnitt 2).
+
+**RO-Wiederaufnahme und Nachmischen (Phasen 5 bis 7).**
+
+- Einstellung `nutrient_ro_resume_progress` (vorläufig 0,5; steht nur in `config/process_settings.json`; erlaubt ist eine Zahl größer 0 bis höchstens 1; ein fehlender oder ungültiger Wert blockiert einen Dosierlauf vor jeder Hardwareausgabe). Maßgeblich ist der per `DONE` und `IDLE` bestätigte Anteil der Gesamtmenge. Der Wert 1,0 entspricht dem bisherigen Ablauf ohne Überlappung (RO erst nach vollständiger Dosierung).
+- Bei Erreichen der Schwelle startet die RO-Pumpe nach erneuter Sicherheitsprüfung zusätzlich (Zustand `DOSING_AND_RO_FILL`): neue Messung, nichts unsicher, Pegel nicht unter Phasenbeginn abzüglich erlaubter Drift, gültige Volumenbilanz, ausreichender RO-Vorrat, Dosierung gesund. Die Dosierung läuft weiter; beide Zirkulationen bleiben aktiv. Die RO-Pumpe wird je Lauf höchstens zweimal eingeschaltet (Vorfüllung und eine Wiederaufnahme); eine Nachfülllogik gibt es nicht.
+- Dynamisches Abschaltziel: RO-Sollmenge + bestätigte + noch in Ausführung befindliche Nährstoffmenge (`volume_balance.dynamic_phase_target_l`). Die RO-Pumpe schaltet beim ersten ungefilterten Wert darüber sofort ab (Pumpe zuerst aus) und wird nie wieder eingeschaltet. Dadurch schaltet sie nicht zu früh ab; im ungünstigsten Fall liegt sie um die Menge der gerade laufenden Chunks (höchstens 4 × 10 ml) darüber.
+- Ein erreichtes Zwischenziel ist **kein** erfolgreicher Abschluss. Nachgemischt wird erst, wenn die Dosierung vollständig bestätigt ist (nichts unsicher, nichts in Ausführung) **und** das endgültige Ziel (RO-Sollmenge + gesamte bestätigte Menge) bei ausgeschalteter RO-Pumpe mit den üblichen Bestätigungsmessungen bestätigt wurde (Schlussbilanz). Wird das Ziel nicht erreicht, endet der Lauf kontrolliert in `ERROR`; es wird nicht nachgefüllt.
+- Volumenüberwachung: In jedem Takt wird Mixerstand + noch nicht bestätigte Nährstoffmenge gegen 185 l geprüft. Messfrische (5 s), Plausibilität, RO-Vorrat und der Fortschrittswächter laufen in beiden Teilprozessen weiter; der Fortschrittswächter rechnet das seit der Wiederaufnahme bestätigte Nährstoffvolumen heraus, damit es eine stehende RO-Pumpe nicht verdeckt. Fällt die Dosierung aus, schaltet die State Machine RO und Zirkulationen ab; der Dosierer meldet seinen Abbruch sofort als `STOPPING`, nicht erst nach `STOPALL` und Schließen der Verbindung.
+
+**EC-Toleranz (Abschnitte 6 und 15, Punkt 7).** `ec_tolerance_ms_cm` = 0,10 mS/cm ist als **vorläufiger historischer Referenzwert** aus der bisherigen Node-RED-Steuerung (`EC_config.maxdelta`) in `config/process_settings.json` übernommen, nicht als hardwarevalidierte Qualitätstoleranz. In der alten Steuerung entschied der Wert, ob korrigiert wird; hier ist er die Abnahmegrenze der Endbewertung. Außerhalb der Toleranz endet der Lauf in `ERROR` mit Bedienereingriff; es gibt weder Nachdosierung noch RO-Korrektur noch eine EC-Regelung.
+
+- EC wird nur bei Rezeptläufen mit aktivierter Nährstoffdosierung bewertet. Ein reiner Wasserlauf erhält für EC `NOT_EVALUATED` (Grund `no_nutrient_dosing`): kein Fehler, aber auch keine bestätigte Sollwerterfüllung; die Transferfreigabe verlangt dafür weiterhin die gesonderte Bestätigung. Die pH-Bewertung ist unverändert.
+- Exakter Dezimalvergleich, Grenzen eingeschlossen, keine Zusatztoleranz: bei Soll 1,50 und Toleranz 0,10 sind 1,400, 1,500 und 1,600 innerhalb, 1,399 und 1,601 außerhalb. (Gleitkommazahlen hätten 1,6 − 1,5 als 0,10000000000000009 bewertet.)
+- Eine konfigurierte, aber ungültige Toleranz (0, negativ, `None`, NaN, Text, Wahrheitswert) blockiert einen Dosierlauf vor jeder Hardwareausgabe mit derselben Prüfregel wie die Endbewertung. Fehlt der Schlüssel, ist das bei einem Dosierlauf ebenfalls ein Konfigurationsfehler (Start blockiert, vor jeder Hardwareausgabe); ein reiner Wasserlauf braucht ihn nicht und erhält EC `NOT_EVALUATED`. Eine Standardtoleranz gibt es weiterhin nicht.
+
+**Offene Punkte (bewusst nicht umgesetzt).**
+
+- Die Rezept-Mischzeit `ec_mixing_time_seconds` ist nicht an die Ausführung angebunden. Das Nachmischen dauert `mixing_seconds` aus `config/process_settings.json` (derzeit 30 s; Konzept: vorläufig 60 s).
+- Die EC-Endbewertung beruht auf einer einzelnen Messung. Die Mehrfenster-Stabilitätsmessung aus Abschnitt 5 (drei Prüffenster, Median, Streuung) fehlt. Bei ±0,10 mS/cm sind Fehlalarme möglich (sichere Richtung: Fehler statt falschem OK).
+- Der Temperaturbezug des EC-Messwerts (EC25) ist weiterhin ungeklärt (Abschnitte 5 und 15).
+- Es gibt keine automatische EC-Nachregelung und keine pH-Korrektur.
+- Vor jeder produktiven Nutzung ist ein beaufsichtigter Hardwaretest ausschließlich mit Wasser nötig (gleichzeitiger Betrieb aller vier Motoren, Überlappung, Abschaltverhalten). Ein zusätzliches Software-Gate gibt es nicht; `hardware_execution_enabled` und die vorhandenen Prüfungen bleiben die einzige Freigabe.
+- Bedienvoraussetzung für einen Dosierlauf: Mixing- und Sensorzirkulation müssen aktiv sein. `enable_mixing_circulation` steht in `config/process_settings.json` derzeit auf `false` (hardwarewirksam, wird nicht automatisch umgeschaltet) und muss bewusst auf `true` gesetzt werden; die Sensorzirkulation wird im Startdialog gewählt. Andernfalls blockiert der Start mit einer entsprechenden Meldung.
+- `max_fill_seconds` (derzeit 236 s) begrenzt jede RO-Phase ab ihrem Beginn, also auch die parallel zur Dosierung laufende. Für große Rezepte muss der Wert zur tatsächlichen RO-Förderrate passen.
 
 ---
 
@@ -333,6 +369,8 @@ Die konkrete Toleranz wird noch nicht festgelegt. Sie muss anhand realer Daten b
 - Wiederholbarkeit mehrerer Chargen.
 
 Die Toleranz gehört voraussichtlich in die technische Prozesskonfiguration und nicht zwingend in jedes Rezept.
+
+**Stand 2026-10-18:** Als vorläufiger Startwert ist `ec_tolerance_ms_cm` = 0,10 mS/cm in `config/process_settings.json` gesetzt (historischer Referenzwert aus der bisherigen Steuerung, siehe Nachtrag 2026-10-18). Die Bestimmung aus realen Daten (Liste oben) bleibt offen.
 
 ---
 
@@ -642,7 +680,7 @@ Vor einer produktiven Implementierung klären:
 4. Größe und Dauer eines EC-Messfensters.
 5. Abtastrate und Ausreißerbehandlung.
 6. Zulässige Schwankung zwischen den drei Prüfpunkten.
-7. EC-Toleranzbereich.
+7. EC-Toleranzbereich. (Vorläufig 0,10 mS/cm gesetzt, nicht validiert; siehe Nachtrag 2026-10-18.)
 8. Maximaler RO-Einzelkorrekturschritt.
 9. Konservativer Faktor für die theoretische RO-Korrektur.
 10. Maximale Anzahl und Dauer der Korrekturzyklen.

@@ -1,28 +1,39 @@
 """
-MCU_B-Nährstoffdosierung (AP-05 Schritt 1, Prototyp): führt einen vorhandenen
-``NutrientDosingPlan`` über den vorhandenen ``PeristalticSerialClient`` aus.
+MCU_B-Nährstoffdosierung (AP-05): führt einen vorhandenen ``NutrientDosingPlan``
+über den vorhandenen ``PeristalticSerialClient`` aus.
 
-Bewusst einfach (Prototyp):
+Bewusst einfach:
 
-* Strikt sequenziell: P1, P2, P3, P4 nacheinander, je Pumpe alle Chunks, immer
-  genau EIN DOSE-Befehl gleichzeitig. Die Mengenverteilung A/B und die
-  Chunk-Planung kommen unverändert aus dem Plan.
+* Rundenbasiert parallel: Runde r = r-ter Chunk jeder Pumpe, die noch Chunks hat
+  (``NutrientDosingPlan.iter_rounds()``). Alle Chunks einer Runde werden nacheinander
+  gestartet, OHNE auf den Abschluss der anderen zu warten (P1 + P3 = Lösung A,
+  P2 + P4 = Lösung B; alle vier können gleichzeitig BUSY sein). Die nächste Runde
+  beginnt erst, wenn jede Pumpe der Runde mit DONE UND IDLE bestätigt ist. Genau EIN
+  Thread (der Dosier-Thread) besitzt und bedient den Serial-Client; es gibt keinen
+  Thread je Pumpe, weil alle Befehlsantworten über eine gemeinsame Antwortqueue laufen
+  und parallele ``status()``-/``start_dose()``-Aufrufe den Client desynchronisieren
+  könnten. Die Mengenverteilung A/B und die Chunk-Planung kommen unverändert aus dem Plan.
+* Pumpengruppen: die Startgruppe (Pumpen mit mindestens einem Chunk) muss eine in
+  ``parallel_pump_safety`` erlaubte Gruppe sein, sonst blockiert ``plan_blocking_reasons``
+  vor jeder Hardwareausgabe. In Folgerunden arbeiten nur Pumpen weiter, die noch Aufträge
+  haben; es kommt nie eine Pumpe hinzu und keine fertige Pumpe wird erneut gestartet.
 * Gates: die Basisklassen-Gates (``hardware_execution_enabled`` strikt ``True``,
   aktueller Sensor-Snapshot) sind verpflichtend und werden nicht umgangen. Dazu
   Mapping, bestätigtes Firmwareprofil, Kalibrierung, Port vorhanden, Plan
-  ausführbar (Hash, Controller, Rollen, Profil-ID, Chunk-Grenze, Laufzeit).
+  ausführbar (Hash, Controller, Rollen, Profil-ID, Chunk-Grenze, Laufzeit, Pumpengruppe).
 * Vorläufige Prototypgrenze: höchstens ``NUTRIENT_MAX_DOSE_ML`` (10 ml) je
   DOSE-Befehl, unabhängig von der Plan-Konfiguration (der Plan erlaubt bis 50 ml).
 * Nur Befehle, die mit DONE (Menge passt) UND anschließendem Status IDLE
-  abgeschlossen wurden, zählen als softwareseitig erledigt (``confirmed_ul``).
-  Bei Timeout, Fehler, Desync, Abbruch oder Emergency Stop wird STOPALL gesendet
-  und der Lauf beendet. Ein dabei unklarer Chunk wird NIE wiederholt und in
-  ``uncertain_ul`` ausgewiesen (tatsächlich geförderte Menge unbekannt). Es gibt
+  abgeschlossen wurden, zählen als softwareseitig erledigt (``confirmed_ul``). Gestartete,
+  noch nicht bestätigte Chunks stehen in ``in_flight_ul``. Bei Timeout, Fehler, Desync,
+  Abbruch oder Emergency Stop wird STOPALL gesendet und der Lauf beendet; ALLE dabei noch
+  nicht bestätigten Chunks werden NIE wiederholt oder umverteilt und in ``uncertain_ul``
+  ausgewiesen (tatsächlich geförderte Menge unbekannt, obere Schranke). Es gibt
   keine automatische Wiederaufnahme, und derselbe Plan (``plan_hash``) wird von ``start()``
   nie ein zweites Mal dosiert; eine neue Dosierung gehört zu einem neuen Mischvorgang/Plan.
 * Unterbrechbarkeit: ``PeristalticSerialClient.dose()`` würde bis zu 35 s auf DONE
   warten und STOPALL erzeugt kein DONE. Deshalb wird hier ``start_dose()`` mit einer
-  eigenen Warteschleife (``poll_pump_event``, 0,1 s Takt) verwendet; ein Stopp
+  eigenen Warteschleife (``poll_pump_event``, höchstens 0,1 s je Durchlauf) verwendet; ein Stopp
   (Dashboard-Stop oder Emergency Stop über ``request_stop``) sendet nach dem Start-
   Handshake STOPALL. Wartet ``start_dose()`` noch auf ``OK START``, blockiert der
   Aufrufer bis zur Antwort oder bis ``command_timeout_s`` (5 s); bei ausbleibender Antwort
@@ -43,7 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from domain.recipe.nutrient_plan import NutrientDosingPlan, NutrientPlanError, build_nutrient_dosing_plan
+from domain.recipe.nutrient_plan import DoseChunk, NutrientDosingPlan, NutrientPlanError, build_nutrient_dosing_plan
 from services.peristaltic.calibration import (
     CalibrationValidationError,
     has_volumetric_calibration,
@@ -63,6 +74,7 @@ from services.peristaltic.models import (
     MappingValidationError,
     load_mapping,
 )
+from services.peristaltic.parallel_pump_safety import validate_parallel_pump_selection
 from services.peristaltic.prime import classify_guarded_exception
 from services.peristaltic.safety import SafetyCheckFailed, best_effort_stop_all, ensure_all_idle_before_dose
 from services.peristaltic.serial_client import (
@@ -190,6 +202,10 @@ def plan_blocking_reasons(
                         f"{pump}: geschätzte Laufzeit {estimate_ms:.0f} ms je Chunk überschreitet "
                         f"{limit_ms:.0f} ms ({RUNTIME_LIMIT_FRACTION:.0%} der Firmware-Maximallaufzeit)."
                     )
+
+    # Die Startgruppe (Pumpen mit Aufträgen) muss eine erlaubte Parallelgruppe sein; in Folgerunden
+    # arbeiten nur noch Teilmengen davon weiter (Rückbau der gestarteten Gruppe, siehe _check_round_group).
+    reasons.extend(validate_parallel_pump_selection(CONTROLLER, [t.pump for t in plan.pump_targets if t.chunks_ul]))
     return reasons
 
 
@@ -227,6 +243,7 @@ class PumpProgress:
     chunks_total: int
     chunks_done: int = 0
     confirmed_ul: int = 0
+    in_flight_ul: int = 0  # gestartet, noch nicht per DONE + IDLE bestätigt (höchstens ein Chunk je Pumpe)
     uncertain_ul: int = 0
 
 
@@ -251,9 +268,8 @@ class NutrientDosingController(BackgroundHardwareProcess):
         self._session_id: str | None = None
         self._phase: str = DosingPhase.IDLE
         self._progress: dict[str, PumpProgress] = {}
-        self._current_pump: str | None = None
+        self._round_pumps: list[str] = []  # Pumpen der laufenden (bzw. zuletzt gestarteten) Runde
         self._completion_reason: str | None = None
-        self._chunk_started = False
         # Einmalnutzung je Plan: ein bereits gestarteter Plan (auch abgebrochen/fehlgeschlagen)
         # wird nie erneut dosiert. Nur im Speicher; ein neuer Mischvorgang erzeugt einen neuen Plan.
         self._started_plan_hashes: set[str] = set()
@@ -340,7 +356,7 @@ class NutrientDosingController(BackgroundHardwareProcess):
                 target.pump: PumpProgress(target.pump, target.role, target.target_ul, target.chunk_count)
                 for target in sorted(plan.pump_targets, key=lambda t: _PUMP_ORDER[t.pump])
             }
-            self._current_pump = None
+            self._round_pumps = []
             self._completion_reason = None
             self._phase = DosingPhase.RUNNING
             self._last_message = "Nährstoffdosierung gestartet."
@@ -364,17 +380,23 @@ class NutrientDosingController(BackgroundHardwareProcess):
                     "chunks_total": p.chunks_total,
                     "chunks_done": p.chunks_done,
                     "confirmed_ul": p.confirmed_ul,
+                    "in_flight_ul": p.in_flight_ul,
                     "uncertain_ul": p.uncertain_ul,
                 }
                 for p in self._progress.values()
             ]
+            active_pumps = [p.pump for p in self._progress.values() if p.in_flight_ul > 0]
+            # Alle Mengen stammen aus demselben Lock-Abschnitt: confirmed + in_flight + uncertain
+            # ist zu jedem Zeitpunkt konsistent (ein Chunk wechselt atomar von in_flight zu confirmed).
             return {
                 "is_active": self._thread is not None and self._thread.is_alive(),
                 "phase": self._phase,
                 "session_id": self._session_id,
-                "current_pump": self._current_pump,
+                "current_pump": active_pumps[0] if active_pumps else None,  # Kompatibilitaet; siehe active_pumps
+                "active_pumps": active_pumps,
                 "pumps": progress,
                 "confirmed_ul": sum(p.confirmed_ul for p in self._progress.values()),
+                "in_flight_ul": sum(p.in_flight_ul for p in self._progress.values()),
                 "uncertain_ul": sum(p.uncertain_ul for p in self._progress.values()),
                 "target_ul": sum(p.target_ul for p in self._progress.values()),
                 "completion_reason": self._completion_reason,
@@ -390,47 +412,104 @@ class NutrientDosingController(BackgroundHardwareProcess):
     def _stop_completion_reason(self) -> str:
         return "emergency_stop" if self._stop_reason == "emergency_stop" else "user_abort"
 
-    def _dose_chunk(
+    @staticmethod
+    def _check_round_group(group: frozenset[str], previous: frozenset[str] | None) -> None:
+        """Startgruppe = erlaubte Parallelgruppe; Folgerunden nur als Teilmenge der Vorrunde (es kommt
+        nie eine Pumpe hinzu, eine fertige Pumpe wird nie erneut gestartet)."""
+        if previous is None:
+            problems = validate_parallel_pump_selection(CONTROLLER, sorted(group))
+            if problems:
+                raise SafetyCheckFailed(" ".join(problems))
+        elif not group <= previous:
+            raise SafetyCheckFailed(
+                f"Folgerunde enthält zusätzliche Pumpen {sorted(group - previous)}: "
+                "nur Pumpen mit offenen Aufträgen dürfen weiterarbeiten."
+            )
+
+    def _dose_round(
         self,
         client: PeristalticSerialClient,
-        pump: str,
-        ml: float,
+        chunks: list[DoseChunk],
         wait_timeout_s: float,
-    ) -> float:
-        """Ein DOSE-Befehl bis DONE + IDLE; gibt die gemeldete Menge zurück.
-        Wirft bei jeder Abweichung (nie ein stilles Weitermachen). Der Aufrufer
-        wertet einen Wurf nach dem Start als unklaren Chunk."""
-        client.start_dose(pump, ml)  # Wurf hier: siehe _run (Command/Desync = nichts gefördert)
-        self._chunk_started = True
+        log: Callable[..., None],
+    ) -> None:
+        """Eine Runde: erst ALLE Chunks starten (ohne auf DONE zu warten), dann jede Pumpe bis
+        DONE + IDLE überwachen. Kehrt nur zurück, wenn jeder Chunk der Runde bestätigt ist. Jeder
+        Wurf (auch ein Stopp) führt zu STOPALL; alles, was dann noch nicht bestätigt ist, gilt als
+        unsicher und wird nie wiederholt (nie ein stilles Weitermachen)."""
+        pending: dict[str, tuple[DoseChunk, str, float, float]] = {}  # Pumpe -> (Chunk, Start, t0, Frist)
+        try:
+            for chunk in chunks:
+                if self._stop_event.is_set():
+                    raise _StopRequested()
+                started_at, t0 = _iso_now(), time.monotonic()
+                try:
+                    client.start_dose(chunk.pump, chunk.amount_ml)
+                except (PeristalticCommandError, PeristalticDesyncError):
+                    raise  # Firmware hat abgelehnt bzw. es wurde nichts geschrieben: dieser Chunk lief nie
+                except BaseException:
+                    self._mark_uncertain(chunk.pump, chunk.amount_ul)  # Start unklar: Pumpe läuft evtl.
+                    raise
+                with self._lock:
+                    self._progress[chunk.pump].in_flight_ul += chunk.amount_ul
+                pending[chunk.pump] = (chunk, started_at, t0, time.monotonic() + wait_timeout_s)
 
-        deadline = time.monotonic() + wait_timeout_s
-        reported_ml: float | None = None
-        while reported_ml is None:
-            if self._stop_event.is_set():
-                best_effort_stop_all(client)
-                raise _StopRequested()
-            if time.monotonic() > deadline:
-                best_effort_stop_all(client)
-                raise PeristalticTimeoutError(f"Keine DONE/TIMEOUT-Antwort für {pump} innerhalb von {wait_timeout_s}s.")
-            event = client.poll_pump_event(pump, POLL_INTERVAL_S)
-            if event is None or event.kind is LineKind.RUNNING:
-                continue
-            if event.kind is LineKind.DONE:
-                reported_ml = event.ml if event.ml is not None else -1.0
-            elif event.kind is LineKind.ERR_TIMEOUT:
-                raise PeristalticCommandError(
-                    f"Firmware-Timeout während Dosis auf {pump}: {event.raw!r}",
-                    pump=pump, kind=event.kind, raw=event.raw,
-                )
-            else:
-                raise PeristalticProtocolError(f"Unerwartete Antwort während Dosis auf {pump}: {event.raw!r}")
+            while pending:
+                if self._stop_event.is_set():
+                    raise _StopRequested()
+                for pump in list(pending):
+                    chunk, started_at, t0, deadline = pending[pump]
+                    if time.monotonic() > deadline:
+                        raise PeristalticTimeoutError(
+                            f"Keine DONE/TIMEOUT-Antwort für {pump} innerhalb von {wait_timeout_s}s."
+                        )
+                    event = client.poll_pump_event(pump, POLL_INTERVAL_S / len(pending))
+                    if event is None or event.kind is LineKind.RUNNING:
+                        continue
+                    if event.kind is LineKind.ERR_TIMEOUT:
+                        raise PeristalticCommandError(
+                            f"Firmware-Timeout während Dosis auf {pump}: {event.raw!r}",
+                            pump=pump, kind=event.kind, raw=event.raw,
+                        )
+                    if event.kind is not LineKind.DONE:
+                        raise PeristalticProtocolError(f"Unerwartete Antwort während Dosis auf {pump}: {event.raw!r}")
+                    self._confirm_chunk(client, chunk, event.ml if event.ml is not None else -1.0, started_at, t0, log)
+                    del pending[pump]
+        except BaseException:
+            with self._lock:
+                # Der Abbruch ist sofort sichtbar (die State Machine schaltet die RO-Pumpe ab), nicht erst
+                # nach STOPALL und close() - beides kann bei totem Link mehrere Sekunden dauern.
+                self._phase = DosingPhase.STOPPING
+            best_effort_stop_all(client)
+            self._in_flight_to_uncertain()
+            raise
 
-        if abs(reported_ml - ml) > DONE_ML_TOLERANCE:
-            raise SafetyCheckFailed(f"{pump}: DONE meldet {reported_ml} ml, angefordert {ml} ml.")
+    def _confirm_chunk(
+        self,
+        client: PeristalticSerialClient,
+        chunk: DoseChunk,
+        reported_ml: float,
+        started_at: str,
+        t0: float,
+        log: Callable[..., None],
+    ) -> None:
+        """DONE-Menge prüfen, dann STATUS: nur DIESE Pumpe muss IDLE sein (die übrigen der Runde laufen
+        parallel weiter). Erst danach wechselt der Chunk atomar von in_flight zu confirmed."""
+        pump = chunk.pump
+        if abs(reported_ml - chunk.amount_ml) > DONE_ML_TOLERANCE:
+            raise SafetyCheckFailed(f"{pump}: DONE meldet {reported_ml} ml, angefordert {chunk.amount_ml} ml.")
         status = client.status()
         if status.get(pump) != "IDLE":
             raise SafetyCheckFailed(f"{pump} ist nach DONE nicht IDLE (STATUS: {status}).")
-        return reported_ml
+        with self._lock:
+            progress = self._progress[pump]
+            progress.in_flight_ul -= chunk.amount_ul
+            progress.chunks_done += 1
+            progress.confirmed_ul += chunk.amount_ul
+            confirmed_ul = progress.confirmed_ul
+        log(pump, requested_ml=chunk.amount_ml, started_at=started_at, finished_at=_iso_now(),
+            elapsed_seconds=time.monotonic() - t0, result="DONE", firmware_reported_ml=reported_ml,
+            completed_ml=confirmed_ul / 1000.0)
 
     def _run(self, settings: dict[str, Any]) -> None:
         plan, entry, profile = self._plan, self._entry, self._profile
@@ -458,34 +537,18 @@ class NutrientDosingController(BackgroundHardwareProcess):
             client.open()
             ensure_all_idle_before_dose(client)
 
-            for target in sorted(plan.pump_targets, key=lambda t: _PUMP_ORDER[t.pump]):
-                pump = target.pump
+            previous_group: frozenset[str] | None = None
+            for round_chunks in plan.iter_rounds():
+                chunks = sorted(round_chunks, key=lambda c: _PUMP_ORDER[c.pump])
+                group = frozenset(c.pump for c in chunks)
+                self._check_round_group(group, previous_group)
+                previous_group = group
+                if self._stop_event.is_set():
+                    raise _StopRequested()
                 with self._lock:
-                    self._current_pump = pump
-                    self._last_message = f"Dosierung läuft: {CONTROLLER}/{pump} ({target.role})."
-                for chunk in target.chunks():
-                    if self._stop_event.is_set():
-                        raise _StopRequested()
-                    started_at, t0 = _iso_now(), time.monotonic()
-                    self._chunk_started = False
-                    try:
-                        reported = self._dose_chunk(client, pump, chunk.amount_ml, wait_timeout_s)
-                    except (PeristalticCommandError, PeristalticDesyncError):
-                        # Firmware hat abgelehnt bzw. nichts wurde geschrieben, solange der
-                        # Befehl nicht gestartet war; danach (Timeout-ERR etc.) ist es unklar.
-                        if self._chunk_started:
-                            self._mark_uncertain(pump, chunk.amount_ul)
-                        raise
-                    except BaseException:
-                        self._mark_uncertain(pump, chunk.amount_ul)
-                        raise
-                    with self._lock:
-                        progress = self._progress[pump]
-                        progress.chunks_done += 1
-                        progress.confirmed_ul += chunk.amount_ul
-                    log(pump, requested_ml=chunk.amount_ml, started_at=started_at, finished_at=_iso_now(),
-                        elapsed_seconds=time.monotonic() - t0, result="DONE", firmware_reported_ml=reported,
-                        completed_ml=self._progress[pump].confirmed_ul / 1000.0)
+                    self._round_pumps = [c.pump for c in chunks]
+                    self._last_message = f"Dosierung läuft: {CONTROLLER} {' + '.join(self._round_pumps)}."
+                self._dose_round(client, chunks, wait_timeout_s, log)
         except _StopRequested:
             reason = self._stop_completion_reason()
         except _GUARDED_EXCEPTIONS as exc:
@@ -499,15 +562,14 @@ class NutrientDosingController(BackgroundHardwareProcess):
                 best_effort_stop_all(client)
                 client.close()
             with self._lock:
-                pump_now = self._current_pump
-            if reason != "completed" and pump_now is not None:
+                aborted_pumps = list(self._round_pumps) if reason != "completed" else []
+            for pump_now in aborted_pumps:  # eine Abbruchzeile je Pumpe der unterbrochenen Runde
                 log(pump_now, requested_ml=None, finished_at=_iso_now(), result="ABORTED" if error is None else "FAILED",
                     error_code=None if error is None else error.split(":", 1)[0], notes=error,
                     completion_reason=reason)
             logger.close({"command": "nutrient_dose", "controller": CONTROLLER, "plan_hash": plan.plan_hash,
                           "completion_reason": reason})
             with self._lock:
-                self._current_pump = None
                 self._completion_reason = reason
                 if reason == "completed":
                     self._phase = DosingPhase.FINISHED
@@ -525,3 +587,12 @@ class NutrientDosingController(BackgroundHardwareProcess):
     def _mark_uncertain(self, pump: str, amount_ul: int) -> None:
         with self._lock:
             self._progress[pump].uncertain_ul += amount_ul
+
+    def _in_flight_to_uncertain(self) -> None:
+        """Alles, was gestartet, aber nicht per DONE + IDLE bestätigt wurde, gilt als unsicher (obere
+        Schranke: die tatsächlich geförderte Menge ist unbekannt). Nichts davon wird je bestätigt,
+        wiederholt oder auf eine andere Pumpe umverteilt."""
+        with self._lock:
+            for progress in self._progress.values():
+                progress.uncertain_ul += progress.in_flight_ul
+                progress.in_flight_ul = 0

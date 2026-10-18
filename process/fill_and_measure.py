@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Callable
 
-from statemachine.start_validation import validate_fill_start
+from statemachine.start_validation import validate_dosing_run_settings, validate_fill_start
 
 from .background_process import BackgroundHardwareProcess
 
@@ -187,6 +187,11 @@ class FillAndMeasureController(BackgroundHardwareProcess):
             return None
         if settings.get("enable_mixing_circulation") is not True or settings.get("enable_sensor_circulation") is not True:
             return "Start blockiert: Mit Naehrstoffdosierung muessen Mixing- und Sensorzirkulation aktiviert sein."
+        # Einstellungen, die nur ein Dosierlauf braucht (Wiederanlauf-Schwelle, EC-Toleranz): fehlend oder
+        # ungueltig blockiert den Start VOR Thread, GPIO und jeder Dosierung - nicht erst nach der Charge.
+        problem = validate_dosing_run_settings(settings)
+        if problem is not None:
+            return f"Start blockiert: {problem[1]}"
         if self._dosing_controller.is_active():
             return "Start blockiert: Naehrstoffdosierung laeuft noch."
         reason = self._dosing_controller.check_plan(plan)

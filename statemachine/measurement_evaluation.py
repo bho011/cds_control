@@ -9,15 +9,31 @@ bewertet (NOT_EVALUATED, keine bestaetigte Sollwerterfuellung); ist sie gesetzt,
 Istwert, ist das Ergebnis ein Fehler (fail-closed). Es wird nichts korrigiert
 oder geraten.
 
+Ausnahme: Bei Laeufen MIT Naehrstoffdosierung ist ein fehlender Schluessel
+ec_tolerance_ms_cm ein Konfigurationsfehler und blockiert den Start vor jeder
+Hardwareausgabe (ec_tolerance_problem, aufgerufen von
+start_validation.validate_dosing_run_settings). Diese Endbewertung selbst bleibt
+unveraendert.
+
 Fuer pH gibt es alternativ ein Zulaessigkeitsband (ph_min/ph_max, Grenzen
 eingeschlossen, beide Pflicht, nicht zusammen mit ph_tolerance): der Rezept-
 Sollwert ist dann nur Anzeige. EC bleibt unveraendert Soll +/- Toleranz.
+
+EC wird nur bei Rezeptlaeufen MIT Naehrstoffdosierung bewertet
+(recipe_run_config_snapshot.nutrient_dosing_enabled): ein reiner Wasserlauf kann
+den EC-Sollwert nicht erreichen und bekommt fuer EC NOT_EVALUATED (kein Fehler,
+aber auch keine bestaetigte Sollwerterfuellung). pH ist davon nicht betroffen.
+
+Der Toleranzvergleich ist ein exakter Dezimalvergleich (Decimal(repr(x))): so
+gilt Soll 1.5, Ist 1.6, Toleranz 0.1 als innerhalb, obwohl abs(1.6 - 1.5) in
+Gleitkommazahlen 0.10000000000000009 ergibt. Es gibt keine Zusatztoleranz.
 
 Die einzigen festen Grenzen sind physikalisch: EC >= 0 und 0 <= pH <= 14.
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from statemachine.sensor_reading import _section, finite_number
@@ -27,10 +43,35 @@ PH_PHYSICAL_MAX = 14.0
 
 PH_MIN_KEY = "ph_min"
 PH_MAX_KEY = "ph_max"
+EC_TOLERANCE_KEY = "ec_tolerance_ms_cm"
 
 STATUS_NOT_EVALUATED = "NOT_EVALUATED"
 STATUS_OK = "OK"
 STATUS_FAILED = "FAILED"
+
+REASON_NO_DOSING = "no_nutrient_dosing"
+
+
+def valid_tolerance(value: Any) -> float | None:
+    """Konfigurierte Toleranz: echte endliche Zahl groesser 0 (bool, String, None, NaN/Inf und <= 0 sind
+    ungueltig), sonst None. Einzige Pruefregel fuer die Endbewertung UND die Vorabpruefung beim Start."""
+    tolerance = finite_number(value)
+    return tolerance if tolerance is not None and tolerance > 0.0 else None
+
+
+def ec_tolerance_problem(settings: Any) -> str | None:
+    """Meldung, wenn die EC-Toleranz fehlt oder ungueltig ist, sonst None. Nur Laeufe MIT Naehrstoffdosierung rufen
+    die Pruefung auf (start_validation.validate_dosing_run_settings): dort ist ein fehlender Schluessel ein
+    Konfigurationsfehler, und der Lauf scheitert vor jeder Hardwareausgabe statt erst nach der Dosierung.
+    Wasserlaeufe pruefen die Toleranz nie; fuer sie bleibt EC NOT_EVALUATED."""
+    if not isinstance(settings, dict) or EC_TOLERANCE_KEY not in settings:
+        return f"EC-Toleranz ({EC_TOLERANCE_KEY}) fehlt (Pflicht fuer Laeufe mit Naehrstoffdosierung)."
+    if valid_tolerance(settings[EC_TOLERANCE_KEY]) is None:
+        return (
+            f"EC-Toleranz ({EC_TOLERANCE_KEY}) ist ungueltig "
+            f"(erlaubt: Zahl groesser 0, war: {settings[EC_TOLERANCE_KEY]!r})."
+        )
+    return None
 
 
 def overall_status(ok: bool, details: dict[str, Any]) -> str:
@@ -133,8 +174,14 @@ def _evaluate(settings: Any, sensor_snapshot: Any) -> tuple[bool, str | None, st
             details[name] = {"status": STATUS_NOT_EVALUATED}
             continue
 
-        tolerance = finite_number(settings[tolerance_key])
-        if tolerance is None or tolerance <= 0.0:
+        if name == "EC" and run_snapshot.get("nutrient_dosing_enabled") is not True:
+            # Reiner Wasserlauf: der EC-Sollwert ist ohne Naehrstoffe unerreichbar. Keine Bewertung und kein
+            # Fehler, aber auch keine bestaetigte Sollwerterfuellung (Gesamtstatus NOT_EVALUATED).
+            details[name] = {"status": STATUS_NOT_EVALUATED, "reason": REASON_NO_DOSING}
+            continue
+
+        tolerance = valid_tolerance(settings[tolerance_key])
+        if tolerance is None:
             return False, f"{name}-Toleranz ({tolerance_key}) ist ungueltig.", "tolerance_invalid", details
 
         target = finite_number(run_snapshot.get(target_key))
@@ -150,13 +197,16 @@ def _evaluate(settings: Any, sensor_snapshot: Any) -> tuple[bool, str | None, st
                 details,
             )
 
-        deviation = actual - target
+        # Exakter Dezimalvergleich: repr(float) ist die kuerzeste Dezimaldarstellung, die den Wert eindeutig
+        # bestimmt, also genau das, was geschrieben bzw. gemessen wurde (Grenzen sind eingeschlossen).
+        difference = Decimal(repr(actual)) - Decimal(repr(target))
+        deviation = float(difference)
         entry = {
             "target": target,
             "actual": actual,
             "tolerance": tolerance,
             "deviation": deviation,
-            "status": "ok" if abs(deviation) <= tolerance else "out_of_tolerance",
+            "status": "ok" if abs(difference) <= Decimal(repr(tolerance)) else "out_of_tolerance",
         }
         details[name] = entry
         if entry["status"] != "ok":

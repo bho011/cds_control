@@ -45,6 +45,11 @@ RO_TANK_CAPACITY_L = 1300.0
 # operator confirmation.
 MIXER_EMPTY_VETO_L = 0.3
 
+# Unterhalb dieser Mixer-Menge ist der Fuellstandssensor nicht belastbar (Kalibrierung nur ab 10 L). Einzige Quelle:
+# AP-08-Transferstart und AP-05-Dosierstart pruefen dagegen. KEIN Trockenlaufschutz: ein hardwareseitig sicherer
+# Mindestfuellstand fuer die Zirkulationspumpen ist nicht validiert.
+MIXER_SENSOR_RELIABLE_MIN_LITERS = 10.0
+
 # Legacy Node-RED "EC_config.maxvol3" (RO/dilution correction) - a static cap
 # on any *future* runtime RO correction (not a stored recipe value - see
 # compute_max_possible_ro_correction_l in calculations.py and

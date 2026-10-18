@@ -233,3 +233,45 @@ def test_broken_copy_wrong_type_is_rejected():
 
     with pytest.raises(SettingsValidationError):
         validate_settings(broken, PROCESS_SETTINGS_SCHEMA, "config/process_settings.json (broken copy)")
+
+# --- AP-05: nutrient_ro_resume_progress (Wiederanlauf-Schwelle der RO-Befuellung) -----------------------------
+
+
+def _real_process_settings() -> dict:
+    with (REPO_ROOT / "config/process_settings.json").open(encoding="utf-8") as file:
+        return json.load(file)
+
+
+def test_real_process_settings_carry_the_resume_progress_and_the_ec_tolerance():
+    from nicegui_dashboard.process_controller import PROCESS_SETTINGS_SCHEMA
+
+    settings = validate_settings(_real_process_settings(), PROCESS_SETTINGS_SCHEMA, "config/process_settings.json")
+    assert settings["nutrient_ro_resume_progress"] == 0.5  # vorlaeufig, nicht hardwarevalidiert
+    assert settings["ec_tolerance_ms_cm"] == 0.1  # vorlaeufiger historischer Referenzwert
+
+
+@pytest.mark.parametrize("bad", [0, 0.0, -0.1, 1.01, 2, True, None, "abc", float("nan"), float("inf")])
+def test_invalid_resume_progress_is_rejected_by_the_schema(bad):
+    from nicegui_dashboard.process_controller import PROCESS_SETTINGS_SCHEMA
+
+    broken = dict(_real_process_settings(), nutrient_ro_resume_progress=bad)
+    with pytest.raises(SettingsValidationError, match="nutrient_ro_resume_progress"):
+        validate_settings(broken, PROCESS_SETTINGS_SCHEMA, "config/process_settings.json (broken copy)")
+
+
+@pytest.mark.parametrize("good", [0.5, 1, 1.0, 0.01, 0.9999])
+def test_valid_resume_progress_passes_the_schema(good):
+    from nicegui_dashboard.process_controller import PROCESS_SETTINGS_SCHEMA
+
+    settings = dict(_real_process_settings(), nutrient_ro_resume_progress=good)
+    assert validate_settings(settings, PROCESS_SETTINGS_SCHEMA, "x")["nutrient_ro_resume_progress"] == float(good)
+
+
+def test_a_missing_resume_progress_is_not_replaced_by_a_default_in_code():
+    from nicegui_dashboard.process_controller import PROCESS_SETTINGS_SCHEMA
+
+    settings = _real_process_settings()
+    del settings["nutrient_ro_resume_progress"]
+    # Der Wert steht nur in config/process_settings.json: ohne ihn bleibt es None (ein Dosierlauf wird dann
+    # vor jeder Hardwareausgabe blockiert, siehe tests/test_ec_tolerance.py), ein Wasserlauf braucht ihn nicht.
+    assert validate_settings(settings, PROCESS_SETTINGS_SCHEMA, "x")["nutrient_ro_resume_progress"] is None

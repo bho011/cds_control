@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 import pytest
-from fake_mcu import AutoCompletingFakeMcu, FakeMcu, FakeSerialPort, make_client_factory
+from fake_mcu import AutoCompletingFakeMcu, FakeMcu, FakeSerialPort, make_client_factory, wait_until
 from process import nutrient_dosing
 from process.nutrient_dosing import NUTRIENT_MAX_DOSE_ML, DosingPhase, NutrientDosingController
 from domain.recipe.models import RunConfigSnapshot, RunOptions, StoredRecipe
@@ -57,11 +57,14 @@ def _setup(monkeypatch, tmp_path: Path, *, max_runtime_ms: int = 30000, calibrat
     return str(port)
 
 
-def _plan(*, ro_l: float = 10.0, ml_per_100_l: float = 200.0, max_chunk_ml: float = 4.0, **overrides):
-    """10 l x 200 ml/100 l = 20 ml gesamt, je Pumpe 5 ml, Chunks <= max_chunk_ml."""
+def _plan(
+    *, ro_l: float = 10.0, ml_per_100_l: float = 200.0, max_chunk_ml: float = 4.0, a_percent: float = 50.0, **overrides
+):
+    """10 l x 200 ml/100 l = 20 ml gesamt, je Pumpe 5 ml (2 Chunks zu 2,5 ml, also 2 Runden mit allen
+    vier Pumpen), Chunks <= max_chunk_ml. ``a_percent`` verschiebt das A/B-Verhaeltnis (ungleiche Chunk-Zahlen)."""
     recipe = StoredRecipe(
         slot=1, recipe_name="Test", target_ro_water_l=ro_l, target_ec_ms_cm=1.5, ec_mixing_time_seconds=300,
-        nutrients_ml_per_100_l=ml_per_100_l, nutrient_a_percent=50.0, ec_adjustment_factor=1.0,
+        nutrients_ml_per_100_l=ml_per_100_l, nutrient_a_percent=a_percent, ec_adjustment_factor=1.0,
         nutrient_dosing_enabled=True,
     )
     snapshot = RunConfigSnapshot.build(recipe, {"max_mixer_liters": 185.0}, RunOptions())
@@ -123,10 +126,15 @@ class _WrongAmountMcu(AutoCompletingFakeMcu):
         return [lines[0], f"DONE {line.split()[1]} 0.500"] if line.startswith("DOSE ") else lines
 
 
+def _first_round_ul(plan) -> int:
+    """Summe der ersten Chunks aller Pumpen = alles, was nach dem Start der ersten Runde in Ausfuehrung ist."""
+    return sum(target.chunks_ul[0] for target in plan.pump_targets)
+
+
 # --- Erfolg und Reihenfolge ------------------------------------------------------------------
 
 
-def test_full_run_is_sequential_in_pump_order_and_counts_confirmed(tmp_path, monkeypatch):
+def test_full_run_dispatches_by_rounds_and_counts_confirmed(tmp_path, monkeypatch):
     _setup(monkeypatch, tmp_path)
     plan = _plan()
     port = FakeSerialPort(AutoCompletingFakeMcu())
@@ -137,13 +145,13 @@ def test_full_run_is_sequential_in_pump_order_and_counts_confirmed(tmp_path, mon
 
     doses = _doses(port)
     pumps_in_order = [line.split()[1] for line in doses]
-    assert pumps_in_order == sorted(pumps_in_order)  # P1.. dann P2.. dann P3.. dann P4
-    assert set(pumps_in_order) == {"P1", "P2", "P3", "P4"}
+    # Runde 1 und Runde 2, je P1, P2, P3, P4 (P1+P3 = Loesung A, P2+P4 = Loesung B)
+    assert pumps_in_order == ["P1", "P2", "P3", "P4"] * 2
     assert all(float(line.split()[2]) <= NUTRIENT_MAX_DOSE_ML for line in doses)
     status = controller.get_status()
     assert status["phase"] == DosingPhase.FINISHED and status["completion_reason"] == "completed"
     assert status["confirmed_ul"] == plan.total_ul == status["target_ul"]
-    assert status["uncertain_ul"] == 0
+    assert status["uncertain_ul"] == 0 and status["in_flight_ul"] == 0 and status["active_pumps"] == []
     assert port.written_lines[-1] == "STOPALL" and not port.is_open
 
 
@@ -210,21 +218,21 @@ def test_uncalibrated_pump_is_blocked(tmp_path, monkeypatch):
 # --- Fehlerpfade: stoppen, nie wiederholen -------------------------------------------------------
 
 
-def test_firmware_timeout_stops_run_without_retry_and_marks_chunk_uncertain(tmp_path, monkeypatch):
+def test_firmware_timeout_stops_run_without_retry_and_marks_unconfirmed_chunks_uncertain(tmp_path, monkeypatch):
     _setup(monkeypatch, tmp_path)
     plan = _plan()
-    port = FakeSerialPort(_TimeoutOnNthDose(3))
+    port = FakeSerialPort(_TimeoutOnNthDose(3))  # die dritte Pumpe (P3) der ersten Runde meldet ERR TIMEOUT
     controller = _controller(tmp_path, port)
     controller.start(SETTINGS, plan)
     _wait(controller)
 
-    assert len(_doses(port)) == 3  # kein Wiederholen, keine weiteren Pumpen
+    assert len(_doses(port)) == 4  # nur die erste Runde; kein Wiederholen, keine zweite Runde
     status = controller.get_status()
     assert status["phase"] == DosingPhase.ERROR and status["completion_reason"] == "timeout"
-    p1, p2 = plan.pump_targets[0], plan.pump_targets[1]
-    assert len(p1.chunks_ul) == 2  # Dosis 1+2 = P1, Dosis 3 = erster P2-Chunk
-    assert status["confirmed_ul"] == p1.target_ul
-    assert status["uncertain_ul"] == p2.chunks_ul[0]
+    # Jeder Chunk der ersten Runde ist entweder bestaetigt oder unsicher - nichts geht verloren oder doppelt.
+    assert status["confirmed_ul"] + status["uncertain_ul"] == _first_round_ul(plan)
+    assert status["uncertain_ul"] >= plan.pump_target("P3").chunks_ul[0]
+    assert status["in_flight_ul"] == 0
     assert port.written_lines.count("STOPALL") >= 2
 
 
@@ -242,30 +250,31 @@ def test_firmware_refusal_is_not_counted_uncertain(tmp_path, monkeypatch):
 
 def test_done_with_wrong_amount_is_an_error_and_not_confirmed(tmp_path, monkeypatch):
     _setup(monkeypatch, tmp_path)
+    plan = _plan()
     port = FakeSerialPort(_WrongAmountMcu())
     controller = _controller(tmp_path, port)
-    controller.start(SETTINGS, _plan())
+    controller.start(SETTINGS, plan)
     _wait(controller)
     status = controller.get_status()
     assert status["completion_reason"] == "safety_check_failed"
-    assert status["confirmed_ul"] == 0 and status["uncertain_ul"] > 0
-    assert len(_doses(port)) == 1
+    # Die erste falsche DONE-Meldung bricht ab: nichts bestaetigt, alle vier gestarteten Chunks unsicher.
+    assert status["confirmed_ul"] == 0 and status["uncertain_ul"] == _first_round_ul(plan)
+    assert len(_doses(port)) == 4
 
 
 def test_connection_loss_stops_run(tmp_path, monkeypatch):
     _setup(monkeypatch, tmp_path)
+    plan = _plan()
     port = FakeSerialPort(FakeMcu())  # DONE kommt nie
     controller = _controller(tmp_path, port)
-    controller.start(SETTINGS, _plan())
-    deadline = time.monotonic() + 3
-    while not _doses(port) and time.monotonic() < deadline:
-        time.sleep(0.01)
+    controller.start(SETTINGS, plan)
+    assert wait_until(lambda: len(_doses(port)) == 4, 3)  # alle vier der ersten Runde laufen
     port.simulate_disconnect()
     _wait(controller)
     status = controller.get_status()
     assert status["completion_reason"] == "connection_error" and status["phase"] == DosingPhase.ERROR
-    assert status["confirmed_ul"] == 0 and status["uncertain_ul"] > 0
-    assert len(_doses(port)) == 1
+    assert status["confirmed_ul"] == 0 and status["uncertain_ul"] == _first_round_ul(plan)
+    assert len(_doses(port)) == 4
 
 
 # --- Stop / Emergency Stop unterbricht einen laufenden Befehl --------------------------------------
@@ -274,25 +283,24 @@ def test_connection_loss_stops_run(tmp_path, monkeypatch):
 @pytest.mark.parametrize("reason,expected", [("stopped_by_user", "user_abort"), ("emergency_stop", "emergency_stop")])
 def test_stop_interrupts_running_dose_with_stopall(tmp_path, monkeypatch, reason, expected):
     _setup(monkeypatch, tmp_path)
-    mcu = FakeMcu()  # DOSE startet, DONE kommt nie: Befehl läuft "für immer"
+    plan = _plan()
+    mcu = FakeMcu()  # DOSE startet, DONE kommt nie: Befehle laufen "für immer"
     port = FakeSerialPort(mcu)
     controller = _controller(tmp_path, port)
-    controller.start(SETTINGS, _plan())
-    deadline = time.monotonic() + 3
-    while not _doses(port) and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert mcu.busy["P1"]
+    controller.start(SETTINGS, plan)
+    assert wait_until(lambda: len(_doses(port)) == 4, 3)
+    assert all(mcu.busy[pump] for pump in ("P1", "P2", "P3", "P4"))  # alle vier laufen gleichzeitig
 
     t0 = time.monotonic()
     controller.request_stop(reason=reason)
     _wait(controller, timeout=3.0)
 
     assert time.monotonic() - t0 < 2.0  # deutlich unter den 35 s DONE-Wartezeit
-    assert not mcu.busy["P1"]  # STOPALL wurde wirklich gesendet und wirkt
+    assert not any(mcu.busy.values())  # STOPALL wurde wirklich gesendet und stoppt ALLE Pumpen
     status = controller.get_status()
     assert status["phase"] == DosingPhase.ABORTED and status["completion_reason"] == expected
-    assert status["confirmed_ul"] == 0 and status["uncertain_ul"] > 0
-    assert len(_doses(port)) == 1
+    assert status["confirmed_ul"] == 0 and status["uncertain_ul"] == _first_round_ul(plan)
+    assert len(_doses(port)) == 4
 
 
 # --- Einmalnutzung je Plan ---------------------------------------------------------------------

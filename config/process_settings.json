@@ -17,6 +17,8 @@
   "enable_sensor_circulation": false,
   "hardware_execution_enabled": true,
   "required_confirmation_text": "confirmed",
+  "nutrient_ro_resume_progress": 0.5,
+  "ec_tolerance_ms_cm": 0.1,
   "ph_min": 5.0,
   "ph_max": 8.9,
   "transfer_pump_liters_per_minute": 16.0,

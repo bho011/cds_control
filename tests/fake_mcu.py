@@ -14,7 +14,9 @@ test_peristaltic_*.py-Dateien importiert.
 from __future__ import annotations
 
 import queue
-from typing import Iterable
+import threading
+import time
+from typing import Callable, Iterable
 
 
 class FakeMcu:
@@ -122,11 +124,14 @@ class FakeSerialPort:
         self._raise_on_read: Exception | None = None
         self._raise_on_write: Exception | None = None
         self._boot_lines_delivered = False
+        # Welche Threads haben geschrieben? (Nachweis: genau ein Thread bedient den Client.)
+        self.write_thread_ids: set[int] = set()
 
     def write(self, data: bytes) -> int:
         if self._raise_on_write is not None:
             raise self._raise_on_write
 
+        self.write_thread_ids.add(threading.get_ident())
         text = data.decode("ascii").strip()
         self.written_lines.append(text)
 
@@ -195,6 +200,72 @@ class AutoCompletingFakeMcu(FakeMcu):
             pump_token = parts[1].split(" ", 1)[0]
             lines.extend(self.complete_dose(pump_token))
         return lines
+
+
+class ManualCompletionMcu(FakeMcu):
+    """FakeMcu fuer Paralleltests: DONE bzw. TIMEOUT loest der TEST je Pumpe selbst aus (finish()/fail()),
+    nie von selbst. So bestimmt der Test, welche Pumpe wann fertig wird (unterschiedliche
+    Fertigstellungszeiten). Protokolliert die Reihenfolge von START/DONE/TIMEOUT/STOPALL und die groesste
+    Zahl gleichzeitig BUSY-er Pumpen (``max_busy``): der Nachweis, dass Pumpen tatsaechlich ueberlappen.
+    Der FakeSerialPort wird mit attach() verbunden, damit die Antwortzeilen eingespeist werden koennen."""
+
+    def __init__(self, pumps: tuple[str, ...] = ("P1", "P2", "P3", "P4"), boot_banner: bool = True) -> None:
+        super().__init__(pumps, boot_banner)
+        self._guard = threading.Lock()
+        self._port: "FakeSerialPort | None" = None
+        self.events: list[tuple[str, str]] = []  # ("START"|"DONE"|"TIMEOUT"|"STOPALL", Pumpe oder "")
+        self.max_busy = 0
+
+    def attach(self, port: "FakeSerialPort") -> "ManualCompletionMcu":
+        self._port = port
+        return self
+
+    def handle_command(self, line: str) -> list[str]:
+        with self._guard:
+            lines = super().handle_command(line)
+            parts = line.split()
+            command = parts[0].upper() if parts else ""
+            if command == "DOSE" and lines and lines[0].startswith("OK START"):
+                self.events.append(("START", parts[1]))
+                self.max_busy = max(self.max_busy, sum(self.busy.values()))
+            elif command == "STOPALL":
+                self.events.append(("STOPALL", ""))
+            return lines
+
+    def busy_pumps(self) -> list[str]:
+        with self._guard:
+            return [pump for pump in self.pumps if self.busy[pump]]
+
+    def started(self) -> list[str]:
+        """Pumpen in der Reihenfolge ihrer (akzeptierten) DOSE-Befehle."""
+        with self._guard:
+            return [pump for kind, pump in self.events if kind == "START"]
+
+    def finish(self, pump: str) -> None:
+        """Die laufende Dosis dieser Pumpe endet erfolgreich (DONE, Pumpe wieder IDLE)."""
+        with self._guard:
+            lines = self.complete_dose(pump)
+            self.events.append(("DONE", pump))
+        for text in lines:
+            self._port.inject_line(text)
+
+    def fail(self, pump: str) -> None:
+        """Der Firmware-Watchdog der Pumpe loest aus: ERR Pn TIMEOUT, Pumpe zwangsgestoppt."""
+        with self._guard:
+            lines = self.timeout_dose(pump)
+            self.events.append(("TIMEOUT", pump))
+        for text in lines:
+            self._port.inject_line(text)
+
+
+def wait_until(condition: Callable[[], bool], timeout: float = 5.0, interval: float = 0.005) -> bool:
+    """Wartet (echte Zeit, kurzes Polling) bis condition() wahr ist; False bei Zeitueberschreitung."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(interval)
+    return bool(condition())
 
 
 def make_client_factory(port: FakeSerialPort):

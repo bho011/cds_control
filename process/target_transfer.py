@@ -86,6 +86,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
+from domain.recipe.limits import MIXER_SENSOR_RELIABLE_MIN_LITERS
 from gpio_config import OUTPUTS
 from statemachine.measurement_evaluation import STATUS_NOT_EVALUATED, STATUS_OK
 from statemachine.sensor_reading import finite_number
@@ -139,8 +140,7 @@ CRITICAL_PUMP_OFF_MESSAGE = (
 )
 
 # Unterhalb dieser Mixer-Menge ist der Fuellstandssensor nicht belastbar
-# (gleiche Aussage wie statemachine/start_validation.py).
-MIXER_SENSOR_RELIABLE_MIN_LITERS = 10.0
+# (Konstante in domain/recipe/limits.py, gemeinsam mit dem AP-05-Dosierstart).
 
 
 class TransferPhase:

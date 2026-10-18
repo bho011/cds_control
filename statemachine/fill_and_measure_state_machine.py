@@ -4,21 +4,30 @@ from enum import Enum, auto
 from typing import Any, Callable
 
 from domain.recipe.volume_balance import (
+    UL_PER_L,
     VolumeModelError,
+    VolumeReason,
     VolumeState,
     dynamic_phase_target_l,
     evaluate_final_volume,
+    evaluate_ro_resume,
     evaluate_volume_state,
     prefill_phase_target_l,
     ul_to_ml,
 )
+from domain.recipe.limits import MIXER_SENSOR_RELIABLE_MIN_LITERS
 from process.nutrient_dosing import DosingPhase
 from process.watchdog import FillWatchdog
 from services.sensor_stamp import Stamp, is_newer, read_stamp
 
 from .measurement_evaluation import evaluate_final_values, overall_status
 from .sensor_reading import filtered_mixer_liters, mixer_liters_from_snapshot, ro_liters_from_snapshot
-from .start_validation import validate_fill_runtime, validate_fill_start_with_reason
+from .start_validation import (
+    nutrient_ro_resume_progress,
+    validate_dosing_run_settings,
+    validate_fill_runtime,
+    validate_fill_start_with_reason,
+)
 
 # Maximum time without a NEW measurement (different MQTT message with a
 # strictly later bridge timestamp) before a recipe run is aborted: before the
@@ -27,6 +36,11 @@ from .start_validation import validate_fill_runtime, validate_fill_start_with_re
 # unusable (nicegui_dashboard/cds_controller.py, max_age_seconds=5.0). Not
 # hardware-validated.
 MEASUREMENT_WAIT_TIMEOUT_S = 5.0
+
+# Die RO-Pumpe wird in einem Lauf hoechstens zweimal eingeschaltet: Vorfuellung und eine Wiederaufnahme
+# (parallel zur Dosierung oder, ohne Ueberlappung, nach deren Ende). Es gibt nie ein drittes Einschalten und
+# keine stille Nachfuelllogik: Wird das Endvolumen nicht erreicht, endet der Lauf kontrolliert im Fehler.
+MAX_RO_ON_COUNT = 2
 
 # validate_fill_runtime reason code -> stop_reason during the run
 _RUNTIME_STOP_REASONS = {
@@ -49,6 +63,7 @@ class FillAndMeasureState(Enum):
     SENSOR_STABILIZE = auto()
     DOSING_START = auto()
     DOSING_RUNNING = auto()
+    DOSING_AND_RO_FILL = auto()
     POST_MIX = auto()
     MEASURE_VALUES = auto()
     FINISHED = auto()
@@ -119,12 +134,17 @@ class FillAndMeasureStateMachine:
         self.last_added_liters: float | None = None
         self.stop_reason: str | None = None
 
-        # AP-05 Schritt 2 (nur Rezeptlauf): Mischablauf mit Naehrstoffdosierung.
-        # RO-Vorfuellung -> Zirkulation -> Dosierung (MCU_B, eigener Controller,
-        # strikt sequenziell, RO-Pumpe aus) -> RO-Fuellung bis RO-Soll + bestaetigte
-        # Menge -> Nachmischen. ``dosing`` ist die Schnittstelle des
-        # NutrientDosingController (start/get_status/request_stop). Ohne Plan mit
-        # Dosierarbeit bleibt der bisherige Ablauf unveraendert.
+        # AP-05 (nur Rezeptlauf): Mischablauf mit Naehrstoffdosierung.
+        # RO-Vorfuellung -> Zirkulation -> Dosierung (MCU_B, eigener Controller, rundenweise
+        # parallel; RO-Pumpe zunaechst aus). Sobald der bestaetigte Anteil die Schwelle
+        # nutrient_ro_resume_progress erreicht, startet die RO-Pumpe PARALLEL zur Dosierung
+        # erneut (DOSING_AND_RO_FILL, genau eine Wiederaufnahme) und schaltet bei RO-Soll +
+        # bestaetigter + in Ausfuehrung befindlicher Menge sofort ab. Nachmischen erst, wenn die
+        # Dosierung vollstaendig bestaetigt UND das endgueltige Ziel (RO-Soll + gesamte bestaetigte
+        # Menge) bei ausgeschalteter RO-Pumpe bestaetigt ist. Schwelle 1.0 (oder eine Dosierung, die
+        # vor der Schwelle endet) ergibt den bisherigen Ablauf: zweite RO-Phase erst nach der Dosierung.
+        # ``dosing`` ist die Schnittstelle des NutrientDosingController (start/get_status/request_stop).
+        # Ohne Plan mit Dosierarbeit bleibt der bisherige Ablauf unveraendert.
         self.nutrient_plan = nutrient_plan
         self.dosing = dosing
         self.dosing_enabled = bool(nutrient_plan is not None and getattr(nutrient_plan, "has_dosing_work", False))
@@ -134,6 +154,10 @@ class FillAndMeasureStateMachine:
         self._phase_start_liters: float | None = None
         self._final_confirmed_ul: int | None = None
         self._last_unfiltered_mixer: float | None = None
+        self._ro_on_count = 0  # bisherige Einschaltungen der RO-Pumpe (hoechstens MAX_RO_ON_COUNT)
+        self._ro_resumed = False  # RO wurde PARALLEL zur Dosierung wieder eingeschaltet
+        self._ro_overlap_done = False  # ... und hat ihr Abschaltziel erreicht (aus, nie wieder ein)
+        self._resume_confirmed_ul = 0  # bestaetigte Menge bei der Wiederaufnahme (Basis der RO-Fortschrittspruefung)
 
     def start(self):
         if self.state != FillAndMeasureState.IDLE:
@@ -247,6 +271,9 @@ class FillAndMeasureStateMachine:
         elif self.state == FillAndMeasureState.DOSING_RUNNING:
             self._handle_dosing_running()
 
+        elif self.state == FillAndMeasureState.DOSING_AND_RO_FILL:
+            self._handle_dosing_and_ro_fill()
+
         elif self.state == FillAndMeasureState.POST_MIX:
             self._handle_post_mix()
 
@@ -263,22 +290,39 @@ class FillAndMeasureStateMachine:
         if self.recipe_run and not self._ready_for_pump_start():
             return
 
-        # Check, switch on, check again: error() sets error_message BEFORE it
-        # switches anything off, so a concurrent emergency stop either is seen
-        # here or switches the pump off after our on().
-        if self.error_message is not None:
-            self.safe_shutdown()
-            return
-
-        self.mixer_refill_pump.on()
-
-        if self.error_message is not None:
-            self.safe_shutdown()
+        if not self._switch_ro_on():
             return
 
         self.fill_started_at = self._clock()
         self.target_confirm_count = 0
         self._change_state(FillAndMeasureState.FILL_UNTIL_TARGET)
+
+    def _switch_ro_on(self) -> bool:
+        """Einzige Stelle, die die RO-Pumpe einschaltet (Vorfuellung, Wiederaufnahme parallel zur Dosierung
+        und zweite RO-Phase nach der Dosierung). True = eingeschaltet, False = nicht eingeschaltet und alles
+        aus (Fehler). Hoechstens MAX_RO_ON_COUNT Einschaltungen je Lauf."""
+        if self._ro_on_count >= MAX_RO_ON_COUNT:
+            self.stop_reason = "ro_restart_limit"
+            self.error(
+                f"RO-Pumpe darf in einem Lauf hoechstens {MAX_RO_ON_COUNT}-mal eingeschaltet werden "
+                "(Vorfuellung + eine Wiederaufnahme); es wird nicht nachgefuellt."
+            )
+            return False
+
+        # Check, switch on, check again: error() sets error_message BEFORE it
+        # switches anything off, so a concurrent emergency stop either is seen
+        # here or switches the pump off after our on().
+        if self.error_message is not None:
+            self.safe_shutdown()
+            return False
+
+        self._ro_on_count += 1  # vor on() gezaehlt: auch ein fehlgeschlagener Versuch zaehlt
+        self.mixer_refill_pump.on()
+
+        if self.error_message is not None:
+            self.safe_shutdown()
+            return False
+        return True
 
     def _ready_for_pump_start(self) -> bool:
         """Recipe runs only: True once a NEW measurement passed the complete
@@ -758,6 +802,11 @@ class FillAndMeasureStateMachine:
         if self.mixing_circulation_pump is None or self.sensor_circulation_pump is None:
             self.error("Mit Dosierung muessen beide Zirkulationsaktoren vorhanden sein.")
             return False
+        problem = validate_dosing_run_settings(self.settings)
+        if problem is not None:
+            self.stop_reason = problem[0]
+            self.error(f"Start blockiert: {problem[1]}")
+            return False
         mixing_seconds = self.settings.get("mixing_seconds")
         if isinstance(mixing_seconds, bool) or not isinstance(mixing_seconds, (int, float)) or not 0 <= mixing_seconds < float("inf"):
             self.error("mixing_seconds fehlt oder ist ungueltig.")
@@ -820,7 +869,6 @@ class FillAndMeasureStateMachine:
         evaluation = evaluate_volume_state(
             self.nutrient_plan.volume,
             VolumeState.from_ul(mixer_measured_l=mixer if mixer is not None else -1.0),
-            phase_target_l=self._phase_target_l(),
         )
         if self._error_latched():
             return
@@ -828,9 +876,23 @@ class FillAndMeasureStateMachine:
             self.stop_reason = "volume_check_failed"
             self.error(f"Dosierstart blockiert: {evaluation.message}")
             return
-        if not evaluation.target_reached:
-            self.stop_reason = "prefill_level_not_held"
-            self.error("Dosierstart blockiert: Vorfuellstand nicht (mehr) erreicht.")
+        # Das Vorfuellziel wurde VOR dem Einschalten der Zirkulation mit RO aus durch mehrere frische Messungen
+        # bestaetigt (CONFIRM_TARGET ist der einzige Weg hierher). Mit laufender Sensorzirkulation zeigt der Tank
+        # bewusst weniger an (Wasser im Sensorkreis); der Pegel wird deshalb nicht erneut gegen das Vorfuellziel
+        # verglichen. Die Bestaetigung wird aber ausdruecklich vorausgesetzt (fail-closed).
+        if self.target_confirm_count < int(self.settings.get("target_reached_confirm_samples", 3)):
+            self.stop_reason = "prefill_not_confirmed"
+            self.error("Dosierstart blockiert: Das Vorfuellziel wurde nicht bestaetigt.")
+            return
+        # Untere Sensorzuverlaessigkeitsgrenze. KEIN Trockenlaufschutz: Ein sicherer Mindestfuellstand der
+        # Zirkulationspumpen ist nicht validiert, und die Pumpen laufen schon waehrend der Stabilisierungszeit
+        # (sensor_stabilize_seconds) ohne Pegelpruefung; diese Pruefung kann sie dort nicht schuetzen.
+        if mixer < MIXER_SENSOR_RELIABLE_MIN_LITERS:
+            self.stop_reason = "level_below_sensor_reliable_range"
+            self.error(
+                f"Dosierstart blockiert: Mixerstand {mixer:.2f} L liegt unter {MIXER_SENSOR_RELIABLE_MIN_LITERS:g} L "
+                "(Fuellstandssensor dort nicht belastbar)."
+            )
             return
         if self._dosing_started:
             self.error("Dosierung wurde bereits gestartet; kein zweiter Start.")
@@ -856,78 +918,244 @@ class FillAndMeasureStateMachine:
         print("[DOSING] Nutrient dosing started (RO pump off).")
         self._change_state(FillAndMeasureState.DOSING_RUNNING)
 
-    def _handle_dosing_running(self):
-        """RO-Pumpe bleibt aus. Waehrend der Dosierung laufen Messfrische,
-        Mixer-/RO-Plausibilitaet und die Volumenbilanz weiter."""
+    def _read_dosing_status(self) -> dict[str, Any] | None:
+        """Dosierstatus lesen und auf Gesundheit pruefen. None nach error() (alles ist dann aus)."""
         try:
             status = self.dosing.get_status()
             phase = status["phase"]
             confirmed_ul = status["confirmed_ul"]
+            in_flight_ul = status["in_flight_ul"]
             uncertain_ul = status["uncertain_ul"]
         except Exception as exc:
             self.stop_reason = "dosing_status_unreadable"
             self.error(f"Dosierstatus nicht lesbar: {type(exc).__name__}: {exc}")
-            return
+            return None
 
+        amounts = f"bestaetigt {confirmed_ul} uL, in Ausfuehrung {in_flight_ul} uL, unklar {uncertain_ul} uL"
         if phase in (DosingPhase.ABORTED, DosingPhase.ERROR) or (
             phase == DosingPhase.FINISHED and status.get("completion_reason") != "completed"
         ):
             self._dosing_active = False
             self.stop_reason = "dosing_failed"
             self.error(
-                f"Dosierung nicht erfolgreich ({phase}, {status.get('completion_reason')}): bestaetigt {confirmed_ul} uL, "
-                f"unklar {uncertain_ul} uL. Es wird nicht nachdosiert."
+                f"Dosierung nicht erfolgreich ({phase}, {status.get('completion_reason')}): {amounts}. "
+                "Es wird nicht nachdosiert."
             )
-            return
+            return None
+        if phase not in (DosingPhase.RUNNING, DosingPhase.FINISHED):
+            # STOPPING (die Dosierung bricht gerade ab oder jemand anderes hat gestoppt) bzw. IDLE: sofort
+            # alles aus, ohne erst die Sensoren zu lesen.
+            self.stop_reason = "dosing_stopped"
+            self.error(f"Dosierung ist nicht mehr aktiv (Phase {phase}): {amounts}.")
+            return None
+        return status
 
+    def _supervise_dosing(self) -> dict[str, Any] | None:
+        """Gemeinsame Ueberwachung waehrend der Dosierung, mit RO aus (DOSING_RUNNING) und parallel zur
+        RO-Befuellung (DOSING_AND_RO_FILL): Dosierstatus, Messfrische, Mixer-/RO-Plausibilitaet und die
+        Volumenbilanz MIT den Mengen in Ausfuehrung. Rueckgabe None nach error(); sonst der Dosierstatus
+        plus ``mixer`` (ungefiltert), ``fresh`` (neue Messung) und ``state`` (VolumeState)."""
+        status = self._read_dosing_status()
+        if status is None:
+            return None
         snapshot = self._read_snapshot("dosing")
         if snapshot is None:
-            return
+            return None
         fresh = self._accept_measurement(
             snapshot,
             "measurement_stale_during_dosing",
             f"Dosierung abgebrochen: seit {MEASUREMENT_WAIT_TIMEOUT_S:.0f} s keine neue Messung empfangen.",
         )
         if fresh is None:
-            return
+            return None
         self._filtered_mixer_liters(snapshot)
         if self._abort_if_runtime_invalid(snapshot):
-            return
+            return None
         mixer = self._mixer_liters_from_snapshot(snapshot)
         try:
             state = VolumeState.from_ul(
-                mixer_measured_l=mixer if mixer is not None else -1.0, confirmed_ul=confirmed_ul, uncertain_ul=uncertain_ul
+                mixer_measured_l=mixer if mixer is not None else -1.0,
+                confirmed_ul=status["confirmed_ul"],
+                in_flight_ul=status["in_flight_ul"],
+                uncertain_ul=status["uncertain_ul"],
             )
         except VolumeModelError as exc:
             self.stop_reason = "volume_check_failed"
             self.error(f"Dosierbilanz ungueltig: {exc}")
-            return
+            return None
         evaluation = evaluate_volume_state(self.nutrient_plan.volume, state)
         if not evaluation.ok:
             self.stop_reason = "volume_check_failed"
             self.error(f"Volumenbilanz waehrend der Dosierung verletzt: {evaluation.message}")
+            return None
+        return {**status, "mixer": mixer, "fresh": fresh, "state": state}
+
+    def _handle_dosing_running(self):
+        """RO-Pumpe aus, Zirkulation an. Erreicht der bestaetigte Anteil die Schwelle, startet die RO-Pumpe
+        PARALLEL zur Dosierung (_try_resume_ro). Endet die Dosierung vorher, gilt der bisherige Ablauf
+        (zweite RO-Phase nach der Dosierung)."""
+        supervised = self._supervise_dosing()
+        if supervised is None:
+            return
+        if supervised["phase"] == DosingPhase.FINISHED:
+            self._dosing_finished(supervised)
+            return
+        self._try_resume_ro(supervised)
+
+    def _try_resume_ro(self, supervised: dict[str, Any]) -> None:
+        """Wiederaufnahme der RO-Befuellung parallel zur laufenden Dosierung, sobald der BESTAETIGTE Anteil die
+        Schwelle nutrient_ro_resume_progress erreicht. Nur auf einer NEUEN Messung; die uebrigen Bedingungen
+        (nichts unsicher, Pegel nicht unter Phasenbeginn, genau eine vorherige Einschaltung, Volumenbilanz)
+        prueft evaluate_ro_resume. Schwelle 1.0 = keine Ueberlappung (RO erst nach vollstaendiger Dosierung)."""
+        threshold = nutrient_ro_resume_progress(self.settings)
+        if threshold is None:  # beim Start geprueft; hier nur Absicherung (fail-closed)
+            self.stop_reason = "resume_progress_invalid"
+            self.error("nutrient_ro_resume_progress fehlt oder ist ungueltig.")
+            return
+        if threshold >= 1.0 or not supervised["fresh"]:
             return
 
-        if phase == DosingPhase.RUNNING:
-            return
-        if phase != DosingPhase.FINISHED:  # STOPPING/IDLE: jemand anderes hat gestoppt
-            self.stop_reason = "dosing_stopped"
-            self.error(f"Dosierung ist nicht mehr aktiv (Phase {phase}).")
+        decision = evaluate_ro_resume(
+            self.nutrient_plan.volume,
+            supervised["state"],
+            progress_threshold=threshold,
+            phase_baseline_l=self._phase_start_liters,
+            max_negative_drift_l=float(self.settings["max_negative_level_drift_liters"]),
+            ro_on_count=self._ro_on_count,
+        )
+        if not decision.allowed:
+            if decision.reason is VolumeReason.RESUME_PROGRESS_BELOW_THRESHOLD:
+                return  # noch nicht genug bestaetigt: weiter warten
+            self.stop_reason = "ro_resume_blocked"
+            self.error(f"RO-Wiederaufnahme blockiert: {decision.message}")
             return
 
-        # FINISHED: nur vollstaendig bestaetigt und ohne unklare Menge weiter.
+        mixer = supervised["mixer"]
+        target = self._ro_stop_target_l(supervised)
+        if target is None:
+            return
+        if mixer >= target:  # RO-Wasser waere schon vollstaendig: widerspruechlich, nie blind weiterfuellen
+            self.stop_reason = "ro_resume_blocked"
+            self.error(f"RO-Wiederaufnahme blockiert: Mixerstand {mixer} L liegt bereits auf/ueber dem Abschaltziel {target:.3f} L.")
+            return
+
+        if not self._switch_ro_on():
+            return
+        # Unmittelbar nach dem Einschalten muss die Dosierung weiter gesund sein (sonst alles aus).
+        if self._read_dosing_status() is None:
+            return
+        self.fill_started_at = self._clock()
+        self._phase_start_liters = mixer
+        self._resume_confirmed_ul = supervised["confirmed_ul"]
+        self._ro_resumed = True
+        self.target_confirm_count = 0
+        print(
+            f"[OVERLAP] {supervised['confirmed_ul']} uL bestaetigt (Schwelle {threshold:.0%}): "
+            "RO-Pumpe parallel zur Dosierung EIN."
+        )
+        self._change_state(FillAndMeasureState.DOSING_AND_RO_FILL)
+
+    def _ro_stop_target_l(self, supervised: dict[str, Any]) -> float | None:
+        """RO-Abschaltziel parallel zur Dosierung: RO-Soll + bestaetigte + noch in Ausfuehrung befindliche
+        Naehrstoffmenge (obere Schranke dessen, was schon im Tank sein kann). So schaltet die RO-Pumpe nie zu
+        frueh ab; die Schlusspruefung (RO-Soll + gesamte bestaetigte Menge) bleibt erreichbar. Mengen ohne
+        Bestaetigung zaehlen nie als bestaetigt. None nach error()."""
+        try:
+            return dynamic_phase_target_l(
+                self.nutrient_plan.volume, ul_to_ml(supervised["confirmed_ul"] + supervised["in_flight_ul"])
+            )
+        except VolumeModelError as exc:
+            self.stop_reason = "volume_target_invalid"
+            self.error(f"Abschaltziel nicht berechenbar: {exc}")
+            return None
+
+    def _handle_dosing_and_ro_fill(self):
+        """Dosierung und RO-Befuellung laufen parallel. Die RO-Pumpe schaltet SOFORT ab (auf dem ersten
+        ungefilterten Wert), sobald der Mixer das dynamische Ziel erreicht, und wird nie wieder eingeschaltet;
+        die Dosierung wird bis zum Ende weiterueberwacht. Ein erreichtes Zwischenziel ist KEIN erfolgreicher
+        Abschluss: Nachmischen folgt erst nach _dosing_finished und der Schlusspruefung."""
+        supervised = self._supervise_dosing()
+        if supervised is None:
+            return
+        if supervised["phase"] == DosingPhase.FINISHED:
+            self._dosing_finished(supervised)
+            return
+        if self._ro_overlap_done:
+            return  # RO ist fertig und bleibt aus; die Dosierung laeuft weiter
+
+        mixer = supervised["mixer"]
+        target = self._ro_stop_target_l(supervised)
+        if target is None:
+            return
+        self._last_unfiltered_mixer = mixer
+        if self.start_mixer_liters is not None:
+            self.last_added_liters = mixer - self.start_mixer_liters
+
+        if mixer >= target:
+            # Pumpe zuerst aus, in diesem Update - nie auf Filter oder einen spaeteren Takt warten.
+            self._pump_off_now()
+            self._ro_overlap_done = True
+            self.stop_reason = "ro_target_reached_pump_off"
+            print(
+                f"[OVERLAP] Mixer {mixer:.3f} L >= Abschaltziel {target:.3f} L: RO-Pumpe AUS, "
+                "Dosierung laeuft weiter."
+            )
+            return
+        self._check_ro_fill_watchdog(supervised)
+
+    def _check_ro_fill_watchdog(self, supervised: dict[str, Any]) -> None:
+        """Fortschritts- und Zeitwaechter der RO-Phase, bezogen auf den RO-ANTEIL: das seit der Wiederaufnahme
+        bestaetigte Naehrstoffvolumen wird herausgerechnet, damit es eine stehende RO-Pumpe nicht verdeckt."""
+        if self._phase_start_liters is None or self.fill_started_at is None:
+            self.stop_reason = "mixer_implausible_during_fill"
+            self.error("Startzustand der RO-Phase fehlt waehrend der Befuellung.")
+            return
+        nutrient_l = (supervised["confirmed_ul"] - self._resume_confirmed_ul) / UL_PER_L
+        watchdog = FillWatchdog(
+            start_liters=self._phase_start_liters + nutrient_l,
+            max_liters=float(self.settings["max_mixer_liters"]),
+            max_seconds=float(self.settings["max_fill_seconds"]),
+            no_progress_timeout_seconds=float(self.settings["no_fill_progress_timeout_seconds"]),
+            min_progress_liters=float(self.settings["min_fill_progress_liters"]),
+            max_negative_drift_liters=float(self.settings["max_negative_level_drift_liters"]),
+        )
+        fill_elapsed = self._clock() - self.fill_started_at
+        result = watchdog.check(self.last_filtered_mixer_liters, fill_elapsed, max_elapsed_seconds=fill_elapsed)
+        if result is not None:
+            self.stop_reason, message = result
+            self.error(message)
+
+    def _dosing_finished(self, supervised: dict[str, Any]) -> None:
+        """Dosierung beendet. Nur vollstaendig bestaetigt und ohne unklare oder offene Menge geht es weiter.
+        Das endgueltige Ziel ist danach RO-Soll + gesamte bestaetigte Menge. Nachmischen gibt es erst nach
+        der Bestaetigung dieses Ziels bei ausgeschalteter RO-Pumpe (CONFIRM_TARGET, Schlussbilanz)."""
         self._dosing_active = False
-        if uncertain_ul != 0 or confirmed_ul != self.nutrient_plan.total_ul:
+        confirmed_ul = supervised["confirmed_ul"]
+        if supervised["uncertain_ul"] != 0 or supervised["in_flight_ul"] != 0 or confirmed_ul != self.nutrient_plan.total_ul:
             self.stop_reason = "dosing_incomplete"
-            self.error(f"Dosierung unvollstaendig: bestaetigt {confirmed_ul} von {self.nutrient_plan.total_ul} uL, unklar {uncertain_ul} uL.")
+            self.error(
+                f"Dosierung unvollstaendig: bestaetigt {confirmed_ul} von {self.nutrient_plan.total_ul} uL, "
+                f"in Ausfuehrung {supervised['in_flight_ul']} uL, unklar {supervised['uncertain_ul']} uL."
+            )
             return
         self._final_confirmed_ul = confirmed_ul
-        self._phase_start_liters = mixer
         self._fill_phase = "final"
-        self.fill_started_at = None
         self.target_confirm_count = 0
-        print(f"[DOSING] Dosing confirmed ({confirmed_ul} uL). Resuming RO fill.")
-        self._change_state(FillAndMeasureState.START_REFILL_PUMP)
+        if not self._ro_resumed:
+            # Bisheriger Ablauf: die zweite RO-Phase beginnt erst jetzt.
+            self._phase_start_liters = supervised["mixer"]
+            self.fill_started_at = None
+            print(f"[DOSING] Dosing confirmed ({confirmed_ul} uL). Resuming RO fill.")
+            self._change_state(FillAndMeasureState.START_REFILL_PUMP)
+        elif self._ro_overlap_done:
+            print(f"[DOSING] Dosing confirmed ({confirmed_ul} uL), RO already off: confirming the final target.")
+            self._change_state(FillAndMeasureState.CONFIRM_TARGET)
+        else:
+            # RO laeuft noch: Pumpe bleibt an (kein erneutes Einschalten), das Ziel ist jetzt endgueltig. Die
+            # Fortschrittsbasis wird um das seit der Wiederaufnahme bestaetigte Naehrstoffvolumen angehoben.
+            self._phase_start_liters += (confirmed_ul - self._resume_confirmed_ul) / UL_PER_L
+            print(f"[DOSING] Dosing confirmed ({confirmed_ul} uL), RO still filling to the final target.")
+            self._change_state(FillAndMeasureState.FILL_UNTIL_TARGET)
 
     def _final_volume_ok(self) -> bool:
         """Schlusspruefung der Mengenbilanz bei ausgeschalteter RO-Pumpe."""

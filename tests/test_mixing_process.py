@@ -22,7 +22,7 @@ from process.nutrient_dosing import DosingPhase, NutrientDosingController
 from statemachine.fill_and_measure_state_machine import FillAndMeasureState as S
 from statemachine.fill_and_measure_state_machine import FillAndMeasureStateMachine
 
-RO_L = 10.0  # Plan: 10 l, 20 ml Naehrstoff, Vorfuellziel 5 l
+RO_L = 20.0  # Plan: 20 l RO, 20 ml Naehrstoff, Vorfuellziel 10 l (= untere Sensorzuverlaessigkeitsgrenze)
 
 
 class FakeDosing:
@@ -35,6 +35,7 @@ class FakeDosing:
         self.start_result = {"success": True, "message": "ok"}
         self.phase = DosingPhase.IDLE
         self.confirmed_ul = 0
+        self.in_flight_ul = 0
         self.uncertain_ul = 0
         self.completion_reason = None
 
@@ -50,23 +51,30 @@ class FakeDosing:
     def finish(self):
         self.phase, self.completion_reason = DosingPhase.FINISHED, "completed"
         self.confirmed_ul = self.plan.total_ul
+        self.in_flight_ul = 0
 
     def get_status(self):
-        return {"phase": self.phase, "confirmed_ul": self.confirmed_ul, "uncertain_ul": self.uncertain_ul,
-                "completion_reason": self.completion_reason}
+        return {"phase": self.phase, "confirmed_ul": self.confirmed_ul, "in_flight_ul": self.in_flight_ul,
+                "uncertain_ul": self.uncertain_ul, "completion_reason": self.completion_reason}
 
 
-def make(plan=None, **overrides):
-    plan = plan or _plan(ro_l=RO_L)
-    feed, clock = Feed(mixer=0.0), Clock()
-    pump = FakeActuator("mixer_refill_pump")
+def plan_for(ro_l=RO_L, **overrides):
+    """Standardplan der Mischlauf-Tests: 20 ml Naehrstoff, Vorfuellziel = halbe RO-Menge (wie build_run_plan)."""
+    return _plan(ro_l=ro_l, ml_per_100_l=2000.0 / ro_l, prefill_target_l=ro_l / 2, **overrides)
+
+
+def make(plan=None, ro_l=RO_L, feed=None, pump=None, **overrides):
+    plan = plan or plan_for(ro_l)
+    feed, clock = feed or Feed(mixer=0.0), Clock()
+    pump = pump or FakeActuator("mixer_refill_pump")
     mixing, sensor = FakeActuator("mixing_circulation_pump"), FakeActuator("sensor_circulation_pump")
     dosing = FakeDosing(plan)
-    settings = _settings(target=RO_L)
+    settings = _settings(target=ro_l)
     settings.update(
         max_fill_seconds=900.0, level_settle_seconds=0.0, sensor_stabilize_seconds=0.0,
         no_fill_progress_timeout_seconds=300.0, target_reached_confirm_samples=2,
         enable_mixing_circulation=True, enable_sensor_circulation=True, mixing_seconds=30.0,
+        nutrient_ro_resume_progress=0.5, ec_tolerance_ms_cm=0.1,  # wie config/process_settings.json
     )
     settings.update(overrides)
     sm = FillAndMeasureStateMachine(
@@ -106,7 +114,7 @@ def test_full_mixing_sequence_with_volume_accounting():
     # Dosierung: RO-Pumpe aus, beide Zirkulationen an, genau ein Dosierstart.
     assert pump.is_on is False and mixing.is_on and sensor.is_on
     assert dosing.start_calls == 1
-    assert 5.0 <= feed.mixer < 7.0
+    assert 10.0 <= feed.mixer < 12.0
     for _ in range(3):
         tick(sm, feed, clock)
     assert sm.state == S.DOSING_RUNNING and pump.is_on is False
@@ -163,7 +171,7 @@ def test_emergency_stop_during_dosing_requests_dosing_stop_and_switches_off():
 
 
 def test_dosing_start_refused_is_an_error_without_ro_phase_two():
-    plan = _plan(ro_l=RO_L)
+    plan = plan_for(RO_L)
     sm, feed, pump, mixing, sensor, dosing, clock = make(plan)
     dosing.start_result = {"success": False, "message": "Port nicht gefunden"}
     sm.start()
@@ -225,8 +233,10 @@ def test_real_dosing_controller_full_run_over_fake_mcu(tmp_path, monkeypatch):
         get_sensor_snapshot=lambda: {"ok": True}, serial_factory=make_client_factory(port),
         session_log_dir=tmp_path / "logs",
     )
-    plan = _plan(ro_l=RO_L)
-    sm, feed, pump, mixing, sensor, _fake, clock = make(plan)
+    plan = plan_for(RO_L)
+    # Schwelle 1.0 = keine Ueberlappung: der Ablauf haengt hier nicht vom Takt der echten Dosier-Threads ab.
+    # Die Ueberlappung mit dem echten Controller prueft tests/test_mixing_overlap.py mit gesteuertem MCU.
+    sm, feed, pump, mixing, sensor, _fake, clock = make(plan, nutrient_ro_resume_progress=1.0)
     sm.dosing = dosing
     sm.settings["hardware_execution_enabled"] = True
     assert dosing.check_plan(plan) is None
@@ -258,7 +268,7 @@ def test_controller_blocks_start_when_plan_cannot_be_built():
 
 
 def test_controller_blocks_start_with_dosing_but_without_circulation():
-    plan = _plan(ro_l=RO_L)
+    plan = plan_for(RO_L)
     controller = FillAndMeasureController(lambda: {"ok": True}, dosing_controller=FakeDosing(plan), plan_builder=lambda _s: plan)
     settings = _settings(target=RO_L, enable_mixing_circulation=True, enable_sensor_circulation=False)
     settings["recipe_run_config_snapshot"]["nutrient_dosing_enabled"] = True
@@ -277,7 +287,7 @@ def test_dosing_thread_outliving_the_wait_keeps_the_process_busy():
         def wait_stopped(self, timeout=None):
             self.waits += 1  # Frist laeuft ab, der Thread laeuft weiter
 
-    plan = _plan(ro_l=RO_L)
+    plan = plan_for(RO_L)
     dosing = StuckDosing(plan)
     controller = FillAndMeasureController(lambda: {"ok": True}, dosing_controller=dosing, plan_builder=lambda _s: plan)
     controller._nutrient_plan = plan

@@ -321,10 +321,11 @@ def _run_to_measure(settings, ec=1.5, ph=6.0, water_values=None, recipe_run=True
 
 
 def _eval_settings(**overrides):
+    # Die EC-Bewertung gilt nur fuer Rezeptlaeufe MIT Naehrstoffdosierung (nutrient_dosing_enabled).
     values = {
         "ec_tolerance_ms_cm": 0.1,
         "ph_tolerance": 0.2,
-        "recipe_run_config_snapshot": {"target_ec_ms_cm": 1.5, "target_ph": 6.0},
+        "recipe_run_config_snapshot": {"target_ec_ms_cm": 1.5, "target_ph": 6.0, "nutrient_dosing_enabled": True},
     }
     values.update(overrides)
     return _base_settings(**values)
@@ -378,10 +379,12 @@ def test_invalid_configured_tolerance_errors(bad) -> None:
 
 
 def test_missing_setpoint_with_configured_tolerance_errors() -> None:
-    settings = _eval_settings(recipe_run_config_snapshot={"target_ec_ms_cm": 1.5})
+    # Der EC-Sollwert fehlt (pH ist vollstaendig): der Fehler muss von EC kommen, nicht von pH.
+    settings = _eval_settings(recipe_run_config_snapshot={"target_ph": 6.0, "nutrient_dosing_enabled": True})
     sm, _ = _run_to_measure(settings)
     assert sm.state == FillAndMeasureState.ERROR
     assert sm.stop_reason == "setpoint_invalid"
+    assert "EC-Sollwert" in sm.error_message
 
 
 def test_without_configured_tolerance_nothing_is_evaluated() -> None:
@@ -407,7 +410,7 @@ def _band_settings(**overrides):
         "ec_tolerance_ms_cm": 0.1,
         "ph_min": 6.0,
         "ph_max": 7.0,
-        "recipe_run_config_snapshot": {"target_ec_ms_cm": 1.5, "target_ph": 6.0},
+        "recipe_run_config_snapshot": {"target_ec_ms_cm": 1.5, "target_ph": 6.0, "nutrient_dosing_enabled": True},
     }
     values.update(overrides)
     return _base_settings(**values)

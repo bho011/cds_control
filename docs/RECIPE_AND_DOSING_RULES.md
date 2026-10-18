@@ -239,18 +239,27 @@ hardware** - it only changes which recipe is considered "active" for the
 *next* run. Opening the Recipe Editor afterward shows exactly the slot that
 was last clicked/selected.
 
-**Remaining integration point** (documented explicitly, not hidden): today
-only `target_ro_water_l` (from the recipe) and `sensor_circulation_enabled`
-(from `RunOptions`) have a real hardware consumer
+**Integration status** (documented explicitly, not hidden): `target_ro_water_l`
+(from the recipe) and `sensor_circulation_enabled` (from `RunOptions`) have a
+real hardware consumer
 (`statemachine/fill_and_measure_state_machine.py` via
 `nicegui_dashboard/recipe_store.py::build_run_config()` /
 `ProcessController.start_fill_and_measure()`). The EC nutrient fields in
 `RunConfigSnapshot` (`nutrients_ml_per_100_l`, `nutrient_a_percent/b_percent`,
 `calculated_nutrient_a_ml/b_ml`, `ec_adjustment_factor`, ...) are fully
 calculated and validated and attached to the run's settings dict under
-`recipe_run_config_snapshot` for display/audit, but there is still **no**
-peristaltic-pump consumer for them - see `docs/PERISTALTIC_PROFILE_PLAN.md`
-and README.md Section 15/17. `drain_after_process` and the technical
+`recipe_run_config_snapshot` for display/audit. **Since AP-05** they also
+have a consumer: when `nutrient_dosing_enabled` is on, the recipe run builds
+an immutable dosing plan from the snapshot (`domain/recipe/nutrient_plan.py`)
+and `process/nutrient_dosing.py` executes it on MCU_B (round-based, all four
+pumps in parallel; P1 + P3 = solution A, P2 + P4 = solution B), while the
+fill state machine starts the RO fill in parallel once
+`nutrient_ro_resume_progress` (`config/process_settings.json`) of the amount
+is confirmed - see README.md Section 22 and
+`docs/CDS_EC_MIXING_PROCESS_CONCEPT.md` (Nachtrag 2026-10-18). This is
+software only: no integrated dosing run on the real plant has been made, and
+real operation needs a supervised water-only hardware test first.
+`drain_after_process` and the technical
 `sensor_pump_seconds`-shaped concept have **no** consumer anywhere and no
 GUI control claiming otherwise. No fake/no-op dosing or run behaviour was
 introduced to paper over any of these gaps.

@@ -8,6 +8,13 @@ need on the peristaltic-pump side - the actual firmware lives in the
 separate `~/central_dosing_sys_peristaltic` repository (PlatformIO, Arduino
 Mega 2560 / RAMPS 1.6 / TMC2130) and is out of scope to modify here.
 
+**Update 2026-10-18:** this plan describes the situation when it was written.
+Since then a Python serial client (`services/peristaltic/`) and, with AP-05, the
+MCU_B nutrient dosing in the recipe run (`process/nutrient_dosing.py`, round-based
+parallel dosing of all four pumps, see README.md Section 22) exist, so the
+statements below that no client exists and that the integration point is unbuilt
+are historical. The firmware-side profile split proposed here is still not done.
+
 ## 1. Current, real state (verified against the firmware repo, not assumed)
 
 - Two Arduino Mega 2560 MCUs, RAMPS 1.6, TMC2130 drivers, `AccelStepper`.
