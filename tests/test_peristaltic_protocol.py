@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from fake_mcu import FakeMcu, FakeSerialPort, make_client_factory
+from fake_mcu import FakeMcu, FakeSerialPort, make_client_factory, wait_until
 
 from services.peristaltic.models import LineKind, ParsedLine
 from services.peristaltic.protocol import parse_line
@@ -566,3 +566,120 @@ def test_keyboard_interrupt_during_context_triggers_close_stopall():
 
     assert port.written_lines[-1] == "STOPALL"
     assert client.state == ConnectionState.CLOSED
+
+
+# --- Boot-Fragmente in der Initialisierungsphase ------------------------------
+
+
+class _FragmentBootMcu(FakeMcu):
+    """Wie im Hardwareprotokoll: abgeschnittenes Fragment vor den DRV_STATUS-Zeilen."""
+
+    def __init__(self, first_lines: list[str]) -> None:
+        super().__init__()
+        self._first_lines = first_lines
+
+    def boot_lines(self) -> list[str]:
+        return list(self._first_lines) + [f"{p} DRV_STATUS 0x80090000" for p in ("P2", "P3", "P4")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["0000", "0x80090000", "x80090000", "DRV_STATUS 0x80090000", "1 DRV_STATUS 0x8009", "OOT READY", "OT READY", "T READY"],
+)
+def test_is_boot_fragment_accepts_truncated_boot_lines(text):
+    from services.peristaltic.protocol import is_boot_fragment
+
+    assert is_boot_fragment(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "READY", "P1 DRV_STATUS 0x", "DRV_STATUS 0x", "0x", "x", "K READY", "ZZ0000", "123456789", "BOOT READY", "OK READY", "OK STOPALL", "P1 DRV_STATUS 0x80090000", "ERR INVALID_COMMAND", "garbage", "P5 DRV_STATUS 0x1", "DONE P1 5.000"],
+)
+def test_is_boot_fragment_rejects_complete_or_foreign_lines(text):
+    from services.peristaltic.protocol import is_boot_fragment
+
+    assert is_boot_fragment(text) is False
+
+
+def test_open_succeeds_with_truncated_boot_fragment_and_logs_it():
+    port = FakeSerialPort(_FragmentBootMcu(["0000"]))
+    raw: list[tuple[str, str]] = []
+    client = PeristalticSerialClient(
+        "fake-port",
+        config=_fast_config(),
+        serial_factory=make_client_factory(port),
+        on_raw_line=lambda d, l: raw.append((d, l)),
+    )
+    client.open()
+    try:
+        assert client.state is ConnectionState.OPEN
+        assert client.boot_fragments == ["0000"]
+        assert "0000" in client.diagnostics
+        assert ("RX", "0000") in raw
+        assert port.written_lines[:3] == ["STOPALL", "PING", "STATUS"]
+        assert client.ping().kind is LineKind.PING_OK
+    finally:
+        client.close()
+
+
+def test_open_with_normal_boot_banner_has_no_fragments():
+    client, port = _open_client(FakeMcu(boot_banner=True))
+    try:
+        assert client.boot_fragments == []
+        assert port.written_lines[:3] == ["STOPALL", "PING", "STATUS"]
+    finally:
+        client.close()
+
+
+def test_open_without_boot_banner_still_works():
+    client, _port = _open_client(FakeMcu(boot_banner=False))
+    try:
+        assert client.state is ConnectionState.OPEN
+        assert client.boot_fragments == []
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("unexpected", ["OK READY", "OK STOPALL", "ERR INVALID_COMMAND", "garbage text", "DONE P1 5.000x"])
+def test_open_fails_closed_on_unexpected_complete_reply_before_handshake(unexpected):
+    port = FakeSerialPort(_FragmentBootMcu([unexpected]))
+    client = PeristalticSerialClient("fake-port", config=_fast_config(), serial_factory=make_client_factory(port))
+    with pytest.raises(PeristalticConnectionError):
+        client.open()
+    assert client.state is ConnectionState.CLOSED
+    assert client.boot_fragments == []
+    # kein Dosierbefehl wurde geschrieben
+    assert not any(line.startswith("DOSE") for line in port.written_lines)
+
+
+def test_fragment_after_open_still_desyncs_client():
+    client, port = _open_client(FakeMcu(boot_banner=False))
+    try:
+        port.inject_line("0000")
+        assert wait_until(lambda: client._immediate_replies.qsize() == 1)
+        with pytest.raises(PeristalticDesyncError):
+            client.ping()
+        assert client.state is ConnectionState.DESYNCED
+        assert client.boot_fragments == []
+    finally:
+        client.close()
+
+
+def test_fragment_after_first_handshake_command_is_not_tolerated():
+    # Fragment trifft erst NACH dem Senden von STOPALL ein -> mehrdeutig, fail-closed.
+    port = FakeSerialPort(FakeMcu(boot_banner=False))
+    client = PeristalticSerialClient("fake-port", config=_fast_config(), serial_factory=make_client_factory(port))
+    original_write = port.write
+
+    def write_then_fragment(data: bytes) -> int:
+        result = original_write(data)
+        if data.strip() == b"STOPALL":
+            port.inject_line("0000")
+        return result
+
+    port.write = write_then_fragment  # type: ignore[method-assign]
+    with pytest.raises(PeristalticConnectionError):
+        client.open()
+    assert client.state is ConnectionState.CLOSED
+    assert client.boot_fragments == []

@@ -94,6 +94,41 @@ def parse_line(raw: str) -> ParsedLine:
     return ParsedLine(raw=text, kind=LineKind.UNKNOWN)
 
 
+_HEX_TAIL = re.compile(r"^[0-9A-Fa-f]{1,8}$")
+_BOOT_READY_FRAGMENTS = frozenset({"T READY", "OT READY", "OOT READY"})
+# Erlaubte Köpfe vor den Hexdaten: nur Rest des Hex-Präfixes oder die komplette
+# Wortfolge "DRV_STATUS 0x" (mit optionalem Pumpen-Präfix "Pn " bzw. "n ").
+_DRV_STATUS_HEADS = frozenset(
+    {"", "x", "0x"}
+    | {
+        head
+        for pump in ("P1", "P2", "P3", "P4")
+        for head in (
+            f"{pump} DRV_STATUS 0x"[start:]
+            for start in range(len(f"{pump} ") + 1)
+        )
+    }
+)
+
+
+def is_boot_fragment(raw: str) -> bool:
+    """True nur für ein vorne abgeschnittenes Fragment der dokumentierten
+    Bootdiagnosen: Hex-Rest eines 'Pn DRV_STATUS 0x<hex>' (mind. 1, max. 8
+    Hexstellen, z.B. '0000'), optional mit '0x'/'x' bzw. dem kompletten
+    'DRV_STATUS 0x'-Kopf, oder 'T/OT/OOT READY' von 'BOOT READY'. Isoliertes
+    'READY' und Köpfe ohne Hexdaten sind bewusst KEIN Fragment. Vollständige
+    Zeilen kennt parse_line."""
+    text = raw.strip()
+    if not text or parse_line(text).kind is not LineKind.UNKNOWN:
+        return False
+    if text in _BOOT_READY_FRAGMENTS:
+        return True
+    for head in _DRV_STATUS_HEADS:
+        if text.startswith(head) and _HEX_TAIL.match(text[len(head):]):
+            return True
+    return False
+
+
 def format_dose_command(pump: str, ml: float) -> str:
     return f"DOSE {pump} {ml:.3f}"
 

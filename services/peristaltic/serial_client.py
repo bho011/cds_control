@@ -27,6 +27,7 @@ verifiziert, siehe docs/PERISTALTIC_MAPPING_AND_CALIBRATION.md):
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -35,7 +36,7 @@ from enum import Enum, auto
 from typing import Any, Callable, Protocol
 
 from services.peristaltic.models import VALID_PUMPS, LineKind, ParsedLine
-from services.peristaltic.protocol import format_dose_command, format_stop_command, parse_line
+from services.peristaltic.protocol import format_dose_command, format_stop_command, is_boot_fragment, parse_line
 
 
 class SerialLike(Protocol):
@@ -56,6 +57,8 @@ def default_serial_factory(port: str, baudrate: int, timeout: float) -> SerialLi
 
 class PeristalticError(Exception):
     """Basisklasse aller Peristaltik-Client-Fehler."""
+
+_LOG = logging.getLogger(__name__)
 
 
 class PeristalticConnectionError(PeristalticError):
@@ -168,6 +171,10 @@ class PeristalticSerialClient:
         self._pump_queues: dict[str, "queue.Queue[Any]"] = {pump: queue.Queue() for pump in VALID_PUMPS}
         self._diagnostics: list[str] = []
         self._protocol_errors: list[str] = []
+        self._boot_fragments: list[str] = []
+        # True, sobald der erste Befehl (STOPALL des Handshakes) geschrieben
+        # wurde; ab dann gilt keine Boot-Fragment-Toleranz mehr.
+        self._first_command_sent = False
 
     # --- öffentlicher Zustand -------------------------------------------------
 
@@ -178,6 +185,10 @@ class PeristalticSerialClient:
     @property
     def protocol_errors(self) -> list[str]:
         return list(self._protocol_errors)
+
+    @property
+    def boot_fragments(self) -> list[str]:
+        return list(self._boot_fragments)
 
     @property
     def diagnostics(self) -> list[str]:
@@ -192,6 +203,7 @@ class PeristalticSerialClient:
             )
 
         self._state = ConnectionState.OPENING
+        self._first_command_sent = False
         try:
             # 1. Port MIT exclusive=True öffnen
             self._port = self._serial_factory(self._port_name, self._config.baudrate, self._config.read_timeout_s)
@@ -239,6 +251,7 @@ class PeristalticSerialClient:
         self._immediate_replies = queue.Queue()
         self._pump_queues = {pump: queue.Queue() for pump in VALID_PUMPS}
         self._diagnostics = []
+        self._boot_fragments = []
         # protocol_errors bleibt bewusst als Audit-Historie über die
         # gesamte Objekt-Lebensdauer erhalten (reine Log-Liste, keine
         # Zuordnungsgefahr wie bei den Queues).
@@ -337,6 +350,19 @@ class PeristalticSerialClient:
             self._diagnostics.append(parsed.raw)
             return
 
+        if (
+            parsed.kind is LineKind.UNKNOWN
+            and self._state == ConnectionState.OPENING
+            and not self._first_command_sent
+            and is_boot_fragment(parsed.raw)
+        ):
+            # Nur Initialisierungsphase vor dem ersten Befehl: abgeschnittenes
+            # Bootfragment protokollieren, nicht in die Reply-Queue geben.
+            self._boot_fragments.append(parsed.raw)
+            self._diagnostics.append(parsed.raw)
+            _LOG.warning("MCU_B: unvollstaendiges Boot-Fragment vor Handshake verworfen: %r", parsed.raw)
+            return
+
         if parsed.kind is LineKind.UNKNOWN:
             self._protocol_errors.append(f"Unbekannte/unerwartete Antwortzeile: {parsed.raw!r}")
 
@@ -403,6 +429,7 @@ class PeristalticSerialClient:
             try:
                 if self._port is None:
                     raise PeristalticConnectionError("Port ist nicht geöffnet.")
+                self._first_command_sent = True
                 self._port.write((command + "\n").encode("ascii"))
             except PeristalticConnectionError:
                 self._mark_desynced_if_open()
