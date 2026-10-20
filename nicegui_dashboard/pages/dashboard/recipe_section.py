@@ -22,6 +22,22 @@ from nicegui_dashboard.recipe_store import (
 )
 
 
+# Long explanations of the Recipe Editor, shown as tooltips behind an info icon
+# (keeps the dialog compact; wording unchanged).
+RECIPE_EDITOR_INFO_TEXT = (
+    "Three favorites can be saved. Fill volume genuinely drives the next run. "
+    "Sensor circulation is a per-run choice made in Process Control, not part of "
+    "the recipe - loading a recipe never activates it. EC nutrient dosing is "
+    "calculated and validated here but still has no peristaltic-pump consumer "
+    "yet (see README.md Section 15/17)."
+)
+VOLUME_PREVIEW_INFO_TEXT = (
+    "A fixed RO correction is not part of a recipe - this is only an estimate "
+    "of how much correction capacity would technically remain. A real, "
+    "demand-driven EC correction is not implemented yet."
+)
+
+
 @dataclass
 class RecipeCardWidgets:
     recipe_name_label: ui.label
@@ -105,29 +121,27 @@ def build_recipe_section(recipe_state: dict[str, Any]) -> tuple[RecipeCardWidget
                         "flex-1 font-bold"
                     ).props("color=secondary outline")
 
-        with ui.dialog() as recipe_dialog, ui.card().classes("recipe-dialog-card"):
-            ui.label("Recipe Editor").classes("panel-title")
-            ui.label(
-                "Three favorites can be saved. Fill volume genuinely drives the next run. "
-                "Sensor circulation is a per-run choice made in Process Control, not part of "
-                "the recipe - loading a recipe never activates it. EC nutrient dosing is "
-                "calculated and validated here but still has no peristaltic-pump consumer "
-                "yet (see README.md Section 15/17)."
-            ).classes("panel-subtitle")
+        with ui.dialog() as recipe_dialog, ui.card().classes(
+            "recipe-dialog-card recipe-editor-card"
+        ):
+            # Compact layout (dashboard.css "recipe-editor-card"): the long
+            # explanations live in tooltips so the dialog fits without scrolling.
+            with ui.row().classes("recipe-editor-head"):
+                ui.label("Recipe Editor").classes("panel-title")
+                with ui.icon("info", size="18px").classes("recipe-info-icon"):
+                    ui.tooltip(RECIPE_EDITOR_INFO_TEXT).props("max-width=520px")
+                ui.space()
+                recipe_make_active_switch = ui.switch(
+                    "Set as active recipe",
+                    value=True,
+                ).classes("text-slate-200").props("dense")
 
-            with ui.row().classes("w-full gap-3"):
+            with ui.element("div").classes("recipe-base-grid"):
                 recipe_slot_select = ui.select(
                     options=[1, 2, 3],
                     value=int(recipe_state["book"].get("active_slot", 1)),
                     label="Favorite Slot",
-                ).classes("control-input flex-1")
-                recipe_make_active_switch = ui.switch(
-                    "Set as active recipe",
-                    value=True,
-                ).classes("text-slate-200")
-
-            ui.label("Grunddaten").classes("recipe-section-title")
-            with ui.element("div").classes("recipe-top-grid"):
+                ).classes("control-input")
                 recipe_name_input = ui.input("Recipe Name").classes(
                     "control-input"
                 )
@@ -141,89 +155,103 @@ def build_recipe_section(recipe_state: dict[str, Any]) -> tuple[RecipeCardWidget
             recipe_legacy_warning_label = ui.label("").classes("error-text")
             legacy_review_confirmed_switch = ui.switch(
                 "Legacy review completed - I confirm the checked dosing values"
-            ).classes("text-slate-200")
+            ).classes("text-slate-200").props("dense")
 
             with ui.element("div").classes("recipe-form-grid"):
                 with ui.column().classes("recipe-form-section"):
-                    ui.label("EC").classes("recipe-section-title")
-                    target_ec_input = ui.number(
-                        "EC Setpoint", suffix="mS/cm", min=0.5, max=2.5, step=0.1
-                    )
-                    ec_mixing_time_input = ui.number(
-                        "Mixing time", suffix="s (seconds)", min=300, max=1200, step=10
-                    )
-                    nutrient_dosing_enabled_switch = ui.switch(
-                        "Enable nutrient dosing"
-                    )
-                    nutrients_dose_input = ui.number(
-                        "Nutrient total dose", suffix="ml / 100 L RO water", min=0, step=1
-                    )
-                    nutrient_a_percent_input = ui.number(
-                        "Nutrient solution A share", suffix="%", min=0, max=100, step=1
-                    )
-                    nutrient_b_percent_display = ui.number(
-                        "Nutrient solution B share (auto)", suffix="%"
-                    ).props("readonly")
-                    ec_adjustment_factor_input = ui.number(
-                        "EC adjustment factor", min=0.01, max=1, step=0.01
-                    )
+                    with ui.row().classes("recipe-section-head"):
+                        ui.label("EC").classes("recipe-section-title")
+                        nutrient_dosing_enabled_switch = ui.switch(
+                            "Enable nutrient dosing"
+                        ).props("dense")
+                    with ui.element("div").classes("recipe-field-grid"):
+                        target_ec_input = ui.number(
+                            "EC Setpoint", suffix="mS/cm", min=0.5, max=2.5, step=0.1
+                        )
+                        ec_mixing_time_input = ui.number(
+                            "Mixing time", suffix="s (seconds)", min=300, max=1200, step=10
+                        )
+                        nutrients_dose_input = ui.number(
+                            "Nutrient total dose", suffix="ml / 100 L RO water", min=0, step=1
+                        )
+                        nutrient_a_percent_input = ui.number(
+                            "Nutrient solution A share", suffix="%", min=0, max=100, step=1
+                        )
+                        nutrient_b_percent_display = ui.number(
+                            "Nutrient solution B share (auto)", suffix="%"
+                        ).props("readonly")
+                        ec_adjustment_factor_input = ui.number(
+                            "EC adjustment factor", min=0.01, max=1, step=0.01
+                        )
 
-                    ui.label("Calculated for this run").classes(
-                        "recipe-section-title mt-2"
-                    )
-                    calc_total_nutrients_label = ui.label("Total dose: - ml")
-                    calc_nutrient_a_label = ui.label("Amount A: - ml")
-                    calc_nutrient_b_label = ui.label("Amount B: - ml")
+                    with ui.row().classes("recipe-calc-row"):
+                        ui.label("Calculated for this run").classes("recipe-calc-title")
+                        calc_total_nutrients_label = ui.label("Total dose: - ml").classes(
+                            "recipe-chip"
+                        )
+                        calc_nutrient_a_label = ui.label("Amount A: - ml").classes(
+                            "recipe-chip"
+                        )
+                        calc_nutrient_b_label = ui.label("Amount B: - ml").classes(
+                            "recipe-chip"
+                        )
 
                 with ui.column().classes("recipe-form-section"):
-                    ui.label("pH").classes("recipe-section-title")
-                    target_ph_input = ui.number("pH Setpoint", min=0, max=14, step=0.1)
-                    volume_acid_1_input = ui.number(
-                        "Volume acid 1", suffix="ml", min=0, step=1
-                    )
-                    volume_acid_2_input = ui.number(
-                        "Volume acid 2", suffix="ml", min=0, step=1
-                    )
-                    volume_base_input = ui.number(
-                        "Volume base", suffix="ml", min=0, step=1
-                    )
-                    ph_mixing_time_input = ui.number(
-                        "Mixing time", suffix="s", min=0, step=10
-                    )
-                    ph_adjustment_factor_input = ui.number(
-                        "Adjustment factor", min=0, step=0.01
-                    )
+                    with ui.row().classes("recipe-section-head"):
+                        ui.label("pH").classes("recipe-section-title")
+                    with ui.element("div").classes("recipe-field-grid"):
+                        target_ph_input = ui.number("pH Setpoint", min=0, max=14, step=0.1)
+                        volume_acid_1_input = ui.number(
+                            "Volume acid 1", suffix="ml", min=0, step=1
+                        )
+                        volume_acid_2_input = ui.number(
+                            "Volume acid 2", suffix="ml", min=0, step=1
+                        )
+                        volume_base_input = ui.number(
+                            "Volume base", suffix="ml", min=0, step=1
+                        )
+                        ph_mixing_time_input = ui.number(
+                            "Mixing time", suffix="s", min=0, step=10
+                        )
+                        ph_adjustment_factor_input = ui.number(
+                            "Adjustment factor", min=0, step=0.01
+                        )
                     ui.label(
                         "pH correction is not yet included in the process-volume "
                         "estimate - the exact amount is not known at recipe time."
                     ).classes("confirmation-help")
 
-            ui.label("Volumenvorschau").classes("recipe-section-title mt-2")
-            with ui.element("div").classes("recipe-top-grid"):
-                calc_process_volume_label = ui.label("Estimated recipe volume: - L")
-                calc_remaining_capacity_label = ui.label("Remaining capacity to 185 L: - L")
-                calc_max_possible_ro_correction_label = ui.label(
-                    "Max. possible later RO correction: - L"
-                )
-            ui.label(
-                "A fixed RO correction is not part of a recipe - this is only an estimate "
-                "of how much correction capacity would technically remain. A real, "
-                "demand-driven EC correction is not implemented yet."
-            ).classes("confirmation-help")
-
+            # Validation errors stay visible (never hidden in a tooltip); the
+            # label collapses via CSS :empty while there is nothing to show.
             recipe_validation_error_label = ui.label("").classes("error-text")
 
-            recipe_notes_input = ui.textarea("Note").classes(
-                "control-input w-full"
-            )
+            with ui.element("div").classes("recipe-foot-grid"):
+                with ui.column().classes("recipe-foot-main"):
+                    with ui.row().classes("recipe-volume-row"):
+                        ui.label("Volume preview").classes("recipe-section-title")
+                        calc_process_volume_label = ui.label(
+                            "Estimated recipe volume: - L"
+                        ).classes("recipe-chip")
+                        calc_remaining_capacity_label = ui.label(
+                            "Remaining capacity to 185 L: - L"
+                        ).classes("recipe-chip")
+                        calc_max_possible_ro_correction_label = ui.label(
+                            "Max. possible later RO correction: - L"
+                        ).classes("recipe-chip")
+                        with ui.icon("info", size="18px").classes("recipe-info-icon"):
+                            ui.tooltip(VOLUME_PREVIEW_INFO_TEXT).props("max-width=520px")
 
-            with ui.row().classes("w-full justify-end gap-3"):
-                ui.button("Cancel", on_click=recipe_dialog.close).props(
-                    "color=grey outline"
-                )
-                save_recipe_button = ui.button("Save Recipe").props(
-                    "color=positive"
-                )
+                    recipe_notes_input = ui.textarea("Note").classes(
+                        "control-input w-full"
+                    ).props("rows=2")
+
+                with ui.row().classes("recipe-button-row"):
+                    ui.button("Cancel", on_click=recipe_dialog.close).props(
+                        "color=grey outline"
+                    )
+                    save_recipe_button = ui.button("Save Recipe").props(
+                        "color=positive"
+                    )
 
     card_widgets = RecipeCardWidgets(
         recipe_name_label=recipe_name_label,

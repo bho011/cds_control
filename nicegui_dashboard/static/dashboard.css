@@ -851,6 +851,235 @@ body {
 
 
 /* =========================================================
+   Recipe editor - compact layout (fits a 1280x720 window without scrolling)
+   Scoped to .recipe-editor-card: the Maintenance and Prime dialogs share
+   .recipe-dialog-card and must keep their current look.
+   ========================================================= */
+
+.recipe-dialog-card.recipe-editor-card {
+    padding: 14px 18px 16px !important;
+    gap: 10px;
+}
+
+.recipe-editor-card .recipe-editor-head {
+    width: 100%;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.recipe-editor-card .recipe-editor-head .panel-title {
+    margin: 0;
+    font-size: 16px;
+}
+
+/* The generic "first row in a recipe dialog" rule adds a top margin. */
+.recipe-dialog-card.recipe-editor-card > .nicegui-row.recipe-editor-head {
+    margin: 0;
+}
+
+.recipe-editor-card .recipe-info-icon {
+    color: #94a3b8;
+    cursor: help;
+}
+
+.recipe-editor-card .recipe-info-icon:hover {
+    color: #e5eefb;
+}
+
+.recipe-editor-card .recipe-base-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 110px 1.6fr 1fr 1fr;
+    gap: 10px;
+    margin: 0;
+}
+
+/* EC | pH stay side by side down to ~820 px (the generic rule above stacks
+   them at 1100 px). */
+.recipe-editor-card .recipe-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 0 !important;
+    gap: 10px !important;
+}
+
+.recipe-editor-card .recipe-form-section {
+    gap: 8px;
+    padding: 10px 12px 12px !important;
+    border-radius: 12px;
+}
+
+.recipe-editor-card .recipe-section-head {
+    width: 100%;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.recipe-editor-card .recipe-section-title {
+    margin: 0 !important;
+    font-size: 13px;
+}
+
+.recipe-editor-card .recipe-field-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+/* Fields: ~44 px high instead of 60 px, no extra bottom margins. */
+.recipe-dialog-card.recipe-editor-card .q-field {
+    margin-bottom: 0;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-field__control {
+    min-height: 44px !important;
+    height: 44px !important;
+    border-radius: 8px;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-field__native,
+.recipe-dialog-card.recipe-editor-card .q-field__input {
+    padding: 17px 12px 3px 12px !important;
+    font-size: 14px !important;
+    line-height: 1.25 !important;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-field__label {
+    left: 12px !important;
+    top: 6px !important;
+    font-size: 10px !important;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-field__suffix {
+    padding: 18px 12px 3px 6px !important;
+    font-size: 12px !important;
+    line-height: 1.25 !important;
+    align-self: flex-start !important;
+}
+
+/* Select and textarea fields are "auto-height" in Quasar: the label space is
+   already reserved by the control container, so the native element gets no
+   extra top padding (otherwise the value drops out of the field). */
+.recipe-dialog-card.recipe-editor-card .q-field--auto-height .q-field__control {
+    min-height: 44px !important;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-field--auto-height .q-field__control-container {
+    padding-top: 17px !important;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-field--auto-height .q-field__native {
+    padding-top: 0 !important;
+    padding-bottom: 3px !important;
+    min-height: 20px !important;
+}
+
+.recipe-editor-card .recipe-form-section .q-field:first-of-type {
+    margin-top: 0;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-toggle {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-btn {
+    min-height: 36px;
+}
+
+/* Calculated values / volume preview as chips. */
+.recipe-editor-card .recipe-calc-row,
+.recipe-editor-card .recipe-volume-row {
+    width: 100%;
+    align-items: center;
+    gap: 6px 8px;
+}
+
+.recipe-editor-card .recipe-calc-title {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+.recipe-editor-card .recipe-chip {
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(103, 232, 249, 0.08);
+    border: 1px solid rgba(103, 232, 249, 0.25);
+    color: #e5eefb;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.recipe-editor-card .confirmation-help {
+    margin: 0;
+    font-size: 11px;
+}
+
+/* Footer: volume preview + note on the left, buttons on the right. */
+.recipe-editor-card .recipe-foot-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: end;
+}
+
+.recipe-editor-card .recipe-foot-main {
+    gap: 8px;
+    min-width: 0;
+}
+
+.recipe-editor-card .recipe-button-row {
+    flex-wrap: nowrap;
+    gap: 10px;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-textarea .q-field__control {
+    height: auto !important;
+    min-height: 58px !important;
+}
+
+.recipe-dialog-card.recipe-editor-card .q-textarea .q-field__native {
+    min-height: 36px !important;
+}
+
+.recipe-dialog-card.recipe-editor-card textarea {
+    min-height: 40px;
+}
+
+/* Warnings/errors take no space while empty (set_text("")). */
+.recipe-editor-card .error-text:empty {
+    display: none;
+}
+
+@media (max-width: 900px) {
+    .recipe-editor-card .recipe-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .recipe-editor-card .recipe-base-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .recipe-editor-card .recipe-foot-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .recipe-editor-card .recipe-button-row {
+        justify-content: flex-end;
+    }
+}
+
+@media (max-width: 560px) {
+    .recipe-editor-card .recipe-base-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* =========================================================
    Process control / Manual Drain Jog
    ========================================================= */
 

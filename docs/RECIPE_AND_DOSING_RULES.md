@@ -135,7 +135,7 @@ by exactly as much as needed) is a planned future feature, not implemented
 today, and the old fixed-amount-per-recipe model had no real hardware
 consumer anyway.
 
-What the Recipe Editor's "Volumenvorschau" section shows is purely
+What the Recipe Editor's "Volume preview" section shows is purely
 informational - how much correction capacity *would* technically still be
 available later, given this recipe's own estimated volume:
 
@@ -206,8 +206,8 @@ independent additions, but the real CDS process only has Nutrient Solution
 A/B, the total dose, and the A/B ratio - already fully covered by Section 2
 above. They have been **removed from `StoredRecipe`, `RecipePreview`, and
 `RunConfigSnapshot` entirely**, and from the Recipe Editor's form (the
-"Addons" section no longer exists - the editor is now Grunddaten / EC / pH /
-Volumenvorschau / Notiz).
+"Addons" section no longer exists - the editor is now a header / name-tank-RO
+water row / EC / pH / "Volume preview" / Note).
 
 Old addon values are not discarded: the schema_version 3 -> 4 migration
 (`nicegui_dashboard/recipe_store.py::_migrate_v3_to_v4`) moves them into a

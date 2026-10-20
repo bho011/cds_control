@@ -38,7 +38,7 @@ from nicegui_dashboard.recipe_store import RecipeBookCorruptedError, default_rec
 
 
 def create_dashboard_page(controller: CdsController) -> None:
-    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=control3">')
+    ui.add_head_html('<link rel="stylesheet" href="/static/dashboard.css?v=control4">')
 
     recipe_state: dict[str, Any] = {}
     recipe_form_state: dict[str, Any] = {}
